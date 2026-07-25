@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NODE_ENV: production
+      APP_NAME: CIテストアプリ
+      APP_ORIGIN: http://localhost:3000
+      AUTH_MODE: entra
+      SESSION_SECRET: test-session-secret-at-least-32-characters
+      SESSION_MAX_AGE_SECONDS: "28800"
+      ENTRA_CLIENT_ID: 00000000-0000-0000-0000-000000000000
+      ENTRA_CLIENT_SECRET: test-only-client-secret
+      ENTRA_TENANT_ID: 00000000-0000-0000-0000-000000000001
+      ENTRA_REDIRECT_URI: http://localhost:3000/auth/callback
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: npm
+
+      - name: Install
+        run: npm ci --include=dev
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm run test:coverage
+
+      - name: Build
+        run: npm run build
+
+      - name: Install Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E tests
+        run: npm run test:e2e
+        env:
+          NODE_ENV: development
+          AUTH_MODE: dev
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            coverage/
+            playwright-report/
+          retention-days: 14

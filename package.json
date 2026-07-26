@@ -1,5 +1,5 @@
 {
-  "name": "company-react-router-template",
+  "name": "siryou-mite",
   "private": true,
   "type": "module",
   "engines": {
@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "react-router build",
-    "dev": "react-router dev",
+    "dev": "react-router dev --host",
     "start": "react-router-serve ./build/server/index.js",
     "typecheck": "react-router typegen && tsc --noEmit",
     "test": "vitest run",

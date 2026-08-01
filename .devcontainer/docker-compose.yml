@@ -2,6 +2,8 @@ name: siryou-mite-local
 
 services:
   dev:
+    security_opt:
+      - seccomp=unconfined
     build:
       context: ..
       dockerfile: .devcontainer/Dockerfile
@@ -12,7 +14,7 @@ services:
       - ${LOCAL_WORKSPACE_FOLDER:-..}:/workspace:cached
       - node_modules:/workspace/node_modules
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:3001:3000"
     env_file:
       - path: ../.env
         required: false

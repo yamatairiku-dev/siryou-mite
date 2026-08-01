@@ -41,9 +41,10 @@ flowchart LR
 3. 一時的なHttpOnly Cookieへ認証フロー情報を保存
 4. Entra IDへリダイレクト
 5. `/auth/callback`でstateを比較し、認可コードを交換
-6. `tid`、`oid`、`roles`を検証し、氏名・メール・識別子・App Roleだけを
-   8時間固定の署名付きセッションへ保存
-7. PKCE verifierを含む一時Cookieを破棄
+6. `tid`、`oid`、`roles`に加え、`email`（未提供時は`preferred_username`）の
+   メールドメインが環境別の許可リストに完全一致することを検証
+7. 氏名・メール・識別子・App Roleだけを8時間固定の署名付きセッションへ保存
+8. PKCE verifierを含む一時Cookieを破棄
 
 アクセストークンとclient secretはセッションCookieへ保存しません。Microsoft Graphなどの
 委任アクセスが必要なアプリでは、暗号化したサーバー側ストレージを別途設計してください。

@@ -77,7 +77,11 @@ ENTRA_CLIENT_ID=...
 ENTRA_CLIENT_SECRET=...
 ENTRA_TENANT_ID=...
 ENTRA_REDIRECT_URI=https://internal-app.example.com/auth/callback
+ENTRA_ALLOWED_EMAIL_DOMAINS=example.com
 ```
+
+`ENTRA_ALLOWED_EMAIL_DOMAINS`にはログインを許可するメールドメインを指定します。複数の
+場合はカンマ区切りにし、サブドメインも許可する場合は個別に列挙してください。
 
 `SESSION_SECRET`は次のように生成できます。
 

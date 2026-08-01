@@ -7,6 +7,33 @@ const optionalUrl = z
   .transform((value) => value || undefined)
   .pipe(z.url().optional());
 
+const emailDomain = z
+  .string()
+  .trim()
+  .transform((value) => value.toLowerCase())
+  .refine(
+    (value) =>
+      value.length <= 253 &&
+      value.includes(".") &&
+      value.split(".").every(
+        (label) =>
+          label.length >= 1 &&
+          label.length <= 63 &&
+          /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label),
+      ),
+    "有効なメールドメインを指定してください",
+  );
+
+const allowedEmailDomains = z
+  .string()
+  .trim()
+  .optional()
+  .transform((value) =>
+    value ? value.split(",").map((item) => item.trim()) : [],
+  )
+  .pipe(z.array(emailDomain))
+  .transform((domains) => [...new Set(domains)]);
+
 const schema = z
   .object({
     NODE_ENV: z
@@ -27,6 +54,7 @@ const schema = z
     ENTRA_CLIENT_SECRET: z.string().trim().optional(),
     ENTRA_TENANT_ID: z.string().trim().optional(),
     ENTRA_REDIRECT_URI: optionalUrl,
+    ENTRA_ALLOWED_EMAIL_DOMAINS: allowedEmailDomains,
   })
   .superRefine((value, context) => {
     if (value.NODE_ENV === "production" && value.AUTH_MODE !== "entra") {
@@ -52,16 +80,29 @@ const schema = z
           });
         }
       }
+
+      if (value.ENTRA_ALLOWED_EMAIL_DOMAINS.length === 0) {
+        context.addIssue({
+          code: "custom",
+          path: ["ENTRA_ALLOWED_EMAIL_DOMAINS"],
+          message:
+            "ENTRA_ALLOWED_EMAIL_DOMAINS は AUTH_MODE=entra のとき必須です",
+        });
+      }
     }
   });
 
-const result = schema.safeParse(process.env);
+export function parseEnvironment(input: NodeJS.ProcessEnv) {
+  const result = schema.safeParse(input);
 
-if (!result.success) {
-  const message = result.error.issues
-    .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
-    .join("\n");
-  throw new Error(`環境変数が不正です:\n${message}`);
+  if (!result.success) {
+    const message = result.error.issues
+      .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+      .join("\n");
+    throw new Error(`環境変数が不正です:\n${message}`);
+  }
+
+  return result.data;
 }
 
-export const env = result.data;
+export const env = parseEnvironment(process.env);

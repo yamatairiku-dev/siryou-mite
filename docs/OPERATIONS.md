@@ -79,6 +79,17 @@ Azure Monitor Action Groupから運用担当者の共有メールアドレスへ
 SESSION_SECRETを変更すると既存セッションは無効になります。利用者へ事前通知してください。
 Entra ID client secretの期限と不要権限は四半期ごとに確認します。
 
+## ログイン許可ドメイン
+
+`AUTH_MODE=entra`では`ENTRA_ALLOWED_EMAIL_DOMAINS`が必須です。ログインを許可する
+メールドメインをカンマ区切りで指定します（例: `example.com,subsidiary.example.com`）。
+比較は大文字小文字を区別しない完全一致であり、`example.com`を指定しても
+`sub.example.com`は許可されません。
+
+値を変更した場合はアプリを再デプロイし、許可ドメインと不許可ドメインのアカウントで
+ログイン可否を確認します。変更前に発行済みのセッションは有効期限まで残るため、即時に
+遮断する必要がある場合は`SESSION_SECRET`もローテーションして全セッションを無効化します。
+
 ## バックアップ
 
 - PostgreSQL point-in-time restoreとBlob soft deleteを7日間保持する

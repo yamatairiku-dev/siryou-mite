@@ -4,6 +4,7 @@ import {
 } from "@azure/msal-node";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createCookieSessionStorage } from "react-router";
+import { requireAllowedEntraEmail } from "~/lib/auth/email-domain.server";
 import { env } from "~/lib/env.server";
 import type { AppUser } from "~/lib/session.server";
 
@@ -107,15 +108,19 @@ export async function finishEntraLogin(
     });
 
   const account = result?.account;
-  if (!account?.homeAccountId || !account.username) {
+  if (!account?.homeAccountId) {
     throw new Response("ユーザー情報を取得できませんでした", { status: 401 });
   }
+  const email = requireAllowedEntraEmail(
+    result.idTokenClaims,
+    env.ENTRA_ALLOWED_EMAIL_DOMAINS,
+  );
 
   return {
     user: {
       id: account.homeAccountId,
-      name: account.name ?? account.username,
-      email: account.username,
+      name: account.name ?? email,
+      email,
       roles: [],
     },
     returnTo,

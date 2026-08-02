@@ -7,7 +7,7 @@
 | アプリ責任者 | 利用部門調整、リリース承認 |
 | 保守担当 | 更新、監視、一次障害対応 |
 | レビュー担当 | コード・セキュリティレビュー |
-| 基盤担当 | コンテナ、シークレット、ネットワーク |
+| 基盤担当 | App Service Easy Auth、コンテナ、シークレット、ネットワーク |
 
 兼務は可能ですが、リリース承認と実施は可能な限り別担当にします。
 
@@ -20,6 +20,7 @@
 - 応答時間
 - コンテナ再起動回数
 - Entra認証失敗率
+- Easy Auth principal解析失敗、tenant不一致、App Role・groups欠落
 - 外部APIのtimeout率
 - CPU、メモリ
 - Storage Queue長、最古メッセージ、Preview失敗
@@ -65,8 +66,10 @@ Azure Monitor Action Groupから運用担当者の共有メールアドレスへ
 
 ## シークレット更新
 
-対象はSESSION_SECRET、Entra ID client secret、grant署名用Ed25519鍵、ログ用HMAC鍵です。
-環境ごとに別の値をKey Vaultへ保存し、Container AppsのKey Vault参照で渡します。
+対象はgrant署名用Ed25519鍵とログ用HMAC鍵です。環境ごとに別の値をKey Vaultへ保存し、
+App ServiceまたはContainer AppsのKey Vault参照で渡します。`SESSION_SECRET`はlocal開発
+専用で、本番へ設定しません。Easy AuthでGraph Token Storeを使用しないため、このアプリが
+管理するEntra ID client secretはありません。
 
 1. 新しいsecretまたは鍵を作成
 2. ステージングで確認
@@ -76,19 +79,18 @@ Azure Monitor Action Groupから運用担当者の共有メールアドレスへ
 6. grant鍵は新しい`keyId`で署名し、旧grantの60秒経過後に旧鍵を無効化
 7. 古いsecretまたは鍵を無効化
 
-SESSION_SECRETを変更すると既存セッションは無効になります。利用者へ事前通知してください。
-Entra ID client secretの期限と不要権限は四半期ごとに確認します。
+Easy Auth providerの証明書・secret管理方式をAzure側で変更した場合は、基盤手順を別途更新する。
 
-## ログイン許可ドメイン
+## Easy Auth・Entra ID設定変更
 
-`AUTH_MODE=entra`では`ENTRA_ALLOWED_EMAIL_DOMAINS`が必須です。ログインを許可する
-メールドメインをカンマ区切りで指定します（例: `example.com,subsidiary.example.com`）。
-比較は大文字小文字を区別しない完全一致であり、`example.com`を指定しても
-`sub.example.com`は許可されません。
+本番は`AUTH_MODE=easyauth`とし、`ENTRA_TENANT_ID`をEasy Authのsingle-tenant issuerと
+一致させます。利用許可はエンタープライズアプリの「割り当てが必要」と`User`・`Admin`
+App Roleで管理し、メールドメインでは判定しません。
 
-値を変更した場合はアプリを再デプロイし、許可ドメインと不許可ドメインのアカウントで
-ログイン可否を確認します。変更前に発行済みのセッションは有効期限まで残るため、即時に
-遮断する必要がある場合は`SESSION_SECRET`もローテーションして全セッションを無効化します。
+App Roleまたは所属グループの割り当てを変更した場合は、対象利用者の再ログイン後に
+`/.auth/me`のclaimsとアプリ画面を確認します。確認時にprincipal、token、Cookie全文を
+チケットやログへ貼り付けず、claim typeとマスキングした値だけを共有します。緊急遮断は
+Entra IDの割り当て解除・アカウント制御とセッション失効手順を組み合わせます。
 
 ## バックアップ
 
@@ -109,6 +111,10 @@ Entra ID client secretの期限と不要権限は四半期ごとに確認しま�
 - productionはGitHub Environmentの手動承認後に同じimage digestを昇格する
 - ACRは認証付きpublic endpoint、管理者account無効、runtimeは`AcrPull`を使う
 - production/non-productionのservice principalとfederated credentialを分離する
+- `authsettingsV2`をBicepでdeployし、Easy Authのtenant、audience、除外path、Token Storeが
+  設計値と一致することを確認する
+- staging smoke testでは`/health`が匿名で成功し、業務routeが未認証時にEntra IDへ遷移し、
+  実ログイン後に`roles`と複数`groups`を取得できることを確認する
 
 ## 定期Job
 

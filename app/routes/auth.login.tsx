@@ -1,6 +1,5 @@
 import { Form, redirect } from "react-router";
 import type { Route } from "./+types/auth.login";
-import { beginEntraLogin } from "~/lib/auth/entra.server";
 import { env } from "~/lib/env.server";
 import { assertSameOrigin } from "~/lib/security.server";
 import {
@@ -28,16 +27,20 @@ export async function action({ request }: Route.ActionArgs) {
     return createUserSession(
       {
         id: "dev-user",
+        tenantId: "dev-tenant",
         name: "開発ユーザー",
         email: "dev@example.local",
-        roles: ["developer"],
+        roles: ["User"],
+        groups: ["DEV"],
       },
       returnTo,
     );
   }
 
-  const { location, cookie } = await beginEntraLogin(request, returnTo);
-  return redirect(location, { headers: { "Set-Cookie": cookie } });
+  const postLoginUri = new URL(returnTo, env.APP_ORIGIN).toString();
+  return redirect(
+    `/.auth/login/aad?post_login_redirect_uri=${encodeURIComponent(postLoginUri)}`,
+  );
 }
 
 export default function Login({ loaderData }: Route.ComponentProps) {

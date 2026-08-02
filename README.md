@@ -7,8 +7,8 @@ Framework Mode標準スターターです。
 
 - React Router v8、SSR有効、RSC不使用
 - React、TypeScript、Node.js 24
-- Microsoft Entra ID認証
-- 署名付きHttpOnlyセッションCookie
+- App Service Easy AuthによるMicrosoft Entra ID認証
+- App Role認可とグループクレームによる所属情報
 - Vitest、Playwright
 - Docker、GitHub Actions、Dependabot
 - Zodによる環境変数検証
@@ -33,7 +33,10 @@ npm run dev
 ```
 
 ローカルでは`.env`の`AUTH_MODE=dev`により開発ユーザーでログインできます。
-本番環境では`AUTH_MODE=entra`以外では起動しません。
+本番環境では`AUTH_MODE=easyauth`以外では起動しません。
+
+Dev Containerを起動するとPostgreSQLと併せてAdminerも常時起動します。Adminerは
+`http://localhost:8080`で開き、サーバーには`postgres`を指定してください。
 
 ## アプリ作成時の必須作業
 
@@ -41,8 +44,9 @@ npm run dev
 - `.env`の`APP_NAME`を変更する
 - READMEをアプリ固有の概要、担当部署、連絡先へ書き換える
 - ホーム画面と`/app`を業務内容に合わせて変更する
-- Entra IDのアプリ登録とredirect URIを設定する
-- 本番用シークレットをシークレット管理機能へ登録する
+- Entra IDのアプリ登録、App Role、所属グループクレームを設定する
+- App Service Easy AuthをBicepで設定する
+- 本番用の業務シークレットをシークレット管理機能へ登録する
 - 業務データに応じた認可、監視、バックアップ、RTO/RPOを決定する
 
 認証、セッション、CI、Docker、セキュリティ規約は、理由なく変更しないでください。
@@ -58,36 +62,24 @@ GitHub ActionsのワークフローファイルとDependabot設定はテンプ�
 - `main`ブランチを保護するRulesets
 - 必須レビューと必須status check
 
-## Entra IDの設定
+## Easy AuthとEntra IDの設定
 
-Entra管理センターでWebアプリを登録し、リダイレクトURIを次に設定します。
-
-```text
-https://アプリのホスト名/auth/callback
-```
+App Service Easy AuthでMicrosoft Entra ID providerを設定します。アプリ登録には
+`User`・`Admin` App Roleと、アプリへ割り当てた所属グループだけを返す`groups` claimを
+設定します。Graphを使用しないためToken Storeは無効にします。
 
 本番環境へ以下を設定します。
 
 ```dotenv
 NODE_ENV=production
 APP_ORIGIN=https://internal-app.example.com
-AUTH_MODE=entra
-SESSION_SECRET=十分に長いランダム値
-ENTRA_CLIENT_ID=...
-ENTRA_CLIENT_SECRET=...
+AUTH_MODE=easyauth
 ENTRA_TENANT_ID=...
-ENTRA_REDIRECT_URI=https://internal-app.example.com/auth/callback
-ENTRA_ALLOWED_EMAIL_DOMAINS=example.com
 ```
 
-`ENTRA_ALLOWED_EMAIL_DOMAINS`にはログインを許可するメールドメインを指定します。複数の
-場合はカンマ区切りにし、サブドメインも許可する場合は個別に列挙してください。
-
-`SESSION_SECRET`は次のように生成できます。
-
-```bash
-node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"
-```
+本番の認証フロー、callback、セッションCookieはEasy Authが管理します。アプリは
+`X-MS-CLIENT-PRINCIPAL`から`oid`、`tid`、`roles`、複数の`groups`を検証して取得します。
+ローカルの`AUTH_MODE=dev`だけは`.env`の`SESSION_SECRET`を使用します。
 
 ## 日常コマンド
 

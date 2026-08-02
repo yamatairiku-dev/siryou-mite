@@ -2,14 +2,15 @@
 
 ## 方針
 
-このテンプレートは、ブラウザ、React Router BFF、外部業務APIの3層を基本とします。
-初回表示はSSR、以後の画面遷移はクライアント側で行います。
+このアプリは、ブラウザ、App Service Easy Auth、React Router BFF、データサービスを
+基本とします。初回表示はSSR、以後の画面遷移はクライアント側で行います。
 
 ```mermaid
 flowchart LR
   U["社内ユーザー"] --> B["ブラウザ<br>React UI"]
-  B --> RR["React Router BFF<br>loader / action"]
-  RR --> E["Microsoft Entra ID"]
+  B --> EA["App Service Easy Auth"]
+  EA --> E["Microsoft Entra ID"]
+  EA -->|X-MS-CLIENT-PRINCIPAL| RR["React Router BFF<br>loader / action"]
   RR --> API["業務API・DB・SaaS"]
   RR --> L["構造化ログ"]
 ```
@@ -24,7 +25,7 @@ flowchart LR
 
 ### React Router
 
-- Entra ID認証とセッションを管理する
+- Easy Authが検証したprincipalを取得し、業務認可を行う
 - loaderで読み取り、actionで更新を行う
 - 外部APIの資格情報をサーバー環境変数から取得する
 - 入力検証、認可、監査ログを行う
@@ -34,34 +35,28 @@ flowchart LR
 - 業務データの正本を保持する
 - React Routerから最小権限でアクセスする
 
-## 認証フロー
+## 認証・ユーザーコンテキスト
 
-1. ユーザーが`POST /auth/login`を実行
-2. サーバーがランダムなstateとPKCE verifierを生成
-3. 一時的なHttpOnly Cookieへ認証フロー情報を保存
-4. Entra IDへリダイレクト
-5. `/auth/callback`でstateを比較し、認可コードを交換
-6. `tid`、`oid`、`roles`に加え、`email`（未提供時は`preferred_username`）の
-   メールドメインが環境別の許可リストに完全一致することを検証
-7. 氏名・メール・識別子・App Roleだけを8時間固定の署名付きセッションへ保存
-8. PKCE verifierを含む一時Cookieを破棄
+1. 未認証ユーザーが`POST /auth/login`を実行する。
+2. アプリは安全な戻り先を付けて`/.auth/login/aad`へリダイレクトする。
+3. Easy AuthがEntra IDとのOIDCフローとセッションCookieを管理する。
+4. 認証済み要求にBase64 JSON形式の`X-MS-CLIENT-PRINCIPAL`を付加する。
+5. React RouterはZodでprincipalを検証し、`oid`、`tid`、`roles`、`groups`、表示名、
+   メールアドレスを抽出する。
+6. `tid`を構成済みtenantと照合し、`roles`と所有者IDで各操作を認可する。
 
-アクセストークンとclient secretはセッションCookieへ保存しません。Microsoft Graphなどの
-委任アクセスが必要なアプリでは、暗号化したサーバー側ストレージを別途設計してください。
+アプリ独自の本番セッションCookie、MSAL、client secret、callback routeは持ちません。
+Microsoft Graphは呼ばず、Easy AuthのToken Storeも無効にします。ログアウトはアプリの
+同一オリジン検証済みPOST actionから`/.auth/logout`へ遷移します。
 
-## セッション
+`roles`は`User`・`Admin`の業務認可に使います。`groups`は複数値を前提とした所属コードで、
+画面表示と監査時点情報に使います。特定のグループ名を操作権限へ直接対応付けません。
+有効なApp Roleまたは所属クレームがない場合、アプリはfail closedで拒否します。
+グループoverage時にGraphへ自動fallbackせず、Entra側の割り当てを是正します。
 
-現在は8時間固定の署名付きCookieセッションです。操作による有効期限延長は行いません。
-Cookie内容は改ざん検知されますが、暗号化されません。保存してよいのは、社内表示に
-必要な最小限の識別情報だけです。Entra IDでは`User`と`Admin`のApp Roleを使い、
-グループObject IDをアプリ設定に持ちません。`Admin`は一般機能も利用できます。
-
-次の場合はRedisまたはDBのサーバー側セッションへ変更します。
-
-- アクセストークンや機微情報の保管が必要
-- 即時の全端末ログアウトが必要
-- セッション失効を中央管理する必要
-- 1ユーザーあたりの同時セッション数を制限する必要
+ローカル開発だけは`AUTH_MODE=dev`の署名付きCookieを使います。本番では
+`AUTH_MODE=easyauth`を必須とし、クライアントが任意に送ったprincipal headerを信頼できる
+経路を作りません。
 
 ## 適用範囲
 
@@ -84,7 +79,7 @@ Cookie内容は改ざん検知されますが、暗号化されません。保�
 ## 「資料みて！」固有の実行境界
 
 アップロードされたHTMLは信頼せず、アプリ本体とは別オリジンのHTML表示サービスで
-配信します。アプリのセッションCookieは表示サービスへ送らず、対象資料、操作利用者、
+配信します。Easy AuthのセッションCookieは表示サービスへ送らず、対象資料、操作利用者、
 有効期限を限定した60秒有効のEd25519署名付き表示grantでアクセスを制御します。
 grantはアプリJavaScriptがhidden formのPOST bodyでiframeへ送り、URL、Cookie、ログへ
 含めません。JavaScript無効時の表示fallbackは設けません。
@@ -99,10 +94,9 @@ grantはアプリJavaScriptがhidden formのPOST bodyでiframeへ送り、URL、
 - 通常リンクはiframe内、`_blank`は新しいタブで開き、`_top`と`_parent`は無効化する
 - リンククリック単位の監査とリンク専用データモデルは設けない
 
-プレビュー生成はChromiumを含む別imageのQueue駆動Container Apps Jobで最大3回試行し、
-JavaScriptと外部ネットワークを無効化します。Web、Display、Migration、Maintenanceは
-同じNode.js imageを異なるcommandとManaged Identityで使います。Azure実行単位は5つ、
-コンテナimageは2種類です。
+WebだけをLinux App Serviceで実行し、Easy Authを有効にします。プレビュー生成はChromiumを
+含む別imageのQueue駆動Container Apps Jobで最大3回試行し、JavaScriptと外部ネットワークを
+無効化します。Display、Migration、MaintenanceもContainer Appsで実行します。
 
 ## データとAzure境界
 
@@ -111,7 +105,7 @@ JavaScriptと外部ネットワークを無効化します。Web、Display、Mig
 - HTMLとJPEG previewはprivate Blob、非同期通知はStorage Queueへ保存する
 - Web、Display、Preview、Migration、Maintenanceは用途別Managed Identityを使う
 - 秘密情報はKey Vault参照で環境変数へ渡し、アプリからKey Vault APIを直接呼ばない
-- production、stagingともJapan Eastの単一region、LRS、Container Apps非ゾーン冗長とする
+- production、stagingともJapan Eastの単一region、LRS、非ゾーン冗長とする
 - applicationとdata planeはprivate networkへ限定する
 - ACRだけはGitHub-hosted runnerのpush用に認証付きpublic endpointを使う
 

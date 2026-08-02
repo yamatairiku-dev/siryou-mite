@@ -10,9 +10,11 @@ import {
 
 const testUser: AppUser = {
   id: "user-001",
+  tenantId: "tenant-001",
   name: "テスト利用者",
   email: "user@example.com",
   roles: ["User"],
+  groups: ["ZAA535-A"],
 };
 
 describe("safeInternalPath", () => {
@@ -63,6 +65,24 @@ describe("ユーザーセッション", () => {
     });
 
     await expect(requireUser(request)).resolves.toEqual(testUser);
+  });
+
+  it("App Roleがないユーザーを拒否する", async () => {
+    const response = await createUserSession({ ...testUser, roles: [] });
+    const request = new Request("http://localhost:3000/app", {
+      headers: { Cookie: response.headers.get("Set-Cookie") ?? "" },
+    });
+
+    await expect(requireUser(request)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("所属情報がないユーザーを拒否する", async () => {
+    const response = await createUserSession({ ...testUser, groups: [] });
+    const request = new Request("http://localhost:3000/app", {
+      headers: { Cookie: response.headers.get("Set-Cookie") ?? "" },
+    });
+
+    await expect(requireUser(request)).rejects.toMatchObject({ status: 403 });
   });
 
   it("ログアウト時にセッションCookieを破棄する", async () => {

@@ -18,6 +18,8 @@ test("未認証ユーザーが開発ログインしてアプリを表示でき�
   await expect(
     page.getByRole("heading", { name: "開発ユーザーさん、こんにちは" }),
   ).toBeVisible();
+  await expect(page.getByText("DEV", { exact: true })).toBeVisible();
+  await expect(page.getByText("User", { exact: true })).toBeVisible();
 });
 
 test("ヘルスチェックが正常応答する", async ({ request }) => {

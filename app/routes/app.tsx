@@ -13,7 +13,7 @@ export default function Application({ loaderData }: Route.ComponentProps) {
       <p className="eyebrow">DASHBOARD</p>
       <h1>{loaderData.user.name}さん、こんにちは</h1>
       <p className="lead">
-        このrouteのloaderはサーバー側でセッションを検証しています。
+        このrouteのloaderはサーバー側で認証情報と利用権限を検証しています。
       </p>
       <div className="grid">
         <article className="card">
@@ -23,6 +23,10 @@ export default function Application({ loaderData }: Route.ComponentProps) {
             <dd>{loaderData.user.name}</dd>
             <dt>メール</dt>
             <dd>{loaderData.user.email}</dd>
+            <dt>所属</dt>
+            <dd>{loaderData.user.groups.join("、")}</dd>
+            <dt>権限</dt>
+            <dd>{loaderData.user.roles.join("、")}</dd>
           </dl>
         </article>
         <article className="card">

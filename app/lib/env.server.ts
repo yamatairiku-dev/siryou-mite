@@ -1,38 +1,10 @@
 import { z } from "zod";
 
-const optionalUrl = z
+const optionalNonEmptyString = z
   .string()
   .trim()
   .optional()
-  .transform((value) => value || undefined)
-  .pipe(z.url().optional());
-
-const emailDomain = z
-  .string()
-  .trim()
-  .transform((value) => value.toLowerCase())
-  .refine(
-    (value) =>
-      value.length <= 253 &&
-      value.includes(".") &&
-      value.split(".").every(
-        (label) =>
-          label.length >= 1 &&
-          label.length <= 63 &&
-          /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label),
-      ),
-    "有効なメールドメインを指定してください",
-  );
-
-const allowedEmailDomains = z
-  .string()
-  .trim()
-  .optional()
-  .transform((value) =>
-    value ? value.split(",").map((item) => item.trim()) : [],
-  )
-  .pipe(z.array(emailDomain))
-  .transform((domains) => [...new Set(domains)]);
+  .transform((value) => value || undefined);
 
 const schema = z
   .object({
@@ -42,53 +14,39 @@ const schema = z
     PORT: z.coerce.number().int().positive().default(3000),
     APP_NAME: z.string().trim().min(1).default("社内Webアプリ"),
     APP_ORIGIN: z.url().default("http://localhost:3000"),
-    AUTH_MODE: z.enum(["dev", "entra"]).default("dev"),
-    SESSION_SECRET: z.string().min(32),
+    AUTH_MODE: z.enum(["dev", "easyauth"]).default("dev"),
+    SESSION_SECRET: z.string().min(32).optional(),
     SESSION_MAX_AGE_SECONDS: z.coerce
       .number()
       .int()
       .min(300)
       .max(86400)
       .default(28800),
-    ENTRA_CLIENT_ID: z.string().trim().optional(),
-    ENTRA_CLIENT_SECRET: z.string().trim().optional(),
-    ENTRA_TENANT_ID: z.string().trim().optional(),
-    ENTRA_REDIRECT_URI: optionalUrl,
-    ENTRA_ALLOWED_EMAIL_DOMAINS: allowedEmailDomains,
+    ENTRA_TENANT_ID: optionalNonEmptyString,
   })
   .superRefine((value, context) => {
-    if (value.NODE_ENV === "production" && value.AUTH_MODE !== "entra") {
+    if (value.NODE_ENV === "production" && value.AUTH_MODE !== "easyauth") {
       context.addIssue({
         code: "custom",
         path: ["AUTH_MODE"],
-        message: "本番環境では AUTH_MODE=entra が必須です",
+        message: "本番環境では AUTH_MODE=easyauth が必須です",
       });
     }
 
-    if (value.AUTH_MODE === "entra") {
-      for (const key of [
-        "ENTRA_CLIENT_ID",
-        "ENTRA_CLIENT_SECRET",
-        "ENTRA_TENANT_ID",
-        "ENTRA_REDIRECT_URI",
-      ] as const) {
-        if (!value[key]) {
-          context.addIssue({
-            code: "custom",
-            path: [key],
-            message: `${key} は AUTH_MODE=entra のとき必須です`,
-          });
-        }
-      }
+    if (value.AUTH_MODE === "easyauth" && !value.ENTRA_TENANT_ID) {
+      context.addIssue({
+        code: "custom",
+        path: ["ENTRA_TENANT_ID"],
+        message: "ENTRA_TENANT_ID は AUTH_MODE=easyauth のとき必須です",
+      });
+    }
 
-      if (value.ENTRA_ALLOWED_EMAIL_DOMAINS.length === 0) {
-        context.addIssue({
-          code: "custom",
-          path: ["ENTRA_ALLOWED_EMAIL_DOMAINS"],
-          message:
-            "ENTRA_ALLOWED_EMAIL_DOMAINS は AUTH_MODE=entra のとき必須です",
-        });
-      }
+    if (value.AUTH_MODE === "dev" && !value.SESSION_SECRET) {
+      context.addIssue({
+        code: "custom",
+        path: ["SESSION_SECRET"],
+        message: "SESSION_SECRET は AUTH_MODE=dev のとき必須です",
+      });
     }
   });
 

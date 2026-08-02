@@ -1,8 +1,10 @@
-# Entra ID 同期属性・IDトークンクレームの確認依頼
+# Easy Auth向けEntra IDグループクレームの確認依頼
 
 ## 1. 依頼概要
 
-社内Webアプリ「資料みて！」では、サインインした利用者の所属コードをMicrosoft Entra IDのIDトークンから取得する予定です。
+社内Webアプリ「資料みて！」では、App Service Easy Authが検証した
+`X-MS-CLIENT-PRINCIPAL`から、サインイン利用者の所属コードを取得します。所属情報の
+発行元は、Easy Authで使用するEntra IDアプリ登録のIDトークンです。
 
 現在、オンプレミスActive Directory（以下、オンプレAD）からMicrosoft Entra IDへグループを同期しており、Entra ID上の所属グループ名はオンプレADと同一であると認識しています。
 
@@ -16,14 +18,15 @@
 | 環境 | production / staging |
 | テナントID | 管理者確認用。リポジトリには記載しない |
 | アプリケーション（クライアント）ID | 管理者確認用。リポジトリには記載しない |
-| 認証方式 | OpenID Connect Authorization Code Flow |
+| 認証方式 | App Service Easy Auth + Microsoft Entra ID |
 | 対象トークン | IDトークン |
 | 既存App Role | `User`、`Admin` |
 | 所属コード例 | `ZAA535-A`、`ZAA090-A` |
 
 ## 3. 想定する利用方法
 
-アプリ開発者側では、サインイン利用者の所属コードをIDトークンの文字列配列として受け取る方式を検討しています。
+アプリ開発者側では、所属コードをIDトークンの文字列配列として発行し、Easy Authの
+`X-MS-CLIENT-PRINCIPAL.claims`から複数の`groups`値として受け取ります。
 
 想定するIDトークンの例:
 
@@ -43,10 +46,14 @@
 - 既存の`User`、`Admin` App Roleは、従来どおり`roles`で受け取る
 - グループを`roles`として発行しない
 - 所属コード取得を目的としたMicrosoft Graph権限は追加しない
+- Easy AuthのToken Storeは有効にしない
+- `groupMembershipClaims`は原則`ApplicationGroup`とし、アプリへ割り当てた所属グループだけを発行する
 
 ## 4. 期待する効果
 
-所属コードをOIDCのIDトークンクレームとして取得できれば、各アプリが所属情報を取得するためだけにMicrosoft Graphを呼び出す必要がなくなります。この方式は「資料みて！」だけでなく、所属コードを利用するすべてのOIDC対応アプリに共通して適用できるため、全社的な開発効率を大きく向上させる効果があります。
+所属コードをOIDCのIDトークンクレームとして取得できれば、Easy Auth配下の各アプリが
+所属情報を取得するためだけにMicrosoft Graphを呼び出す必要がなくなります。この方式は
+「資料みて！」だけでなく、所属コードを利用するアプリへ共通して適用できます。
 
 主な効果は次のとおりです。
 
@@ -91,9 +98,13 @@
 | `displayName`だけに所属コードがある場合も発行可能か | |
 | 発行値は文字列配列になるか | |
 | 複数所属をすべて発行可能か | |
+| `ApplicationGroup`で対象所属グループをすべて割り当てられるか | |
+| 想定利用者でJWT group overageが発生しないか | |
 | 対象テナント固有の制限があるか | |
 
 第一候補は、所属コードと一致する`sAMAccountName`を標準の`groups`クレームへ発行する方式です。
+クラウド専用グループの`displayName`も発行する場合は、`ApplicationGroup`としてアプリへ
+明示的に割り当てたグループだけが対象になることも確認してください。
 
 ### 5.3 所属グループの構成
 
@@ -140,7 +151,13 @@
 
 回答時にIDトークン全文、実際の利用者情報、グループObject IDなどをメール、チャット、チケットへ貼り付けないでください。必要な場合は、値をマスキングした属性名と発行形式だけを共有してください。
 
+設定後はstagingの`/.auth/me`で、トップレベルの表示名ではなく`claims`配列を確認します。
+`roles`に`User`または`Admin`、`groups`に複数の所属コードがあり、アプリが同じ値を取得
+できることを確認します。principal、token、Cookie全文は保存しません。
+
 ## 7. 参考資料
 
+- [Azure App Serviceの認証と認可](https://learn.microsoft.com/azure/app-service/overview-authentication-authorization)
+- [App ServiceでユーザーIDを扱う](https://learn.microsoft.com/azure/app-service/configure-authentication-user-identities)
 - [Microsoft Entra IDでアプリケーションのグループクレームを構成する](https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/how-to-connect-fed-group-claims)
 - [IDトークン、アクセストークン、SAMLトークンのオプショナルクレームを構成する](https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims)

@@ -2,9 +2,9 @@
 
 ## 1. 文書情報
 
-- 状態: 実装準備完了
+- 状態: Easy Auth移行実装中
 - 対象: 初期リリース
-- 最終更新日: 2026-07-26
+- 最終更新日: 2026-08-02
 - 実装状態: 業務機能未着手
 
 この文書は、`docs/ラフ仕様.md`と要件ヒアリングの結果をもとに、初期リリースの
@@ -64,18 +64,25 @@ App Roleを定義する。
 - `Admin`
 
 既存のEntra IDセキュリティグループをエンタープライズアプリ上で各App Roleへ
-割り当てる。アプリはIDトークンの`roles` claimを検証し、グループObject IDや
-`groups` claimには依存しない。`Admin`は一般機能と管理機能の両方を利用でき、
-`User`との二重割り当てを必要としない。
+割り当てる。Easy Authから渡される`roles` claimをアプリが検証する。`Admin`は一般機能と
+管理機能の両方を利用でき、`User`との二重割り当てを必要としない。グループをrole claim
+として発行せず、App Roleと所属グループを混在させない。
 
-テナントは`tid`で固定し、利用者の内部識別子には`oid`を使う。ログイン時は`email`
-claim（未提供時は`preferred_username`）を検証し、環境変数で明示したメールドメイン
-との完全一致を必須とする。サブドメインは個別に許可する。メールアドレスはこの
-ログイン可否判定と表示・監査時点の確認に使い、利用者識別やデータ単位の認可のキーには
-しない。署名付きCookie
-セッションはログインから8時間で固定失効し、操作による延長は行わない。App Roleの
-変更は次回ログインまたは最大8時間後に反映される。即時失効が必要になった場合にだけ
-サーバー側セッションを再検討する。
+同じアプリ登録で`groups` claimも発行し、利用者の所属コードを複数値で受け取る。
+初期構成は「アプリケーションに割り当てられたグループ」だけを対象とする。オンプレAD
+同期グループは所属コードと一致する`sAMAccountName`、クラウド専用グループを使用する
+場合は`displayName`を発行する。クラウド専用グループ名の発行は、アプリへ明示的に
+割り当てたグループだけに限定する。
+
+`roles`は操作認可、`groups`は所属表示と監査時点情報に使う。特定の所属コードを
+`User`・`Admin`権限へ直接対応付けない。ただし、所属情報がこのアプリの必須利用者属性で
+あるため、`groups`が空、overage、または期待した形式で取得できない場合はfail closedで
+利用を拒否する。通常要求ごとにMicrosoft Graphは呼ばず、Token Storeも有効にしない。
+
+テナントはEasy Auth設定とアプリの`tid`検証の両方で固定し、利用者の内部識別子には
+`oid`を使う。メールアドレスと表示名は画面表示と監査時点の確認だけに使い、利用者識別や
+認可判定には使わない。認証フローと本番セッションCookieはEasy Authが管理し、アプリは
+独自のMSAL、client secret、callback route、署名付き本番セッションを持たない。
 
 ### 4.2 権限表
 
@@ -100,8 +107,10 @@ claim（未提供時は`preferred_username`）を検証し、環境変数で明�
 
 ### 5.1 ログイン画面
 
-- Entra IDログインへの導線を表示する。
+- Entra IDログインへの導線を表示し、POST後に`/.auth/login/aad`へ遷移する。
 - ログイン済みの場合は初期画面へ遷移する。
+- ログアウトもアプリのPOST actionで同一オリジンを確認してから
+  `/.auth/logout`へ遷移する。
 
 ### 5.2 初期画面
 
@@ -248,9 +257,10 @@ URL解析には標準のURLパーサーを使い、scheme名の大文字小文�
 
 ```mermaid
 flowchart LR
-  U["社内PC<br>最新版Edge"] -->|社内NW / VPN| APP["Webアプリ<br>Azure Container Apps"]
+  U["社内PC<br>最新版Edge"] -->|社内NW / VPN| EA["App Service Easy Auth"]
+  EA -->|X-MS-CLIENT-PRINCIPAL| APP["React Router Web<br>Linux App Service"]
   U -->|社内NW / VPN| VIEW["HTML表示サービス<br>別オリジン"]
-  APP --> ENTRA["Microsoft Entra ID"]
+  EA --> ENTRA["Microsoft Entra ID<br>roles・groups"]
   APP --> DB["Azure Database for<br>PostgreSQL Flexible Server"]
   APP --> BLOB["Azure Blob Storage<br>private"]
   APP --> QUEUE["Azure Storage Queue"]
@@ -267,13 +277,60 @@ flowchart LR
 ### 7.1 Webアプリ
 
 - React Router Framework Mode、SSR有効、RSC不使用
+- Linux App Serviceのcustom containerで実行し、Easy AuthのMicrosoft Entra ID
+  providerを有効にする
 - 認証、認可、アップロード受付、一覧、管理、監査画面を担当
 - 保護対象loader/actionの先頭で`requireUser(request)`を呼ぶ
+- `requireUser`は`X-MS-CLIENT-PRINCIPAL`をBase64 decodeし、Zodで構造検証した後、
+  `oid`、`tid`、`roles`、複数の`groups`を抽出する
+- Easy Authのclaim mappingに備え、短縮名とMicrosoftのURI形式claim typeを明示的な
+  allowlistで扱う。未知のclaim typeは認証・認可へ使用しない
+- `tid`が構成値と異なる場合、`User`・`Admin`がない場合、または所属がない場合は拒否する
 - cookie認証のすべてのmutation actionで`assertSameOrigin(request)`を呼ぶ
 - URLパラメーター、FormData、検索条件をZodで検証する
 - アップロードは`POST /documents`へ`application/octet-stream`で送り、UTF-8
   ファイル名は`X-File-Name`へbase64urlで格納する
 - `Content-Length`の事前検査に加え、streaming中も10MBを超えた時点で中止する
+
+#### 7.1.1 Easy Auth設定
+
+App Serviceの`authsettingsV2`をBicepで管理し、portal上の手変更を正本にしない。
+
+- platform authenticationを有効にし、Microsoft Entra ID providerだけを使用する
+- single-tenant issuerを指定し、許可するtoken audienceをこのWebアプリ登録に限定する
+- 未認証要求はWeb向けにMicrosoft Entra IDへ`302`でリダイレクトする
+- `/`、`/auth/login`、`/health`だけを認証除外pathとする。業務routeは除外しない
+- `/.auth/login/aad`と`/.auth/logout`を使用し、アプリ独自callbackを公開しない
+- Microsoft Graphを呼ばないためToken Storeを無効にする
+- Easy Auth設定とアプリ設定`ENTRA_TENANT_ID`を同じtenantへ固定する
+- Entra IDのエンタープライズアプリで「割り当てが必要」を有効にする
+
+ログイン後の戻り先とログアウト後の戻り先は、`safeInternalPath`で検証したアプリ内pathと
+構成済み`APP_ORIGIN`から生成する。利用者入力の絶対URLをEasy Authへ渡さない。
+
+#### 7.1.2 App Role・グループクレーム設定
+
+WebのEasy Authが使うアプリ登録で、IDトークンへ次を発行する。
+
+| claim | 用途 | 値 |
+|---|---|---|
+| `oid` | 安定した利用者ID、owner判定 | Entra user Object ID |
+| `tid` | tenant固定 | 環境別tenant ID |
+| `roles` | 業務認可 | `User`、`Admin` |
+| `groups` | 所属表示・監査 | 所属コードの文字列。複数可 |
+| `name`、`preferred_username`等 | 画面・監査時点表示 | 認可キーにしない |
+
+`groupMembershipClaims`は`ApplicationGroup`とし、このアプリに割り当てた所属グループだけを
+発行する。オンプレAD同期グループでは、管理者確認後に`sam_account_name`、
+`dns_domain_and_sam_account_name`、`netbios_domain_and_sam_account_name`のいずれか1形式へ
+統一する。クラウド専用グループ名も必要な場合だけ`cloud_displayname`を追加する。
+`emit_as_roles`は設定しない。`ApplicationGroup`では入れ子グループ経由のmembershipを
+前提にせず、利用者を対象所属グループの直接memberとして管理する。
+
+発行値が`ZAA535-A`形式かdomain付き形式かはEntra管理者の確認結果で1つに固定する。
+アプリは複数所属を保持し、順序には意味を持たせない。グループ名は変更され得るため、
+資料ownerや認可の主キーには使わない。JWTのgroup overageを検出した場合や所属が0件の場合は
+403とし、Graph権限を追加してrequest中に補完するfallbackは設けない。
 
 ### 7.2 HTML表示サービス
 
@@ -348,15 +405,19 @@ Azure Database for PostgreSQL Flexible Serverを使い、資料メタデータ�
 
 ### 7.6 実行単位とコンテナimage
 
-- WebとDisplayは同じNode.js用Docker imageを異なるcommandとManaged Identityで使う。
+- WebはLinux App Service、DisplayはContainer Appsで、同じNode.js用Docker imageを
+  異なるcommandとManaged Identityで使う。
 - Preview JobはChromiumを含む専用Dockerfileと専用imageを使う。
 - Migration JobとMaintenance JobはWeb・Displayと同じNode.js imageを使う。
 - 5つのAzure実行単位に対し、コンテナimageは2種類だけとする。
-- production Web・Displayは各0.5 vCPU、1GB、最小1・最大3レプリカとする。
-- staging Web・Displayは最小0レプリカとする。
+- production WebはApp Service Plan上で常時起動し、production Displayは0.5 vCPU、
+  1GB、最小1・最大3レプリカとする。
+- staging WebもEasy Authの結合試験が可能なApp Serviceとして常時起動する。
+  staging Displayは最小0レプリカとする。
 - Preview Jobは1 vCPU、2GB、最大2件並列とする。
 - Migration・Maintenance Jobは0.5 vCPU、1GB、並列実行しない。
-- Container Apps Environmentのゾーン冗長はproduction、stagingとも使用しない。
+- App Service PlanとContainer Apps Environmentのゾーン冗長はproduction、stagingとも
+  使用しない。
 
 ### 7.7 定期保守Job
 
@@ -370,8 +431,10 @@ Maintenance Jobを毎日UTC 18:00（JST 03:00）に実行する。Blob削除失�
 - 利用者向けアプリとHTML表示オリジンは社内ネットワークからだけ到達可能にする。
 - 在宅勤務者は会社VPNまたは承認済み社内接続基盤を経由する。
 - PostgreSQLとBlob Storage（Storage Queueを含む）はprivate endpointを使用する。
-- Container Appsから各Azureサービスへは用途別のManaged Identityで接続する。
-- アプリ、Display、PostgreSQL、Storageのpublic network accessは無効化する。
+- App ServiceとContainer Appsから各Azureサービスへは用途別のManaged Identityで
+  接続する。
+- Web Appはprivate endpointで受信し、VNet integrationでprivate data planeへ接続する。
+  Display、PostgreSQL、Storageのpublic network accessも無効化する。
 - ACRだけはGitHub-hosted runnerからpushするため、認証付きpublic endpointを有効にする。
   ACR管理者accountは無効化し、runtimeはManaged Identityの`AcrPull`を使う。
 - HTML表示サービスとプレビューワーカーから外部インターネットへの通信を禁止する。
@@ -392,6 +455,11 @@ Maintenance Jobを毎日UTC 18:00（JST 03:00）に実行する。Blob削除失�
 - FormData
 - 外部リンクURL
 - Blob StorageとStorage Queueなど外部サービスの応答
+
+`X-MS-CLIENT-PRINCIPAL`は、Easy Authを迂回してWeb containerへ到達できないことを条件に
+信頼する。受信経路をApp Serviceに限定し、同名headerをクライアントが自由に注入できる
+local・sidecar・別ingressをproductionへ設けない。headerのJSON構造と必須claimはアプリでも
+検証するが、アプリ自身がトークン署名を再検証する構成ではない。
 
 ### 9.2 表示制御
 
@@ -442,6 +510,8 @@ sandbox allow-popups allow-popups-to-escape-sandbox;
 | ID推測 | 暗号学的に推測困難なランダム資料ID |
 | IDOR | 資料取得・削除直前のサーバー認可 |
 | CSRF | cookie認証mutationの同一オリジン検証 |
+| principal header偽装 | Easy Authを迂回できないApp Service受信経路、header構造・tenant検証 |
+| group overage・欠落 | ApplicationGroupへ限定、所属なしをfail closed、監視とEntra設定是正 |
 | 悪意あるHTML | 形式・リンク検査、CSP、sandbox、別オリジン |
 | プレビュー生成攻撃 | 別ワーカー、非root、ネットワーク遮断、資源制限、timeout |
 | 大容量・資源枯渇 | 10MB上限、ユーザー・全体容量上限、頻度・同時実行制限、監視 |
@@ -453,12 +523,11 @@ sandbox allow-popups allow-popups-to-escape-sandbox;
 - アプリ、表示サービス、Azureサービス間の通信はTLSとする。
 - HTML内で利用者がクリックする遷移先は`http:`の場合がある。この通信はアプリが
   管理するサービス間通信ではなく、遷移先の安全性と機密性を保証しない。
-- セッション署名鍵、grant署名用Ed25519秘密鍵、ログ用HMAC鍵、Entra IDの
-  有効期限付きclient secretは環境ごとにKey Vaultで管理する。
-- Container AppsのKey Vault参照から環境変数へ渡し、アプリコードからKey Vault APIを
+- grant署名用Ed25519秘密鍵とログ用HMAC鍵は環境ごとにKey Vaultで管理する。
+- App ServiceとContainer AppsのKey Vault参照から環境変数へ渡し、アプリコードからKey Vault APIを
   直接呼ばない。Webだけがgrant秘密鍵を持ち、Displayは公開鍵だけを持つ。grant署名鍵は
   `keyId`で新旧鍵を併用してrotationする。
-- client secret、token、Cookie、表示grant、request body、URLのクエリ文字列を
+- token、Cookie、`X-MS-CLIENT-PRINCIPAL`全文、表示grant、request body、URLのクエリ文字列を
   ログへ記録しない。
 - HTML本文、プレビュー、ファイル名をログへ記録しない。
 
@@ -568,12 +637,15 @@ stateDiagram-v2
 | `result` | success、denied、failed |
 | `document_id` | 対象資料ID |
 | `actor_subject_id` | Entra内部識別子 |
+| `actor_tenant_id` | 操作時点のEntra tenant ID |
 | `actor_email_at_event` | 操作時点のメールアドレス |
+| `actor_group_values` | 操作時点の所属コード配列 |
+| `actor_roles` | 操作時点のApp Role配列 |
 | `correlation_id` | 一連の処理を追跡するランダムID |
 | `error_category` | 秘密情報を含まない分類 |
 | `retain_until` | 1年後の削除予定日時 |
 
-HTML本文、質問・回答全文、token、Cookie、ファイル名、IPアドレスは監査イベントへ
+HTML本文、質問・回答全文、token、Cookie、principal header全文、ファイル名、IPアドレスは監査イベントへ
 保存しない。監査イベントは追記専用とし、通常のアプリ操作から更新・削除できない。
 
 ## 13. ルート案
@@ -630,6 +702,7 @@ stdoutへ1行1eventのJSONで出力する。相関IDはserver側でUUIDとして
 - 成否
 - エラー分類
 - 利用者`oid`をログ専用鍵でHMAC化した識別子
+- Easy Auth認証・claim検証の結果分類。claim値そのものは記録しない
 
 記録しないもの:
 
@@ -637,7 +710,8 @@ stdoutへ1行1eventのJSONで出力する。相関IDはserver側でUUIDとして
 - プレビュー画像
 - 元ファイル名
 - メールアドレスなどの個人情報
-- access token、client secret、Cookie、表示grant、request body、URLのクエリ文字列
+- access token、Cookie、`X-MS-CLIENT-PRINCIPAL`全文、groups・rolesの値、表示grant、
+  request body、URLのクエリ文字列
 - HTMLに含まれるリンクの完全なURL。検査結果はURLそのものではなく分類だけを記録
 
 ## 16. バックアップと削除
@@ -664,6 +738,7 @@ stdoutへ1行1eventのJSONで出力する。相関IDはserver側でUUIDとして
 - プレビュー生成成功率と処理時間
 - Blob、PostgreSQL、表示サービスのエラー率
 - 表示grant検証失敗率
+- Easy Authの認証失敗率、principal解析失敗、tenant不一致、App Role欠落、groups欠落・overage
 - 監査書き込み失敗
 - Blob使用量と資料件数。HTML合計40GBで警告
 - PostgreSQL storage使用率。70%で警告、85%で緊急通知
@@ -684,6 +759,8 @@ DBトランザクションをrollbackし、閲覧はHTMLを返さない。利用
 - 資料ID、owner、adminの認可
 - 一般ユーザーによる他人の削除拒否
 - `User`・`Admin` App Role判定と`Admin`の一般機能利用
+- Easy Auth principalのBase64・JSON・Zod検証、mapped claim type、tenant不一致
+- 複数`groups`の抽出、重複除去、所属なし・overageのfail closed
 - 資料状態の`active`から`deleted`への遷移と、失敗時にレコードを残さないこと
 - ユーザー・システム単位の件数と容量上限
 - URLのscheme正規化と許可・拒否判定
@@ -707,12 +784,15 @@ repository、Blob、Queue、migrationを検証する。本番Azure resourceに�
 
 ### 18.3 E2E
 
-CIではEntra ID通信をmockし、token検証、App Role判定、未認証拒否を自動試験する。
+CIではEasy Authが付加するprincipal headerをfixtureで再現し、構造・tenant・App Role・
+groupsの検証と未認証拒否を自動試験する。
 productionで有効になり得る認証bypassやテスト専用ログインrouteは作らない。stagingへの
 自動deploy後は認証不要health checkを実行し、実Entra IDログインはrelease確認時に
 担当者がstagingで確認する。
 
 - ログイン、アップロード、警告表示、資料表示、ログアウト
+- `/.auth/me`とアプリで複数所属コード、`User`・`Admin`が一致すること
+- App Roleなし、所属なし、不正tenantの要求が拒否されること
 - URLを別ユーザーが開いて閲覧
 - URLを知らない他人の資料が一覧へ出ない
 - オーナー削除と削除後の閲覧不可
@@ -741,9 +821,10 @@ productionで有効になり得る認証bypassやテスト専用ログインrout
 
 ### 19.2 Infrastructure as Code
 
-Bicepを`infra/main.bicep`から開始し、network、Container Apps、PostgreSQL、Storage、
-Key Vault、monitoringをmodule分割する。stagingとproductionは環境別parameter fileで
-同じmoduleを再利用する。秘密値、正式ホスト名、通知先メールアドレスはrepositoryへ
+Bicepを`infra/main.bicep`から開始し、network、App Service、Easy Auth
+`authsettingsV2`、Container Apps、PostgreSQL、Storage、Key Vault、monitoringを
+module分割する。stagingとproductionは環境別parameter fileで同じmoduleを再利用する。
+秘密値、tenant・client IDの実値、正式ホスト名、通知先メールアドレスはrepositoryへ
 保存しない。
 
 ### 19.3 GitHub Actions
@@ -757,7 +838,7 @@ Key Vault、monitoringをmodule分割する。stagingとproductionは環境別pa
 - `main` mergeでstagingへ自動deployし、VNet内のMigration Jobとsmoke-test Jobを
   Azure管理APIから起動して終了状態を確認する。
 - productionはstagingで検証した同一image digestを昇格し、Migration Job成功後に
-  revisionを更新する。
+  Web Appのcontainer imageとContainer Apps revisionを更新する。
 - Workload Identity向けConditional Accessのlicenseと利用可能な制御は未確認事項とし、
   利用可能ならreport-onlyで検証後に適用する。固定IP制限は設けない。
 - ACRへのpushだけは認証付きpublic endpointを使用する。private endpoint限定へ
@@ -783,7 +864,8 @@ ZIP対応は初期リリースに含めないが、資料ID配下へ複数Blob�
 実装開始前または基盤詳細設計で次を決定する。
 
 - WebとDisplayの正式な社内ホスト名、証明書、private DNS設定
-- Entra IDで割り当てる実セキュリティグループと、client secretの有効期限
+- Entra IDで割り当てる実セキュリティグループと、所属コードを発行する属性・形式
+- App Service PlanのSKU、private endpointとEasy Auth callbackのstaging検証結果
 - 運用担当者の共有メールアドレスと当番体制
 - Workload Identity向けConditional Accessのlicense・設定可否とreport-only検証結果
 - Container Apps Job上でのChromium sandbox security spike結果

@@ -1,45 +1,32 @@
 import { describe, expect, it } from "vitest";
 import { parseEnvironment } from "~/lib/env.server";
 
-const validEntraEnvironment: NodeJS.ProcessEnv = {
+const validEasyAuthEnvironment: NodeJS.ProcessEnv = {
   NODE_ENV: "production",
   APP_ORIGIN: "https://app.example.com",
-  AUTH_MODE: "entra",
-  SESSION_SECRET: "test-session-secret-at-least-32-characters",
-  ENTRA_CLIENT_ID: "client-id",
-  ENTRA_CLIENT_SECRET: "client-secret",
+  AUTH_MODE: "easyauth",
   ENTRA_TENANT_ID: "tenant-id",
-  ENTRA_REDIRECT_URI: "https://app.example.com/auth/callback",
-  ENTRA_ALLOWED_EMAIL_DOMAINS: "EXAMPLE.COM, subsidiary.example.com,example.com",
 };
 
 describe("parseEnvironment", () => {
-  it("許可ドメインを正規化して重複を除く", () => {
-    expect(
-      parseEnvironment(validEntraEnvironment).ENTRA_ALLOWED_EMAIL_DOMAINS,
-    ).toEqual(["example.com", "subsidiary.example.com"]);
-  });
-
-  it("Entra認証で許可ドメインが未設定の場合は拒否する", () => {
-    const environment = { ...validEntraEnvironment };
-    delete environment.ENTRA_ALLOWED_EMAIL_DOMAINS;
-
-    expect(() => parseEnvironment(environment)).toThrow(
-      "ENTRA_ALLOWED_EMAIL_DOMAINS は AUTH_MODE=entra のとき必須です",
+  it("Easy Auth本番設定を受け付ける", () => {
+    expect(parseEnvironment(validEasyAuthEnvironment).AUTH_MODE).toBe(
+      "easyauth",
     );
   });
 
-  it.each([
-    "example",
-    "-example.com",
-    "example-.com",
-    "example.com,",
-  ])("不正な許可ドメイン %s を拒否する", (allowedDomains) => {
+  it("Easy Authでtenantが未設定の場合は拒否する", () => {
+    const environment = { ...validEasyAuthEnvironment };
+    delete environment.ENTRA_TENANT_ID;
+
+    expect(() => parseEnvironment(environment)).toThrow(
+      "ENTRA_TENANT_ID は AUTH_MODE=easyauth のとき必須です",
+    );
+  });
+
+  it("本番のdev認証を拒否する", () => {
     expect(() =>
-      parseEnvironment({
-        ...validEntraEnvironment,
-        ENTRA_ALLOWED_EMAIL_DOMAINS: allowedDomains,
-      }),
-    ).toThrow("有効なメールドメインを指定してください");
+      parseEnvironment({ ...validEasyAuthEnvironment, AUTH_MODE: "dev" }),
+    ).toThrow("本番環境では AUTH_MODE=easyauth が必須です");
   });
 });

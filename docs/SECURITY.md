@@ -8,7 +8,7 @@
 4. cookie認証の更新処理は同一オリジンを検証する
 5. すべての外部入力を検証する
 6. 秘密情報をブラウザへ送らない
-7. productionで`AUTH_MODE=dev`を使用しない
+7. productionではApp Service Easy Authを迂回できる経路と`AUTH_MODE=dev`を使用しない
 8. High/Critical脆弱性を放置しない
 
 ## シークレット
@@ -21,7 +21,8 @@
 
 ## Cookie
 
-本番Cookieは以下を必須とします。
+アプリが発行するCookieは以下を必須とします。本番の認証セッションCookieはEasy Authが
+管理し、アプリ独自の認証Cookieは発行しません。
 
 - `HttpOnly`
 - `Secure`
@@ -44,10 +45,12 @@ secret、機微な個人情報を保存してはいけません。
 
 ## 認証と認可
 
-- OAuth stateとPKCEを削除しない
+- OAuth stateとPKCEはEasy Authに管理させ、アプリ独自の不完全な認証フローを併設しない
 - Entraのtenantを固定する
+- `X-MS-CLIENT-PRINCIPAL`はEasy Authを迂回できない経路でだけ信頼し、構造と必須claimを検証する
 - Entraログイン成功を業務権限の付与と同一視しない
-- 部署、role、対象データ単位の権限をサーバーで確認する
+- `roles`、所属情報の有無、対象データ単位の権限をサーバーで確認する
+- `groups`を`roles`として発行せず、所属表示とApp Role認可を分離する
 - 管理者機能は一般ユーザー機能と明確に分離する
 
 ## 外部通信
@@ -77,6 +80,7 @@ secret、機微な個人情報を保存してはいけません。
 - access/refresh token
 - authorization code
 - Cookie全文
+- `X-MS-CLIENT-PRINCIPAL`全文と`X-MS-TOKEN-AAD-*`
 - RAGの質問・回答全文などの業務情報（承認された場合を除く）
 
 ## 脆弱性対応
@@ -94,8 +98,8 @@ secret、機微な個人情報を保存してはいけません。
 
 四半期ごとに以下を確認します。
 
-- Entraアプリのredirect URI
-- client secretの期限
+- EntraアプリとEasy Authのredirect URI、issuer、allowed audience
+- Easy AuthのToken Storeが不要なアプリで無効であること
 - 利用していない権限
 - 退職者・異動者の権限反映
 - Cookie設定

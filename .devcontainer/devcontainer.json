@@ -6,7 +6,8 @@
   "runServices": [
     "dev",
     "postgres",
-    "azurite"
+    "azurite",
+    "adminer"
   ],
   "shutdownAction": "stopCompose",
   "remoteUser": "node",

@@ -17,6 +17,9 @@ Claude Code を司令塔＋サブエージェント構成で、承認なしに�
 | `.claude/hooks/verify-before-commit.sh` | main へのコミット禁止と、コミット前の `npm run verify` 強制 |
 | `scripts/agent/run.sh` | 自律実行の本体(auto モード＋ `/goal`) |
 | `scripts/agent/start-in-tmux.sh` | tmux 内で `run.sh` を起動する |
+| `scripts/agent/watch.sh` | 実行ログを司令塔/サブエージェント別に追いかけて表示する |
+| `scripts/agent/status.sh` | タスク進捗・作業中タスク・コミット・stash・未回答の確認事項を一覧する |
+| `scripts/agent/format-stream.jq` | `watch.sh` と `run.sh` が使うログ整形 |
 
 ## 初回だけ
 
@@ -37,6 +40,16 @@ tmux attach -t siryou-agent   # 様子を見る。Ctrl-b d で離脱
 
 Mac がスリープすると devcontainer も止まるため、長時間実行する間はホスト側で
 `caffeinate -dims` を実行しておく。
+
+## 実行中の様子を見る
+
+```bash
+scripts/agent/watch.sh    # 別ターミナルで。[main] が司令塔、[implementer:...] がサブエージェント
+scripts/agent/status.sh   # 進捗の一覧
+```
+
+サブエージェントごとの完全な記録は `$CLAUDE_CONFIG_DIR/projects/<プロジェクト>/<session_id>/subagents/agent-*.jsonl` に残る(既定30日)。
+`session_id` は `watch.sh` の先頭行に表示される。
 
 ## 実行後に人が確認すること
 

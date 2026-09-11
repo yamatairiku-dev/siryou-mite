@@ -81,6 +81,62 @@ App ServiceまたはContainer AppsのKey Vault参照で渡します。`SESSION_S
 
 Easy Auth providerの証明書・secret管理方式をAzure側で変更した場合は、基盤手順を別途更新する。
 
+## 環境変数
+
+環境変数はZodで検証します(`app/lib/env.server.ts`がWeb用、`services/display/env.ts`・
+`services/preview/env.ts`・`services/maintenance/env.ts`がDisplay・Preview Job・
+Maintenance Job用)。`services/`配下は`app/`をimportせず、共通の検証ロジックだけを
+`services/shared/env.ts`へ切り出しています。不正な値がある場合はプロセス起動時に
+例外で停止します(fail closed)。
+
+### Web(App Service)
+
+| 変数 | 内容 | 本番での扱い |
+|---|---|---|
+| `DATABASE_URL` | PostgreSQL接続文字列 | Managed IdentityのEntra ID access tokenを`pg`のpasswordとして使う。値そのものはrepositoryへ保存せず、Key Vault参照で渡す |
+| `DISPLAY_ORIGIN` | Display(HTML表示サービス)のオリジン | Web・Displayで一致させる |
+| `AZURE_STORAGE_CONNECTION_STRING` | ローカル・開発用Blob/Queue接続文字列 | 本番では設定禁止(設定するとZod検証で拒否) |
+| `AZURE_STORAGE_ACCOUNT_NAME` | Storageアカウント名(Managed Identity用) | 本番で必須。`AZURE_STORAGE_CONNECTION_STRING`とは同時指定不可 |
+| `AZURE_STORAGE_CONTAINER` | HTML・プレビューを保存するcontainer名(既定`documents`) | 環境間で共有しない値へ変更可 |
+| `AZURE_STORAGE_QUEUE_NAME` | プレビュー生成メッセージのqueue名(既定`preview-generation`) | 同上 |
+| `GRANT_SIGNING_KEY_ID` | 表示grant署名鍵の`keyId` | Key Vault参照。rotation時に新しい値へ変更する |
+| `GRANT_SIGNING_PRIVATE_KEY` | 表示grant署名用Ed25519秘密鍵(PEM) | Key Vault参照。Webだけが秘密鍵を持つ |
+| `GRANT_TTL_SECONDS` | 表示grantの有効期間(既定60秒、最大120秒) | 既定値からむやみに延長しない |
+| `LOG_HMAC_KEY` | ログ記録用HMAC鍵(base64、32byte以上) | Key Vault参照。ID等をpseudonymize化する用途に限定する |
+| `MAX_HTML_UPLOAD_BYTES` ほか§6.1の上限値 | アップロードサイズ・件数・容量・頻度・同時実行の上限 | 既定値は設計の規定値(10MB、100件、500MB、50GB／40GB警告、1分5回、同時1件)と一致 |
+
+`SESSION_SECRET`はlocal開発の`AUTH_MODE=dev`専用で、本番(`AUTH_MODE=easyauth`)では
+設定しません。
+
+### Display / Preview Job / Maintenance Job
+
+Display、Preview Job、Maintenance Jobは`DATABASE_URL`、Storage接続設定
+(`AZURE_STORAGE_CONNECTION_STRING`または`AZURE_STORAGE_ACCOUNT_NAME`、
+`AZURE_STORAGE_CONTAINER`)、`LOG_HMAC_KEY`を共通で必要とします。本番での
+Managed Identity必須・接続文字列禁止はWebと同じ制約です。
+
+| 変数 | 対象 | 内容 |
+|---|---|---|
+| `PORT` | Display | Displayが待受けるport(既定8080、Web・Migration・Maintenanceと同じNode.js imageを使う) |
+| `APP_ORIGIN` | Display | `POST /display`で許可する唯一のOrigin(Webのオリジン)。scheme+host+portのみ許可 |
+| `GRANT_VERIFICATION_KEYS` | Display | 表示grant検証用のEd25519公開鍵(PEM)を`keyId`付きJSON配列で保持する。Displayは公開鍵だけを持ち、新旧`keyId`を併用してrotationできる |
+| `GRANT_MAX_AGE_SECONDS` | Display | 受け付けるgrantの最大有効期間(既定60秒、最大120秒) |
+| `DISPLAY_MAX_POST_BODY_BYTES` | Display | hidden formのPOST body上限(既定8KB、最大16KB) |
+| `AZURE_STORAGE_QUEUE_NAME` | Preview | プレビュー生成メッセージのqueue名 |
+| `QUEUE_VISIBILITY_TIMEOUT_SECONDS` | Preview | メッセージのvisibility timeout(既定60秒) |
+| `QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS` | Preview | 1メッセージの処理上限(既定30秒) |
+| `PREVIEW_JOB_MAX_RUNTIME_SECONDS` | Preview | Job実行上限(既定45秒) |
+| `QUEUE_MAX_DEQUEUE_COUNT` | Preview | `dequeueCount`による最大試行回数(既定3回) |
+| `MAX_PREVIEW_IMAGE_BYTES` | Preview | プレビュー画像1件あたりの上限(既定1MB) |
+
+Maintenance Jobは共通変数以外を必要としません。各サービスのManaged Identityは用途別に
+分離し(設計 §7.4)、DB roleとStorageロールは最小権限にします。
+
+`NODE_ENV`はWeb・Display・Preview・Maintenanceのどれも既定値`development`で、明示的に
+設定しない限り本番制約(`AZURE_STORAGE_CONNECTION_STRING`禁止・`AZURE_STORAGE_ACCOUNT_NAME`
+必須、Webは`AUTH_MODE=easyauth`必須)が働きません。本番・stagingを問わず、Azure上で
+稼働させる全プロセスへ`NODE_ENV=production`を必須で設定します。
+
 ## Easy Auth・Entra ID設定変更
 
 本番は`AUTH_MODE=easyauth`とし、`ENTRA_TENANT_ID`をEasy Authのsingle-tenant issuerと

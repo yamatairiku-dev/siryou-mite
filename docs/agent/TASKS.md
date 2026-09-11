@@ -21,7 +21,8 @@
   - 構成を `docs/ARCHITECTURE.md` に記録し、各依存の追加理由(開発規約§7の項目)を `docs/agent/DEPENDENCIES.md` に記録する
 - 完了条件: `npm run verify` 成功。空のservice entryがbuildされる
 
-### T02 [ ] 環境変数スキーマの拡張
+### T02 [x] 環境変数スキーマの拡張
+- 実装メモ: Web用(`app/lib/env.server.ts`)とservice用(`services/shared/env.ts` + 各`services/<name>/env.ts`)にスキーマを分離し、DB・Storage・grant鍵・HMAC鍵・§6.1の制限値をZodで検証(本番は接続文字列禁止のfail closed)
 - 設計: §6.1(制限値), §7.2, §7.3, §9.5
 - 依存: T01
 - 内容: `DATABASE_URL`、Storage接続設定(ローカルは接続文字列、本番はManaged Identity)、`DISPLAY_ORIGIN`、grant鍵(Ed25519)、ログ用HMAC鍵、各種上限値をZodで検証する。Web用とservice用のスキーマを分ける

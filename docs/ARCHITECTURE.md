@@ -123,10 +123,15 @@ React Router Web以外はReact Routerに依存しない独立したNode.jsスク
 
 ```text
 app/                      Web（React Router、SSR）。react-router buildでbuild/へ出力
+  lib/env.server.ts       Web用環境変数schema(Zod)
 services/
+  shared/env.ts           Display/Preview/Maintenance共有の環境変数検証ヘルパー(Zod)
   display/index.ts        Display（HTML表示サービス）のエントリーポイント
+  display/env.ts          Display用環境変数schema
   preview/index.ts        Preview Job（プレビュー生成ワーカー）のエントリーポイント
+  preview/env.ts          Preview Job用環境変数schema
   maintenance/index.ts     Maintenance Job（定期保守）のエントリーポイント
+  maintenance/env.ts      Maintenance Job用環境変数schema
 tsconfig.services.json    services/専用のTypeScript設定。build/services/へ出力
 ```
 
@@ -136,10 +141,16 @@ tsconfig.services.json    services/専用のTypeScript設定。build/services/�
 - `tsconfig.services.json`は`app/`を含めず、Node.js 24のESM(`module`/`moduleResolution`:
   `NodeNext`)、`strict`、`outDir: build/services`で完結する。ルートの`tsconfig.json`は
   `services`と`build`を`exclude`し、Web側のtypecheckと設定が混ざらないようにする。
-- サービス間で共有したいコード（DB接続、Blob/Queueクライアントなど）が増えた場合は
-  `services/shared/`を追加する。現時点(T01)では各サービスの業務ロジックが未実装のため
-  共有moduleは作らず、`services/<name>/index.ts`は起動確認用の最小実装（担当タスクを
-  示すコメント付き）だけを置く。業務ロジックはT12(Display)、T18(Preview)、
-  T19(Maintenance)で追加する。
+- 環境変数のZod schemaはWeb用(`app/lib/env.server.ts`)とservice用
+  (`services/display|preview|maintenance/env.ts`)で分離する。`services/`配下は
+  `app/`を一切importしない方針のため、共有したい検証ロジック(base64鍵検証、
+  Ed25519 PEM検証、DATABASE_URL、Storage接続設定など)は`services/shared/env.ts`へ
+  切り出し、`services/<name>/env.ts`はそこから部品を読み込んで固有schemaを組み立てる。
+  Web側とservices側で検証ヘルパーの実装が一部重複するが、`tsconfig.services.json`の
+  `rootDir: services`制約により`app/`をimportできないための意図した重複とする。
+- サービス間で共有したいコード（DB接続、Blob/Queueクライアントなど）が増えた場合も
+  同様に`services/shared/`へ追加する。`services/<name>/index.ts`自体は引き続き
+  起動確認用の最小実装（担当タスクを示すコメント付き）であり、`env.ts`の呼び出しを
+  含む業務ロジックはT12(Display)、T18(Preview)、T19(Maintenance)で追加する。
 - `npm run verify`は`typecheck`（Web）→`typecheck:services`→`test:coverage`→`build`
   （Web）→`build:services`の順に実行し、Web側の既存手順を壊さない。

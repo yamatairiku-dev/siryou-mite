@@ -28,6 +28,19 @@ Framework Mode標準スターターです。
 ```bash
 cp .env.example .env
 npm ci
+```
+
+`.env`の`GRANT_SIGNING_PRIVATE_KEY`(表示grant署名用Ed25519秘密鍵)と
+`LOG_HMAC_KEY`(ログ記録用HMAC鍵)はplaceholderのままでは起動できません。以下で
+生成し、`.env`の値を置き換えてください。
+
+```bash
+openssl genpkey -algorithm ed25519 -out /tmp/grant-private.pem
+cat /tmp/grant-private.pem   # GRANT_SIGNING_PRIVATE_KEY へ設定(実改行のまま)
+openssl rand -base64 32      # LOG_HMAC_KEY へ設定
+```
+
+```bash
 npm run verify
 npm run dev
 ```

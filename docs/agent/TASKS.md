@@ -1,0 +1,155 @@
+# 実装タスク一覧(自律実装用)
+
+このファイルは司令塔エージェントが読み書きする実装タスクの正本です。
+人が順序や範囲を変更してかまいません。
+
+- 状態: `[ ]` 未着手 / `[~]` 作業中 / `[x]` 完了 / `[!]` ブロック(理由は `QUESTIONS.md`)
+- 🔒: セキュリティ上重要なタスク。実装担当は opus で起動し、reviewer のセキュリティ観点を必須とする
+- 「設計」の§番号は `docs/APPLICATION_DESIGN.md` の節番号
+- 着手できるのは、依存タスクがすべて `[x]` のタスクだけ
+
+## Phase 0: 共通基盤(契約を先に固める。並列化しない)
+
+### T01 [ ] 依存関係・ディレクトリ構成・サービス用build
+- 設計: §7.6, §19.1
+- 依存: なし
+- 内容:
+  - `parse5`、`pg`、`node-pg-migrate`、`@azure/identity`、`@azure/storage-blob`、`@azure/storage-queue` を追加する
+  - Display・Preview・Maintenance用のディレクトリ構成を決め(例: `services/<name>/`)、`tsconfig.services.json` で `build/services` へ出力する
+  - `npm run verify` にservice typecheck/buildを追加する
+  - 構成を `docs/ARCHITECTURE.md` に記録し、各依存の追加理由(開発規約§7の項目)を `docs/agent/DEPENDENCIES.md` に記録する
+- 完了条件: `npm run verify` 成功。空のservice entryがbuildされる
+
+### T02 [ ] 環境変数スキーマの拡張
+- 設計: §6.1(制限値), §7.2, §7.3, §9.5
+- 依存: T01
+- 内容: `DATABASE_URL`、Storage接続設定(ローカルは接続文字列、本番はManaged Identity)、`DISPLAY_ORIGIN`、grant鍵(Ed25519)、ログ用HMAC鍵、各種上限値をZodで検証する。Web用とservice用のスキーマを分ける
+- 完了条件: 単体テストで必須・不正値・本番時の制約を検証。`.env.example` と `docs/OPERATIONS.md` を更新
+
+### T03 [ ] DBマイグレーション
+- 設計: §7.4, §11, §12
+- 依存: T01
+- 内容: `node-pg-migrate` で `documents`・`audit_events` を作成する(forward-only)。`npm run db:migrate` を用意する。監査イベントは追記専用とし、runtime用roleで更新・削除できない前提のSQLにする
+- 完了条件: devcontainerのPostgreSQLに対してmigrationが成功する。結合テストでテーブルと制約を確認
+
+### T04 [ ] DB接続とrepository層(資料・監査) 🔒
+- 設計: §7.4, §12, §15.1
+- 依存: T02, T03
+- 内容: `pg` Pool、`documents` repository、`audit_events` repository(追記のみ)、cursor paginationを実装する。SQLはrepositoryの `.server.ts` に置く。結合テスト用のvitest設定(`tests/integration`、ローカルPostgreSQL使用)を追加する
+- 完了条件: 単体・結合テスト成功。監査に禁止項目(本文・ファイル名・token等)を保存しないことをテスト
+
+### T05 [ ] Blob・Queueクライアント
+- 設計: §7.3, §7.5
+- 依存: T02
+- 内容: Blobキーを資料IDから決定的に導出し(`html/{id}/document.html`、`preview/{id}/preview.jpg`)、保存・取得・削除を実装する。Queueメッセージは `schemaVersion` と `documentId` だけ。ローカルはAzurite
+- 完了条件: Azuriteに対する結合テスト成功。timeoutを設定している
+
+### T06 [ ] 認証・認可の設計適合 🔒
+- 設計: §4, §7.1, §7.1.2, §18.1
+- 依存: なし
+- 内容: 既存の `easy-auth.server.ts` / `session.server.ts` が設計を満たすか確認して不足分を補う(`tid`固定、`User`/`Admin` role、複数groupsと重複除去、overage・所属なしのfail closed、URI形式claim typeのallowlist)。owner・admin判定の認可ヘルパーを追加する
+- 完了条件: §18.1の認証・認可系の単体テストがすべてある
+
+## Phase 1: 業務コア
+
+### T07 [ ] HTML受け入れ検査 🔒
+- 設計: §6.1, §6.2, §6.3, §10.1(5), §18.1
+- 依存: T01
+- 内容: `parse5` で解析し、拡張子・サイズ・UTF-8・空ファイル、`meta refresh`、`base href`、ページ内以外の相対リンク、禁止scheme、外部resourceを判定する。拒否理由と警告コードを返す純粋関数として実装する(HTMLは書き換えない)
+- 完了条件: §18.1のHTML・URL関連の単体テストを網羅
+
+### T08 [ ] 件数・容量・頻度・同時実行の制限 🔒
+- 設計: §6.1, §10.1(3)
+- 依存: T04
+- 内容: PostgreSQLのtransactionとadvisory lockで判定する。Redisなどは追加しない
+- 完了条件: 結合テストで各上限と同時実行の競合を確認
+
+### T09 [ ] アップロード `POST /documents` 🔒
+- 設計: §7.1, §10.1, §10.2, §13
+- 依存: T05, T06, T07, T08
+- 内容: `application/octet-stream`、`X-File-Name`(base64url)、streaming中の10MB上限、UUID v4、Blob保存→DB登録→Queue送信、失敗時の補償処理、アップロード監査
+- 完了条件: 正常系・各拒否・補償処理の単体/結合テスト
+
+### T10 [ ] 初期画面(アップロードUIと所有資料一覧)
+- 設計: §5.2, §5.3, §13
+- 依存: T09
+- 内容: ドロップ領域とファイル選択、1ファイル制限、警告表示、自分の資料だけを新しい順に20件ずつ表示するカード一覧、日時はJST表示
+- 完了条件: route/コンポーネントの単体テスト。他人の資料が出ないことをテスト
+
+### T11 [ ] 表示grantの署名・検証 🔒
+- 設計: §7.2, §9.5
+- 依存: T02
+- 内容: Ed25519、60秒有効、nonce、`keyId`による鍵rotation。grantにBlobキーやファイル名を含めない
+- 完了条件: 正常・期限切れ・改ざん・対象不一致・未知keyIdの単体テスト
+
+### T12 [ ] HTML表示サービス(Display) 🔒
+- 設計: §7.2, §9.2, §10.3
+- 依存: T04, T05, T11
+- 内容: Node.js標準HTTPサーバー、`GET /health` と `POST /display` のみ、POST body 8KB上限、Origin検証、DBで `active` を再確認、閲覧監査を保存してから返す、CSPとsandboxのレスポンスヘッダー。grantとbodyをログに出さない
+- 完了条件: 単体/結合テスト(grant再利用、期限切れ、削除直後の拒否、CSPヘッダー)
+
+### T13 [ ] 資料表示画面 `/documents/:documentId`
+- 設計: §5.4, §7.2, §9.2, §13
+- 依存: T11, T12
+- 内容: 未ログイン時は同じURLへ戻る、hidden formでgrantをiframeへPOST、iframe sandbox、URLコピー、初期画面へ戻る
+- 完了条件: route単体テスト
+
+### T14 [ ] 削除(所有者・管理者) 🔒
+- 設計: §5.5, §10.4, §11, §12.1
+- 依存: T09
+- 内容: 確認画面、`active→deleted`、機微項目の消去、Blob削除失敗時の `blob_cleanup_pending`、削除監査、一般ユーザーによる他人の資料の削除拒否
+- 完了条件: 認可・状態遷移・補償の単体/結合テスト
+
+### T15 [ ] プレビュー状態 resource route
+- 設計: §5.3, §13
+- 依存: T09
+- 内容: `/documents/:documentId/preview-status` と、カードでの処理中・失敗画像の切り替え
+- 完了条件: 単体テスト
+
+## Phase 2: 管理機能
+
+### T16 [ ] 管理画面 `/admin/documents` 🔒
+- 設計: §5.6, §4.2
+- 依存: T10, T14
+- 内容: 資料ID・オーナーのメール・元ファイル名・日時で検索、閲覧、強制削除。管理操作の監査
+- 完了条件: 一般ユーザーの拒否を含む単体テスト
+
+### T17 [ ] 監査履歴画面 `/admin/audit` 🔒
+- 設計: §5.7, §15
+- 依存: T04, T16
+- 内容: 日時・利用者・資料ID・操作・結果で検索。監査履歴の閲覧自体も監査する
+- 完了条件: 単体テスト
+
+## Phase 3: 非同期処理
+
+### T18 [ ] プレビュー生成ワーカー(ローカル実行まで) 🔒
+- 設計: §7.5
+- 依存: T05, T12
+- 内容: 1実行1メッセージ、`dequeueCount` 最大3回、JavaScript無効・外部通信なし・Chromium sandbox有効のPlaywright撮影、1280x720 JPEG・1MB以下、失敗時 `failed` と監査。専用Dockerfileを作成する(Container Appsでのsecurity spikeは対象外)
+- 完了条件: Azuriteでの結合テスト(重複配信・再試行・timeout)
+
+### T19 [ ] 定期保守Job
+- 設計: §7.7, §16
+- 依存: T14
+- 内容: `blob_cleanup_pending` の冪等な再試行、削除済み資料と監査の1年経過後のpurge(Blob削除未完了はpurgeしない)
+- 完了条件: 結合テスト
+
+## Phase 4: 仕上げ
+
+### T20 [ ] E2Eテスト
+- 設計: §18.3
+- 依存: T10, T13, T14, T16, T17
+- 内容: Easy Authのprincipal headerをfixtureで再現する。本番で有効になり得る認証bypassは作らない
+- 完了条件: `npm run test:e2e` 成功
+
+### T21 [ ] ドキュメント整合と引き継ぎ
+- 依存: T20
+- 内容: `README.md`、`docs/ARCHITECTURE.md`、`docs/OPERATIONS.md` を実装に合わせて更新し、PR本文の下書きを `docs/agent/HANDOFF.md` にまとめる
+- 完了条件: `npm run verify` と `npm run test:e2e` 成功
+
+## エージェントの対象外(人が対応)
+
+- `.github/workflows` の変更(CIへのPostgreSQL・Azurite service container追加など)。必要な差分は `QUESTIONS.md` に提案として記録する
+- Bicep(`infra/`)とデプロイworkflow
+- Container Apps Job上でのChromium sandbox security spike
+- 設計書 §21 の未決事項

@@ -13,6 +13,8 @@ services:
     volumes:
       - ${LOCAL_WORKSPACE_FOLDER:-..}:/workspace:cached
       - node_modules:/workspace/node_modules
+      # Claude Code のログイン情報・設定をコンテナ再作成後も保持する
+      - claude_config:/home/node/.claude
     ports:
       - "127.0.0.1:3001:3000"
     env_file:
@@ -20,6 +22,7 @@ services:
         required: false
     environment:
       NODE_ENV: development
+      CLAUDE_CONFIG_DIR: /home/node/.claude
       PORT: 3000
       APP_ORIGIN: http://localhost:3000
       AUTH_MODE: dev
@@ -84,6 +87,7 @@ services:
         condition: service_healthy
 
 volumes:
+  claude_config:
   node_modules:
   postgres_data:
   azurite_data:

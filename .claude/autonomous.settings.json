@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "Bash(git push *)",
+      "Bash(git remote *)",
+      "Bash(git config *)",
+      "Bash(git merge *)",
+      "Bash(git rebase *)",
+      "Bash(git reset *)",
+      "Bash(git clean *)",
+      "Bash(git checkout *)",
+      "Bash(git switch *)",
+      "Bash(git branch -D *)",
+      "Bash(git stash drop *)",
+      "Bash(git stash clear *)",
+      "Bash(gh *)",
+      "Bash(sudo *)",
+      "Bash(docker *)",
+      "Bash(az *)",
+      "Bash(npm publish *)",
+      "Read(./.env)",
+      "Edit(./.claude/**)",
+      "Edit(./CLAUDE.md)",
+      "Edit(./AGENTS.md)",
+      "Edit(./.github/**)",
+      "Edit(./.devcontainer/**)",
+      "Edit(./scripts/agent/**)",
+      "Edit(./docs/APPLICATION_DESIGN.md)",
+      "Edit(./docs/SECURITY.md)",
+      "Edit(./docs/DEVELOPMENT_STANDARD.md)",
+      "Edit(./docs/ラフ仕様.md)",
+      "Edit(./docs/agent/ORCHESTRATOR.md)",
+      "Edit(./docs/agent/GOAL.txt)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit *)",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/verify-before-commit.sh",
+            "timeout": 900
+          }
+        ]
+      }
+    ]
+  }
+}

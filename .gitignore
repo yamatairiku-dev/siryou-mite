@@ -9,3 +9,6 @@ test-results/
 !.env.example
 *.log
 .DS_Store
+.agent-logs/
+.claude/settings.local.json
+.claude/worktrees/

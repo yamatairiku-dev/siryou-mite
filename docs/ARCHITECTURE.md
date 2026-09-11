@@ -114,3 +114,32 @@ runnerからprivate data planeへ直接接続せず、migrationとsmoke testはV
 Container Apps Jobとして実行します。production DB migrationはforward-onlyかつ
 新旧applicationに互換とし、application rollback時にdown migrationは行いません。
 詳細は`docs/APPLICATION_DESIGN.md`で定義します。
+
+## ディレクトリ構成とTypeScript build(Web / Display / Preview / Maintenance)
+
+5つのAzure実行単位（Web、Display、Preview Job、Migration Job、Maintenance Job）のうち、
+React Router Web以外はReact Routerに依存しない独立したNode.jsスクリプトとして実装します。
+これらは`app/`とは別のtree（`services/`）に置き、build成果物も分離します。
+
+```text
+app/                      Web（React Router、SSR）。react-router buildでbuild/へ出力
+services/
+  display/index.ts        Display（HTML表示サービス）のエントリーポイント
+  preview/index.ts        Preview Job（プレビュー生成ワーカー）のエントリーポイント
+  maintenance/index.ts     Maintenance Job（定期保守）のエントリーポイント
+tsconfig.services.json    services/専用のTypeScript設定。build/services/へ出力
+```
+
+- `services/<name>/index.ts`をコンテナのentrypointとし、Web・Migration・Maintenanceと
+  同じNode.js用Docker imageから`node build/services/<name>/index.js`を異なるcommandで
+  起動する想定にする（設計 §7.6）。Preview Jobだけは別途Chromiumを含む専用imageを使う。
+- `tsconfig.services.json`は`app/`を含めず、Node.js 24のESM(`module`/`moduleResolution`:
+  `NodeNext`)、`strict`、`outDir: build/services`で完結する。ルートの`tsconfig.json`は
+  `services`と`build`を`exclude`し、Web側のtypecheckと設定が混ざらないようにする。
+- サービス間で共有したいコード（DB接続、Blob/Queueクライアントなど）が増えた場合は
+  `services/shared/`を追加する。現時点(T01)では各サービスの業務ロジックが未実装のため
+  共有moduleは作らず、`services/<name>/index.ts`は起動確認用の最小実装（担当タスクを
+  示すコメント付き）だけを置く。業務ロジックはT12(Display)、T18(Preview)、
+  T19(Maintenance)で追加する。
+- `npm run verify`は`typecheck`（Web）→`typecheck:services`→`test:coverage`→`build`
+  （Web）→`build:services`の順に実行し、Web側の既存手順を壊さない。

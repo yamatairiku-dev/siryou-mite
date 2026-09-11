@@ -10,7 +10,8 @@
 
 ## Phase 0: 共通基盤(契約を先に固める。並列化しない)
 
-### T01 [ ] 依存関係・ディレクトリ構成・サービス用build
+### T01 [x] 依存関係・ディレクトリ構成・サービス用build
+- 実装メモ: 6依存(+`@types/pg`)を追加し、`services/{display,preview,maintenance}/` を `tsconfig.services.json` で `build/services` へ出力、`npm run verify` に service typecheck/build を追加した
 - 設計: §7.6, §19.1
 - 依存: なし
 - 内容:

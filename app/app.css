@@ -164,6 +164,71 @@ dd {
   margin: 4px 0 18px;
 }
 
+.visually-hidden {
+  border: 0;
+  clip: rect(0 0 0 0);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+.upload-panel {
+  margin-bottom: 32px;
+}
+
+.dropzone {
+  align-items: center;
+  border: 2px dashed #aebfdb;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 32px;
+  text-align: center;
+}
+
+.dropzone-active {
+  background: #eef3fb;
+  border-color: #174ea6;
+}
+
+.document-list {
+  list-style: none;
+  margin: 0 0 24px;
+  padding: 0;
+}
+
+.document-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.document-card-preview {
+  border-radius: 8px;
+  height: auto;
+  width: 100%;
+}
+
+.document-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.document-card-actions form {
+  margin: 0;
+}
+
+.correlation-id {
+  color: #6b778c;
+  font-size: 12px;
+}
+
 @media (max-width: 680px) {
   .site-header {
     align-items: flex-start;

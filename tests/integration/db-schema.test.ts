@@ -107,7 +107,8 @@ describe("documents table", () => {
     expect(indexes).toEqual(
       expect.arrayContaining([
         "documents_pkey",
-        "documents_owner_created_at_idx",
+        // T04のmigrationで`id DESC`を加えたindexへ置き換えた(keyset pagination)。
+        "documents_owner_created_at_id_idx",
         "documents_created_at_idx",
         "documents_owner_email_at_upload_idx",
         "documents_original_file_name_idx",
@@ -205,7 +206,8 @@ describe("audit_events table", () => {
     expect(indexes).toEqual(
       expect.arrayContaining([
         "audit_events_pkey",
-        "audit_events_occurred_at_idx",
+        // T04のmigrationで`id DESC`を加えたindexへ置き換えた(keyset pagination)。
+        "audit_events_occurred_at_id_idx",
         "audit_events_document_id_idx",
         "audit_events_actor_subject_id_idx",
         "audit_events_action_idx",

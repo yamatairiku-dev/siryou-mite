@@ -35,7 +35,8 @@
 - 内容: `node-pg-migrate` で `documents`・`audit_events` を作成する(forward-only)。`npm run db:migrate` を用意する。監査イベントは追記専用とし、runtime用roleで更新・削除できない前提のSQLにする
 - 完了条件: devcontainerのPostgreSQLに対してmigrationが成功する。結合テストでテーブルと制約を確認
 
-### T04 [ ] DB接続とrepository層(資料・監査) 🔒
+### T04 [x] DB接続とrepository層(資料・監査) 🔒
+- 実装メモ: `app/lib/db/{pool,documents,audit-events}.server.ts` を追加。監査はINSERTのみ・Zod strict + error_category enumで禁止項目を型と実行時の両方で拒否、一覧はkeyset pagination(所有者条件必須)、更新系は`executor`必須で監査と同一transactionを強制。keysetタイブレーカ用indexのmigrationを追加した
 - 設計: §7.4, §12, §15.1
 - 依存: T02, T03
 - 内容: `pg` Pool、`documents` repository、`audit_events` repository(追記のみ)、cursor paginationを実装する。SQLはrepositoryの `.server.ts` に置く。結合テスト用のvitest設定(`tests/integration`、ローカルPostgreSQL使用)を追加する

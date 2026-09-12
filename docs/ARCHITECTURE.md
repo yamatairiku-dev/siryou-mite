@@ -149,11 +149,52 @@ migrationを`down`実行不可として扱うため、誤ってdown migrationを
   Managed Identityと対応付けるDB roleの実際の作成・用途別分割(Web/Display/Preview/
   Maintenanceを分けるか)はIaC(Bicep)側の別タスクの範囲とし、このmigrationは
   roleが存在する場合だけGRANTし、存在しない環境(ローカル・CI)では何もしません。
+- keyset paginationのタイブレーカ`id DESC`を含むindex
+  (`documents (owner_subject_id, created_at DESC, id DESC)`、
+  `audit_events (occurred_at DESC, id DESC)`)を追加し、前方一致で完全に代替される
+  既存indexを削除する migration を追加しています(forward-only。既存migrationファイルは
+  書き換えません)。
 
 結合テスト(`tests/integration/`、`npm run test:integration`)は、専用schemaへ
 migrationを適用してテーブル・カラム・型・制約・index・追記専用triggerを検証します。
 ローカルPostgreSQLへの実接続が必要なため、`npm run test`・`npm run verify`には
 含めません(GitHub ActionsでPostgreSQL service containerを使う設定が別途必要です)。
+結合テストは`DATABASE_URL`のhostが`postgres`・`localhost`・`127.0.0.1`などローカルの
+場合だけ実行します(schemaとテスト用roleをDROPするため、本番・共有DBへ向いた設定では
+fail closedで停止します。設計 §18.2)。
+
+## DB接続とrepository層(`app/lib/db/`)
+
+loader/action、service、repositoryを分離し、SQLはrepositoryの`*.server.ts`の中だけに
+置きます(設計 §7.4)。ORMは導入しません。
+
+- `app/lib/db/pool.server.ts`: `pg`のPoolをプロセス内で1つだけ生成します。接続数上限、
+  idle/接続timeout、statement timeoutはこのファイルの`poolSettings`に固定し、環境変数
+  では変更できないようにしています(環境ごとの設定ミスでDB接続が枯渇しないため)。
+  接続先は`app/lib/env.server.ts`(Zod検証済み)の`DATABASE_URL`だけを使い、
+  productionではTLS証明書検証を有効にしたTLS接続を要求します。idle接続のエラーは
+  分類(SQLSTATE)だけを記録し、接続文字列や資格情報はログへ出しません。
+- `withTransaction(run)`は業務更新と監査を同じトランザクションで保存するために使います
+  (監査保存に失敗した操作は成功させない。設計 §15.1)。repositoryの各関数は
+  `Queryable`(Pool・transaction中のclientの共通interface)を引数に取り、
+  トランザクションの内外から同じ関数を呼べます。
+- `app/lib/db/documents.server.ts`: 資料メタデータのrepositoryです。値は必ず
+  プレースホルダーで渡します。所有者スコープが必要な操作は所有者IDを必須引数にした
+  専用関数(`listDocumentsByOwner`、`deleteDocumentAsOwner`)として公開し、
+  管理者の強制削除だけを別関数(`deleteDocumentAsAdmin`)にして、所有者条件の
+  渡し忘れが起きない形にしています。認可判定自体はloader/action側で行います。
+- 一覧はoffsetを使わないkeyset paginationです。`(created_at DESC, id DESC)`で並べ、
+  cursorは`(created_at, id)`をbase64urlへ符号化しただけの位置情報です。cursorは署名
+  しませんが、SQLが常に`owner_subject_id`で絞り込むため、改ざんしても他人の資料は
+  返りません。壊れたcursorはZod検証で拒否します。
+- `app/lib/db/audit-events.server.ts`: 監査イベントのrepositoryです。**INSERTだけ**を
+  公開し、UPDATE・DELETEを行う関数を持ちません(DB側でもtriggerとrole権限で禁止)。
+  入力はZodのstrict objectで検証し、設計 §12.2に無い項目(HTML本文、ファイル名、
+  token、表示grant、Cookie、principal header、IPアドレスなど)は型にも実装にも
+  存在しないため保存できません。`error_category`はDBでは自由記述TEXTですが、
+  repository側で固定の分類(Zod enum)に閉じ、エラーメッセージや外部サービス応答が
+  そのまま保存されないようにします。`occurred_at`はDBの`now()`だけを使い、
+  呼び出し側から指定できません(発生日時の偽装と保持期間の引き延ばしを防ぐため)。
 
 ## ディレクトリ構成とTypeScript build(Web / Display / Preview / Maintenance)
 

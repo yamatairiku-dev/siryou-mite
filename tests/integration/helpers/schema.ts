@@ -9,6 +9,19 @@ import { runner } from "node-pg-migrate";
  * devcontainerの`postgres`serviceに接続する前提で、`DATABASE_URL`は
  * `.devcontainer/docker-compose.yml`のdev serviceが設定する値をそのまま使う。
  */
+/**
+ * 結合テストが接続してよいhost(設計 §18.2「本番Azure resourceには接続しない」)。
+ * 結合テストはschemaのDROPやテスト用roleのDROPを行うため、ローカルの
+ * PostgreSQL以外へ向いた`DATABASE_URL`では実行しない(fail closed)。
+ */
+const allowedDatabaseHosts = new Set([
+  "postgres",
+  "localhost",
+  "127.0.0.1",
+  "::1",
+  "[::1]",
+]);
+
 export function requireDatabaseUrl(): string {
   const value = process.env.DATABASE_URL;
   if (!value) {
@@ -16,7 +29,28 @@ export function requireDatabaseUrl(): string {
       "DATABASE_URL is required to run integration tests. Run `npm run test:integration` inside the devcontainer (see docs/OPERATIONS.md), or set DATABASE_URL to a reachable PostgreSQL instance.",
     );
   }
+
+  assertLocalDatabaseHost(value);
   return value;
+}
+
+/**
+ * `DATABASE_URL`のhostがローカル以外の場合は例外にする。
+ * host名だけを検査し、利用者名・パスワードを含む接続文字列はメッセージへ出さない。
+ */
+export function assertLocalDatabaseHost(databaseUrl: string): void {
+  let host: string;
+  try {
+    host = new URL(databaseUrl).hostname;
+  } catch {
+    throw new Error("DATABASE_URL is not a valid URL");
+  }
+
+  if (!allowedDatabaseHosts.has(host)) {
+    throw new Error(
+      "Integration tests drop schemas and test roles, so they only run against a local PostgreSQL (postgres / localhost / 127.0.0.1). Point DATABASE_URL at the devcontainer database (see docs/OPERATIONS.md).",
+    );
+  }
 }
 
 export const migrationsDir = fileURLToPath(

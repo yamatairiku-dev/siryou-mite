@@ -100,7 +100,7 @@
 - 内容: Node.js標準HTTPサーバー、`GET /health` と `POST /display` のみ、POST body 8KB上限、Origin検証、DBで `active` を再確認、閲覧監査を保存してから返す、CSPとsandboxのレスポンスヘッダー。grantとbodyをログに出さない
 - 完了条件: 単体/結合テスト(grant再利用、期限切れ、削除直後の拒否、CSPヘッダー)
 
-### T13 [ ] 資料表示画面 `/documents/:documentId`
+### T13 [~] 資料表示画面 `/documents/:documentId`
 - 設計: §5.4, §7.2, §9.2, §13
 - 依存: T11, T12
 - 内容: 未ログイン時は同じURLへ戻る、hidden formでgrantをiframeへPOST、iframe sandbox、URLコピー、初期画面へ戻る

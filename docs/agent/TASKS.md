@@ -28,7 +28,8 @@
 - 内容: `DATABASE_URL`、Storage接続設定(ローカルは接続文字列、本番はManaged Identity)、`DISPLAY_ORIGIN`、grant鍵(Ed25519)、ログ用HMAC鍵、各種上限値をZodで検証する。Web用とservice用のスキーマを分ける
 - 完了条件: 単体テストで必須・不正値・本番時の制約を検証。`.env.example` と `docs/OPERATIONS.md` を更新
 
-### T03 [~] DBマイグレーション
+### T03 [x] DBマイグレーション
+- 実装メモ: `documents`・`audit_events` をforward-onlyのSQL migrationで作成し、監査は`BEFORE UPDATE OR DELETE` triggerで追記専用を強制、runtime roleは最小権限GRANT。`npm run db:migrate` と結合テスト設定(`vitest.integration.config.ts`)を追加した
 - 設計: §7.4, §11, §12
 - 依存: T01
 - 内容: `node-pg-migrate` で `documents`・`audit_events` を作成する(forward-only)。`npm run db:migrate` を用意する。監査イベントは追記専用とし、runtime用roleで更新・削除できない前提のSQLにする

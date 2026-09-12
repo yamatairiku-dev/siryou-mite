@@ -152,3 +152,15 @@
 - 置いた仮定: (1)`POST /display` にクエリ文字列が付いた要求は、bodyを読まずに400で拒否する(grantがingressログへ残る経路を作らないため)。(2)Blob取得timeout 5秒、HTTPの`requestTimeout` 15秒・`headersTimeout` 10秒をコード内定数として明示した。(3)削除済みと未存在は同一の404表示にして存在有無を漏らさない
 - 影響範囲: `services/display/server.ts`。timeout値を環境ごとに変えたい場合は環境変数の追加(T02のschema・`.env.example`・`docs/OPERATIONS.md`の更新)が必要
 - 回答:
+
+### Q-024 [未回答] T13: grant期限切れの再取得手段が設計に無い
+- 状況: 設計§7.2はgrantの有効期間を60秒と定めるが、資料表示画面を開いたまま時間が経った場合の再取得手段(§5.4の画面要素にも記載が無い)を定めていない。Displayのiframeは別オリジン・sandboxのため、表示が失敗したことをアプリ側のJavaScriptから検出できない
+- 置いた仮定: loaderが`issueDisplayGrant`と同じ基準時刻から計算した`grantExpiresAt`をクライアントへ渡し、hydration遅延などで期限切れ間際ならPOSTせず`useRevalidator`でloaderを再実行して新しいgrantを取り直す。加えて、自動検出できない失敗のために「表示をやり直す」ボタン(revalidateのみ)を§5.4に無い追加UIとして置いた。`grantExpiresAt`はepoch msで、grant本体の署名対象ではない
+- 影響範囲: `app/routes/documents.$documentId.tsx`、`tests/unit/routes/documents.$documentId.test.tsx`。ボタンが不要と判断される場合は、期限切れ時の利用者導線(再読込の案内など)を§5.4で決める必要がある
+- 回答:
+
+### Q-025 [未回答] T13: 資料表示画面に資料タイトルを表示した
+- 状況: 設計§5.4は画面上部の要素として「URLをコピー」「初期画面へ戻る」だけを挙げ、資料タイトルの表示を定めていない
+- 置いた仮定: 見出しに`title ?? originalFileName ?? "資料"`を表示した(初期画面§5.2のカードと同じ情報で、所有者以外にも見える)。ファイル名は表示用文字列としてT07で長さ・制御文字を検査済み。grant・監査には影響しない
+- 影響範囲: `app/routes/documents.$documentId.tsx`。所有者以外にファイル名を見せたくない場合は§5.4の決めが必要
+- 回答:

@@ -100,7 +100,8 @@
 - 内容: Node.js標準HTTPサーバー、`GET /health` と `POST /display` のみ、POST body 8KB上限、Origin検証、DBで `active` を再確認、閲覧監査を保存してから返す、CSPとsandboxのレスポンスヘッダー。grantとbodyをログに出さない
 - 完了条件: 単体/結合テスト(grant再利用、期限切れ、削除直後の拒否、CSPヘッダー)
 
-### T13 [~] 資料表示画面 `/documents/:documentId`
+### T13 [x] 資料表示画面 `/documents/:documentId`
+- 実装メモ: `app/routes/documents.$documentId.tsx` に実装。`requireUser`の既存`returnTo`(自身のpath+search)で同一URLへ戻し、`documentId`はZodの`z.uuid()`でDBアクセス前に検証、認可は`assertCanViewDocument`(所有者以外も`active`なら閲覧可・削除済みと未存在は同じ404)。grantはloader戻り値からhidden formのPOST bodyだけで`DISPLAY_ORIGIN/display`(クエリ無し)へ送り、URL・`<a href>`・ログには出さない。iframeのsandboxは`allow-popups allow-popups-to-escape-sandbox`のみ。期限切れ対策の`grantExpiresAt`と再取得導線はQ-024、タイトル表示はQ-025
 - 設計: §5.4, §7.2, §9.2, §13
 - 依存: T11, T12
 - 内容: 未ログイン時は同じURLへ戻る、hidden formでgrantをiframeへPOST、iframe sandbox、URLコピー、初期画面へ戻る

@@ -1,7 +1,15 @@
-import type { ContainerClient } from "@azure/storage-blob";
-import type { QueueClient } from "@azure/storage-queue";
+import type {
+  ContainerClient,
+  HttpHeaders,
+  RequestPolicy,
+  WebResource,
+} from "@azure/storage-blob";
+import { RestError, type QueueClient } from "@azure/storage-queue";
+import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  AZURE_STORAGE_API_VERSION,
+  createApiVersionPolicyFactory,
   DEFAULT_QUEUE_VISIBILITY_TIMEOUT_SECONDS,
   DEFAULT_STORAGE_OPERATION_TIMEOUT_MS,
   createBlobServiceClient,
@@ -102,6 +110,158 @@ describe("接続設定の解決", () => {
     const queue = getPreviewQueueClient(queueClient, "preview-generation");
     expect(queue.name).toBe("preview-generation");
   });
+
+  it("接続文字列経路でもBlob/Queue双方のclientを作れる", () => {
+    const blobClient = createBlobServiceClient({
+      kind: "connectionString",
+      connectionString: "UseDevelopmentStorage=true",
+    });
+    expect(blobClient.accountName).toBe("devstoreaccount1");
+    expect(blobClient.url).toContain("devstoreaccount1");
+
+    const queueClient = createQueueServiceClient({
+      kind: "connectionString",
+      connectionString: "UseDevelopmentStorage=true",
+    });
+    expect(queueClient.accountName).toBe("devstoreaccount1");
+    expect(queueClient.url).toContain("devstoreaccount1");
+  });
+
+  it("Managed Identity経路でもBlob/Queue双方のclientを作れる", () => {
+    const blobClient = createBlobServiceClient({
+      kind: "managedIdentity",
+      accountName: "mystorageacct",
+    });
+    expect(blobClient.url).toContain("mystorageacct.blob.core.windows.net");
+
+    const queueClient = createQueueServiceClient({
+      kind: "managedIdentity",
+      accountName: "mystorageacct",
+    });
+    expect(queueClient.url).toContain("mystorageacct.queue.core.windows.net");
+  });
+});
+
+/**
+ * `RequestPolicy`が要求する最小のfake headers/request/response(設計 §7.3, §7.5)。
+ * Azure SDKの生成コードは`x-ms-version`を`isConstant: true`のパラメータとして
+ * 固定してしまうため、送信直前にpipelineのpolicyでヘッダーを上書きしている
+ * (`createApiVersionPolicyFactory`)。ここではSDKの公開型(`HttpHeaders`・
+ * `WebResource`)をそのまま満たすfakeを作り、実際にpolicyを通した結果を検証する。
+ */
+function createFakeHeaders(initial?: Record<string, string>): HttpHeaders {
+  const store = new Map<string, string>(Object.entries(initial ?? {}));
+  const headers: HttpHeaders = {
+    set(name, value) {
+      store.set(name.toLowerCase(), String(value));
+    },
+    get(name) {
+      return store.get(name.toLowerCase());
+    },
+    contains(name) {
+      return store.has(name.toLowerCase());
+    },
+    remove(name) {
+      return store.delete(name.toLowerCase());
+    },
+    rawHeaders() {
+      return Object.fromEntries(store);
+    },
+    headersArray() {
+      return Array.from(store, ([name, value]) => ({ name, value }));
+    },
+    headerNames() {
+      return Array.from(store.keys());
+    },
+    headerValues() {
+      return Array.from(store.values());
+    },
+    clone() {
+      return createFakeHeaders(Object.fromEntries(store));
+    },
+    toJson() {
+      return Object.fromEntries(store);
+    },
+  };
+  return headers;
+}
+
+function createFakeWebResource(headers: HttpHeaders): WebResource {
+  const resource: WebResource = {
+    url: "https://example.invalid/devstoreaccount1/documents",
+    method: "GET",
+    headers,
+    withCredentials: false,
+    timeout: 0,
+    requestId: "test-request-id",
+    clone() {
+      return createFakeWebResource(headers.clone());
+    },
+    validateRequestProperties() {
+      // fake用途のため検証しない。
+    },
+    prepare() {
+      return resource;
+    },
+  };
+  return resource;
+}
+
+describe("APIバージョン固定policy(設計 §7.3, §7.5)", () => {
+  it("送信直前にx-ms-versionヘッダーを固定値へ上書きする", async () => {
+    const factory = createApiVersionPolicyFactory();
+    const headers = createFakeHeaders({ "x-ms-version": "2026-06-06" });
+    const request = createFakeWebResource(headers);
+
+    const nextPolicy: RequestPolicy = {
+      sendRequest: vi.fn(async (req) => ({
+        status: 200,
+        request: req,
+        headers: req.headers,
+      })),
+    };
+
+    const policy = factory.create(nextPolicy, {
+      log() {
+        // fake用途のため何もしない。
+      },
+      shouldLog() {
+        return false;
+      },
+    });
+
+    await policy.sendRequest(request);
+
+    expect(headers.get("x-ms-version")).toBe(AZURE_STORAGE_API_VERSION);
+    expect(nextPolicy.sendRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("ヘッダーが未設定でも固定値を設定する", async () => {
+    const factory = createApiVersionPolicyFactory();
+    const headers = createFakeHeaders();
+    const request = createFakeWebResource(headers);
+
+    const nextPolicy: RequestPolicy = {
+      sendRequest: vi.fn(async (req) => ({
+        status: 200,
+        request: req,
+        headers: req.headers,
+      })),
+    };
+
+    const policy = factory.create(nextPolicy, {
+      log() {
+        // fake用途のため何もしない。
+      },
+      shouldLog() {
+        return false;
+      },
+    });
+
+    await policy.sendRequest(request);
+
+    expect(headers.get("x-ms-version")).toBe(AZURE_STORAGE_API_VERSION);
+  });
 });
 
 describe("Queueメッセージ(設計 §7.5)", () => {
@@ -165,10 +325,14 @@ function createStubContainerClient() {
     }),
   };
   const blobClient = {
-    download: vi.fn(async (...args: unknown[]) => {
-      calls.download = args;
-      return { readableStreamBody: undefined };
-    }),
+    download: vi.fn(
+      async (
+        ...args: unknown[]
+      ): Promise<{ readableStreamBody: NodeJS.ReadableStream | undefined }> => {
+        calls.download = args;
+        return { readableStreamBody: undefined };
+      },
+    ),
     deleteIfExists: vi.fn(async (...args: unknown[]) => {
       calls.deleteIfExists = args;
     }),
@@ -234,10 +398,10 @@ describe("Blob操作(設計 §7.3)", () => {
   it("HTMLダウンロードはBlob本文をBufferへ結合する", async () => {
     const { containerClient, blobClient } = createStubContainerClient();
     blobClient.download.mockResolvedValueOnce({
-      readableStreamBody: (async function* () {
-        yield Buffer.from("hello-");
-        yield Buffer.from("world");
-      })(),
+      readableStreamBody: Readable.from([
+        Buffer.from("hello-"),
+        Buffer.from("world"),
+      ]),
     });
 
     const result = await downloadDocumentHtml(containerClient, documentId);
@@ -264,8 +428,15 @@ describe("Blob操作(設計 §7.3)", () => {
   });
 });
 
+interface StubSendMessageOptions {
+  abortSignal?: AbortSignal;
+  messageTimeToLive?: number;
+}
+
 function createStubQueueClient() {
-  const sendMessage = vi.fn(async () => ({}));
+  const sendMessage = vi.fn(
+    async (_messageText: string, _options?: StubSendMessageOptions) => ({}),
+  );
   const receiveMessages = vi.fn(async () => ({ receivedMessageItems: [] as unknown[] }));
   const deleteMessage = vi.fn(async () => ({}));
   const queueClient = {
@@ -286,13 +457,13 @@ describe("Queue操作(設計 §7.5)", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
     const [messageText, options] = sendMessage.mock.calls[0] as [
       string,
-      { abortSignal: AbortSignal },
+      StubSendMessageOptions | undefined,
     ];
     expect(parsePreviewQueueMessage(messageText)).toEqual({
       schemaVersion: PREVIEW_QUEUE_SCHEMA_VERSION,
       documentId,
     });
-    expect(options.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(options?.abortSignal).toBeInstanceOf(AbortSignal);
   });
 
   it("受信は既定visibility timeout(60秒)とdequeueCountを含めて返す", async () => {
@@ -338,10 +509,10 @@ describe("Queue操作(設計 §7.5)", () => {
     );
   });
 
-  it("削除済みメッセージ(404)の再削除は冪等に成功する", async () => {
+  it("削除済みメッセージ(MessageNotFound、404)の再削除は冪等に成功する", async () => {
     const { queueClient, deleteMessage } = createStubQueueClient();
     deleteMessage.mockRejectedValueOnce(
-      Object.assign(new Error("not found"), { statusCode: 404 }),
+      new RestError("not found", { statusCode: 404, code: "MessageNotFound" }),
     );
 
     await expect(
@@ -349,14 +520,34 @@ describe("Queue操作(設計 §7.5)", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("404だがMessageNotFoundではないエラー(例: QueueNotFound)は伝播する", async () => {
+    const { queueClient, deleteMessage } = createStubQueueClient();
+    deleteMessage.mockRejectedValueOnce(
+      new RestError("queue not found", { statusCode: 404, code: "QueueNotFound" }),
+    );
+
+    await expect(
+      deletePreviewGenerationMessage(queueClient, "m1", "p1"),
+    ).rejects.toThrow("queue not found");
+  });
+
   it("404以外のエラーは伝播する", async () => {
     const { queueClient, deleteMessage } = createStubQueueClient();
     deleteMessage.mockRejectedValueOnce(
-      Object.assign(new Error("server error"), { statusCode: 500 }),
+      new RestError("server error", { statusCode: 500 }),
     );
 
     await expect(
       deletePreviewGenerationMessage(queueClient, "m1", "p1"),
     ).rejects.toThrow("server error");
+  });
+
+  it("statusCode/codeを持たない予期しないエラーは伝播する", async () => {
+    const { queueClient, deleteMessage } = createStubQueueClient();
+    deleteMessage.mockRejectedValueOnce(new Error("network error"));
+
+    await expect(
+      deletePreviewGenerationMessage(queueClient, "m1", "p1"),
+    ).rejects.toThrow("network error");
   });
 });

@@ -17,10 +17,63 @@
 import { DefaultAzureCredential } from "@azure/identity";
 import {
   BlobServiceClient,
+  newPipeline as newBlobPipeline,
   type ContainerClient,
+  type RequestPolicy,
+  type RequestPolicyFactory,
+  type RequestPolicyOptions,
+  type WebResource,
 } from "@azure/storage-blob";
-import { QueueServiceClient, type QueueClient } from "@azure/storage-queue";
+import {
+  QueueServiceClient,
+  RestError,
+  newPipeline as newQueuePipeline,
+  type QueueClient,
+} from "@azure/storage-queue";
 import { z } from "zod";
+
+/**
+ * Azure Storage REST APIのバージョン(`x-ms-version`ヘッダー)。
+ *
+ * Azure SDKの既定値はSDKのバージョンに追随して自動的に最新化されるため、
+ * Azurite(ローカル)が未対応の新しいバージョンを急に要求してしまうことがある
+ * (devcontainerのAzurite 3.36.0はBlob/Queueとも`2025-11-05`までに対応)。
+ * ここで明示的に固定し、SDK更新でローカル結合テストが壊れないようにする。
+ * 本番のAzure Storageも過去のAPIバージョンを長期間サポートするため、固定は
+ * 本番側の動作にも問題ない。
+ *
+ * `BlobServiceClientOptions`/`StoragePipelineOptions`にはAPIバージョンを指定できる
+ * 公開フィールドが無い(`Pipeline.d.ts`の`StoragePipelineOptions`に`version`は無い)。
+ * 生成コード(`generated/src/operations/*`)の`x-ms-version`ヘッダーは
+ * `isConstant: true`のパラメータとしてSDKバージョンごとの固定値が埋め込まれており、
+ * 公開オプション経由では変更できない(Azure SDKの既知の制約)。そのため、
+ * pipelineのpolicyとして送信直前のリクエストヘッダーを直接上書きすることで固定する。
+ */
+export const AZURE_STORAGE_API_VERSION = "2025-11-05";
+
+/**
+ * `x-ms-version`ヘッダーを`AZURE_STORAGE_API_VERSION`へ固定するpolicy factory。
+ *
+ * Blob/Queue双方のSDKが`@azure/core-http-compat`の同一の`RequestPolicyFactory`/
+ * `RequestPolicy`/`RequestPolicyOptions`/`WebResource`型をそのまま再exportしている
+ * ため、Blob側の型で1つ作れば両方のpipelineへ使い回せる。
+ *
+ * `BlobServiceClient.getContainerClient`等の派生clientはこのpipelineインスタンスを
+ * そのまま使い回す実装のため、`additionalPolicies`(`position: "perCall"`)方式のように
+ * 派生clientを作るたびにcore pipelineへ重複登録される問題は起きない。
+ */
+export function createApiVersionPolicyFactory(): RequestPolicyFactory {
+  return {
+    create(nextPolicy: RequestPolicy, _options: RequestPolicyOptions): RequestPolicy {
+      return {
+        sendRequest(request: WebResource) {
+          request.headers.set("x-ms-version", AZURE_STORAGE_API_VERSION);
+          return nextPolicy.sendRequest(request);
+        },
+      };
+    },
+  };
+}
 
 /**
  * Blob/Queue操作すべてに設定する既定timeout(ms)。
@@ -77,30 +130,66 @@ export function resolveStorageConnectionConfig(value: {
   );
 }
 
+/** `newPipeline`が受け付ける資格情報の型(SDKが公開する型をそのまま再利用する)。 */
+type BlobPipelineCredential = NonNullable<Parameters<typeof newBlobPipeline>[0]>;
+type QueuePipelineCredential = NonNullable<Parameters<typeof newQueuePipeline>[0]>;
+
+function resolveBlobConnectionBasics(
+  config: StorageConnectionConfig,
+): { url: string; credential: BlobPipelineCredential } {
+  if (config.kind === "connectionString") {
+    // 接続文字列の資格情報解析(shared key / SAS等)を自前で実装しないため、
+    // 一度`fromConnectionString`でclientを作り、そこから`url`・`credential`だけを
+    // 取り出してpolicy入りのpipelineで作り直す。
+    const parsed = BlobServiceClient.fromConnectionString(config.connectionString);
+    return { url: parsed.url, credential: parsed.credential };
+  }
+
+  return {
+    url: `https://${config.accountName}.blob.core.windows.net`,
+    credential: new DefaultAzureCredential(),
+  };
+}
+
+function resolveQueueConnectionBasics(
+  config: StorageConnectionConfig,
+): { url: string; credential: QueuePipelineCredential } {
+  if (config.kind === "connectionString") {
+    // `QueueServiceClient`の`credential`はprotectedで外から読めないため、`url`だけ
+    // ここから取り、`credential`(shared key等、`@azure/storage-common`が両SDK共通で
+    // 使うクラス)は`BlobServiceClient`側(publicで読める)から取り出す。同じ
+    // 接続文字列から作るため、Blob用・Queue用で資格情報の実体は同じになる。
+    // (この使い回しは`@azure/storage-common`がBlob/Queue間で単一インストールに
+    // dedupeされている前提に依存する。`npm ls @azure/storage-common`が1系統だけ
+    // 表示されることを確認済み。多重インストールされると`instanceof`チェックで
+    // 資格情報のpolicyが正しく組み立てられない可能性がある。)
+    const queueParsed = QueueServiceClient.fromConnectionString(config.connectionString);
+    const blobParsed = BlobServiceClient.fromConnectionString(config.connectionString);
+    return { url: queueParsed.url, credential: blobParsed.credential };
+  }
+
+  return {
+    url: `https://${config.accountName}.queue.core.windows.net`,
+    credential: new DefaultAzureCredential(),
+  };
+}
+
 export function createBlobServiceClient(
   config: StorageConnectionConfig,
 ): BlobServiceClient {
-  if (config.kind === "connectionString") {
-    return BlobServiceClient.fromConnectionString(config.connectionString);
-  }
-
-  return new BlobServiceClient(
-    `https://${config.accountName}.blob.core.windows.net`,
-    new DefaultAzureCredential(),
-  );
+  const { url, credential } = resolveBlobConnectionBasics(config);
+  const pipeline = newBlobPipeline(credential, {});
+  pipeline.factories.push(createApiVersionPolicyFactory());
+  return new BlobServiceClient(url, pipeline);
 }
 
 export function createQueueServiceClient(
   config: StorageConnectionConfig,
 ): QueueServiceClient {
-  if (config.kind === "connectionString") {
-    return QueueServiceClient.fromConnectionString(config.connectionString);
-  }
-
-  return new QueueServiceClient(
-    `https://${config.accountName}.queue.core.windows.net`,
-    new DefaultAzureCredential(),
-  );
+  const { url, credential } = resolveQueueConnectionBasics(config);
+  const pipeline = newQueuePipeline(credential, {});
+  pipeline.factories.push(createApiVersionPolicyFactory());
+  return new QueueServiceClient(url, pipeline);
 }
 
 export function getDocumentsContainerClient(
@@ -402,7 +491,9 @@ export async function receivePreviewGenerationMessages(
 
 /**
  * 処理済みメッセージを削除する。既に削除済み・存在しないメッセージへの呼び出しは
- * 冪等に扱い、"MessageNotFound"は成功として扱う(重複配信・重複削除への耐性)。
+ * 冪等に扱い、"MessageNotFound"(そのメッセージだけが存在しない)は成功として扱う
+ * (重複配信・重複削除への耐性)。"QueueNotFound"など他の404はqueue自体の設定ミスの
+ * 可能性があるため、握り潰さずに伝播させる。
  */
 export async function deletePreviewGenerationMessage(
   queueClient: QueueClient,
@@ -424,9 +515,8 @@ export async function deletePreviewGenerationMessage(
 
 function isMessageNotFoundError(error: unknown): boolean {
   return (
-    typeof error === "object" &&
-    error !== null &&
-    "statusCode" in error &&
-    (error as { statusCode?: unknown }).statusCode === 404
+    error instanceof RestError &&
+    error.statusCode === 404 &&
+    error.code === "MessageNotFound"
   );
 }

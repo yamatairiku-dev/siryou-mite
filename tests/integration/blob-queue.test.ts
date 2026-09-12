@@ -119,11 +119,15 @@ describe("Blob操作", () => {
 
   it("明示的なtimeoutを超えると操作を中止する", async () => {
     // 実際のAzuriteに対して、既に期限切れのtimeout(1ms)を渡すと中止される。
+    // `name`が`AbortError`/`TimeoutError`であることまで確認し、他の理由(例えば
+    // API version不整合)による失敗を誤って合格させないようにする。
     await expect(
       uploadDocumentHtml(containerClient, documentId, Buffer.from("x"), {
         timeoutMs: 1,
       }),
-    ).rejects.toBeTruthy();
+    ).rejects.toMatchObject({
+      name: expect.stringMatching(/^(AbortError|TimeoutError)$/),
+    });
   });
 });
 

@@ -207,6 +207,7 @@ app/                      Web（React Router、SSR）。react-router buildでbui
   lib/env.server.ts       Web用環境変数schema(Zod)
 services/
   shared/env.ts           Display/Preview/Maintenance共有の環境変数検証ヘルパー(Zod)
+  shared/storage.ts       Blob/Queueクライアントの実処理(Web・Display・Preview・Maintenanceで共有)
   display/index.ts        Display（HTML表示サービス）のエントリーポイント
   display/env.ts          Display用環境変数schema
   preview/index.ts        Preview Job（プレビュー生成ワーカー）のエントリーポイント
@@ -233,5 +234,17 @@ tsconfig.services.json    services/専用のTypeScript設定。build/services/�
   同様に`services/shared/`へ追加する。`services/<name>/index.ts`自体は引き続き
   起動確認用の最小実装（担当タスクを示すコメント付き）であり、`env.ts`の呼び出しを
   含む業務ロジックはT12(Display)、T18(Preview)、T19(Maintenance)で追加する。
+- `services/shared/storage.ts`（Blob Storage / Storage Queueクライアント、設計 §7.3,
+  §7.5）はWeb・Display・Preview・Maintenanceすべてで使う実処理のため、Web専用の
+  `app/lib/env.server.ts`のように重複させず、ここへ集約する。依存方向は
+  `app/` → `services/shared/`の一方向のみとし、`services/`配下（`shared/`含む）が
+  `app/`をimportすることは無い。Web側は`app/lib/storage.server.ts`から本モジュールを
+  再importする薄いラッパーとして参照し、`app/lib/env.server.ts`（Zod検証済み環境変数）
+  からclientを組み立てる部分だけをWeb固有に持つ。
+  - Azure SDKの既定の`x-ms-version`はSDKバージョンに追随して自動的に上がるため、
+    `services/shared/storage.ts`の`AZURE_STORAGE_API_VERSION`定数でpipeline policy経由
+    ヘッダーへ固定している（`options.version`では固定できない、SDKの既知の制約）。
+    `@azure/storage-blob`/`@azure/storage-queue`を更新したときは、Azuriteが対応する
+    APIバージョンとこの定数を合わせて見直す。
 - `npm run verify`は`typecheck`（Web）→`typecheck:services`→`test:coverage`→`build`
   （Web）→`build:services`の順に実行し、Web側の既存手順を壊さない。

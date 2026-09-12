@@ -42,7 +42,8 @@
 - 内容: `pg` Pool、`documents` repository、`audit_events` repository(追記のみ)、cursor paginationを実装する。SQLはrepositoryの `.server.ts` に置く。結合テスト用のvitest設定(`tests/integration`、ローカルPostgreSQL使用)を追加する
 - 完了条件: 単体・結合テスト成功。監査に禁止項目(本文・ファイル名・token等)を保存しないことをテスト
 
-### T05 [~] Blob・Queueクライアント
+### T05 [x] Blob・Queueクライアント
+- 実装メモ: Blob/Queueの実処理を `services/shared/storage.ts` に集約し、Web は `app/lib/storage.server.ts` の薄いラッパー経由で参照。Blobキーは資料IDのUUID検証つき決定的導出、Queueメッセージは `schemaVersion` と `documentId` のみ(strict検証)、全操作に `abortSignal` timeout。SDK既定のAPIバージョンをAzuriteが拒否するため pipeline policy で `x-ms-version` を固定した
 - 設計: §7.3, §7.5
 - 依存: T02
 - 内容: Blobキーを資料IDから決定的に導出し(`html/{id}/document.html`、`preview/{id}/preview.jpg`)、保存・取得・削除を実装する。Queueメッセージは `schemaVersion` と `documentId` だけ。ローカルはAzurite

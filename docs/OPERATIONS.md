@@ -181,6 +181,19 @@ Entra IDの割り当て解除・アカウント制御とセッション失効手
 検証します。`npm run test`・`npm run verify`には含まれないため、CIへ組み込む場合は
 別途PostgreSQL service containerの起動が必要です。
 
+同じ結合テスト(`tests/integration/blob-queue.test.ts`)はAzuriteへも接続し、
+専用container/queueを作ってBlob/Queue操作(保存・取得・削除、送受信、timeout)を
+検証します(設計 §7.3, §7.5, §18.2)。`AZURE_STORAGE_CONNECTION_STRING`は
+devcontainerの`docker-compose.yml`がAzurite(`azurite:10000`/`10001`)向けの値を
+供給し、`tests/integration/helpers/env.ts`はダミー値で上書きしません(実接続文字列が
+無いとテストは失敗します)。`tests/integration/helpers/storage.ts`の
+`assertLocalStorageConnection`が接続先host(`azurite`/`localhost`/`127.0.0.1`以外)を
+検査し、ローカルのAzurite以外を指す接続文字列ではcontainer/queueの作成・削除が
+実行される前に例外で止めます(本番Azure Storageへ結合テストが接続しないためのガード)。
+CIへ組み込む場合はPostgreSQLと同様に、Azuriteのservice container起動と
+`AZURE_STORAGE_CONNECTION_STRING`(Azuriteのホスト名を指す接続文字列)の設定が
+別途必要です。
+
 ## バックアップ
 
 - PostgreSQL point-in-time restoreとBlob soft deleteを7日間保持する

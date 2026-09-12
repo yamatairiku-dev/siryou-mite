@@ -9,6 +9,10 @@ export default [
     "documents/:documentId/delete",
     "routes/documents.$documentId.delete.tsx",
   ),
+  route(
+    "documents/:documentId/preview-status",
+    "routes/documents.$documentId.preview-status.ts",
+  ),
   route("auth/login", "routes/auth.login.tsx"),
   route("auth/logout", "routes/auth.logout.tsx"),
   route("health", "routes/health.ts"),

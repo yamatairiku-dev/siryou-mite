@@ -114,7 +114,8 @@
 - 内容: 確認画面、`active→deleted`、機微項目の消去、Blob削除失敗時の `blob_cleanup_pending`、削除監査、一般ユーザーによる他人の資料の削除拒否
 - 完了条件: 認可・状態遷移・補償の単体/結合テスト
 
-### T15 [ ] プレビュー状態 resource route
+### T15 [x] プレビュー状態 resource route
+- 実装メモ: `app/routes/documents.$documentId.preview-status.ts` にloaderのみのresource routeを追加。`requireUser`→`z.uuid()`(DB到達前)→`findDocumentById`→`assertCanViewDocument`の順で、削除済み・未存在・非UUIDは同じ404。応答は`{previewStatus}`だけで`securityHeaders()`(`Cache-Control: no-store`)付き。初期画面は`pending`の資料があるときだけ5秒間隔・最大24回ポーリングし、状態が確定したらtimerとfetchを後片付けして止める(Q-031)。`ready`の実画像配信経路は§13に無いため範囲外(Q-030)、この経路は監査しない(Q-032)
 - 設計: §5.3, §13
 - 依存: T09
 - 内容: `/documents/:documentId/preview-status` と、カードでの処理中・失敗画像の切り替え

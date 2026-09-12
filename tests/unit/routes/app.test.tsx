@@ -1,3 +1,4 @@
+import { act } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoutesStub } from "react-router";
@@ -16,6 +17,10 @@ import type { UploadErrorBody, UploadSuccessBody } from "~/lib/upload/upload.ser
  *   呼び出しており、他人の資料が混ざり得ないことを確認する。
  * - 画面コンポーネントは1ファイル制限、警告表示、日時のJST表示、ページング、
  *   プレビュー状態の切り替え、オーナーのみの削除導線を確認する。
+ *
+ * T15追加分: `pending`のカードだけが`/documents/:documentId/preview-status`を
+ * ポーリングし、`pending`以外になったら止まること、`pending`のカードが
+ * 無いときはポーリングしないことを確認する(設計 §5.3, §13)。
  */
 
 const listDocumentsByOwnerMock = vi.fn<
@@ -362,5 +367,151 @@ describe("初期画面コンポーネント", () => {
     ).toBeTruthy();
     expect(screen.getByText("<img src=x onerror=alert(1)>.html")).toBeTruthy();
     expect(document.querySelector("script")).toBeNull();
+  });
+});
+
+/** アプリのポーリング間隔(`app.tsx`の`PREVIEW_POLL_INTERVAL_MS`と一致させる)。 */
+const PREVIEW_POLL_INTERVAL_MS = 5_000;
+
+/**
+ * ポーリング(T15)のテスト用ヘルパー。
+ *
+ * `window.setInterval`/`clearInterval`のうち、アプリのポーリング間隔
+ * (`PREVIEW_POLL_INTERVAL_MS`)で呼ばれたものだけを差し替え、コールバックを
+ * 手動で起動できるようにする。`@testing-library`の`waitFor`系は内部で別間隔
+ * (50ms)の`setInterval`を使っており、無条件に差し替えるとそちらまで止めて
+ * しまいテストが固まる。間隔で見分けることで実タイマーのまま動作させる。
+ */
+function spyOnPollingInterval() {
+  const realSetInterval = window.setInterval.bind(window);
+  const realClearInterval = window.clearInterval.bind(window);
+  let callback: (() => void) | null = null;
+  let registrationCount = 0;
+  let clearCount = 0;
+  const pollingHandle = {} as ReturnType<typeof window.setInterval>;
+
+  vi.spyOn(window, "setInterval").mockImplementation(((
+    fn: () => void,
+    ms?: number,
+    ...rest: unknown[]
+  ) => {
+    if (ms === PREVIEW_POLL_INTERVAL_MS) {
+      callback = fn;
+      registrationCount += 1;
+      return pollingHandle;
+    }
+    return realSetInterval(fn as () => void, ms, ...rest);
+  }) as unknown as typeof window.setInterval);
+  vi.spyOn(window, "clearInterval").mockImplementation(((handle?: unknown) => {
+    if (handle === pollingHandle) {
+      callback = null;
+      clearCount += 1;
+      return;
+    }
+    return realClearInterval(handle as Parameters<typeof clearInterval>[0]);
+  }) as unknown as typeof window.clearInterval);
+
+  return {
+    triggerTick: () => callback?.(),
+    hasActiveInterval: () => callback !== null,
+    registrationCount: () => registrationCount,
+    clearCount: () => clearCount,
+  };
+}
+
+function stubFetchJsonOnce(body: unknown, status = 200) {
+  return vi.fn().mockResolvedValue(
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    }),
+  );
+}
+
+describe("プレビュー状態ポーリング(T15)", () => {
+  it("pendingの資料が無いときはポーリングしない", async () => {
+    const { registrationCount } = spyOnPollingInterval();
+
+    renderApp({ documents: [cardFrom({ previewStatus: "ready" })] });
+
+    await screen.findByText("生成済み");
+    expect(registrationCount()).toBe(0);
+  });
+
+  it("pendingの資料はポーリングし、readyに変わったら画像・ラベルが切り替わり止まる", async () => {
+    const { registrationCount, clearCount, triggerTick } =
+      spyOnPollingInterval();
+    const fetchMock = stubFetchJsonOnce({ previewStatus: "ready" });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp({
+      documents: [cardFrom({ id: "doc-1", previewStatus: "pending" })],
+    });
+
+    await screen.findByText("生成中");
+    expect(
+      (await screen.findByRole("img")).getAttribute("src"),
+    ).toBe("/preview-processing.svg");
+    expect(registrationCount()).toBe(1);
+
+    await act(async () => {
+      triggerTick();
+    });
+
+    await screen.findByText("生成済み");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/documents/doc-1/preview-status",
+      expect.anything(),
+    );
+    expect(screen.getByRole("img").getAttribute("src")).toBe(
+      "/preview-fallback.svg",
+    );
+    // pending以外になったのでこのカードのポーリングを止める(intervalをclear)。
+    await vi.waitFor(() => expect(clearCount()).toBe(1));
+
+    const callsAfterUpdate = fetchMock.mock.calls.length;
+    await act(async () => {
+      triggerTick();
+    });
+    // effectがcleanup済みのため、以降のtickが来ても追加のfetchは発生しない。
+    expect(fetchMock.mock.calls.length).toBe(callsAfterUpdate);
+  });
+
+  it("pendingの資料がfailedへ変わった場合も画像・ラベルが切り替わり止まる", async () => {
+    const { clearCount, triggerTick } = spyOnPollingInterval();
+    const fetchMock = stubFetchJsonOnce({ previewStatus: "failed" });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp({
+      documents: [cardFrom({ id: "doc-2", previewStatus: "pending" })],
+    });
+
+    await screen.findByText("生成中");
+
+    await act(async () => {
+      triggerTick();
+    });
+
+    await screen.findByText("生成失敗");
+    expect(screen.getByRole("img").getAttribute("src")).toBe(
+      "/preview-fallback.svg",
+    );
+    await vi.waitFor(() => expect(clearCount()).toBe(1));
+  });
+
+  it("アンマウント時にポーリングのintervalを後片付けする", async () => {
+    const { registrationCount, clearCount } = spyOnPollingInterval();
+    vi.stubGlobal("fetch", stubFetchJsonOnce({ previewStatus: "ready" }));
+
+    const { unmount } = renderApp({
+      documents: [cardFrom({ id: "doc-3", previewStatus: "pending" })],
+    });
+
+    await screen.findByText("生成中");
+    expect(registrationCount()).toBe(1);
+
+    unmount();
+
+    expect(clearCount()).toBe(1);
   });
 });

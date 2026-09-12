@@ -65,7 +65,7 @@ export function formatPreviewStatus(status: PreviewStatus | null): string {
   return status === null ? "不明" : previewStatusLabels[status];
 }
 
-/** 共通の処理中画像(設計 §5.3)。実際のプレビュー画像取得はT15の範囲。 */
+/** 共通の処理中画像(設計 §5.3)。 */
 export const PREVIEW_PROCESSING_IMAGE_SRC = "/preview-processing.svg";
 /** 共通の代替画像(生成失敗時。設計 §5.2, §5.3)。 */
 export const PREVIEW_FALLBACK_IMAGE_SRC = "/preview-fallback.svg";
@@ -73,9 +73,11 @@ export const PREVIEW_FALLBACK_IMAGE_SRC = "/preview-fallback.svg";
 /**
  * カードに表示するプレビュー画像。
  *
- * 実画像の取得(`ready`状態でHTMLから生成した画像を表示する処理)はT15
- * (プレビュー状態resource route)・T18(生成ワーカー)の範囲のため、ここでは
- * 「生成中」と「それ以外(生成済み・失敗・不明)」の2状態の切り替えだけを行う。
+ * `ready`状態でHTMLから生成した実プレビュー画像(Blobの
+ * `preview/{id}/preview.jpg`)を配信する経路は設計§13のルート一覧に存在せず、
+ * T15時点では範囲外(未確定。QUESTIONS.md参照、T18で判断)。そのため
+ * ここでは「生成中(`pending`)」と「それ以外(生成済み・失敗・不明)」の
+ * 2状態の切り替えだけを行い、`ready`も暫定的に共通の代替画像へ寄せる。
  */
 export function previewImageSrc(status: PreviewStatus | null): string {
   return status === "pending"

@@ -5,6 +5,11 @@
  * (`listDocumentsByOwner`が`owner_subject_id`で必ず絞り込むため、他人の資料は
  * 混ざらない)。アップロードは`POST /documents`(T09)へブラウザから直接送り、
  * 成功後は資料表示画面(`documentUrl`、T13で実装予定)への導線を表示する。
+ *
+ * プレビュー状態が`pending`のカードは、`/documents/:documentId/preview-status`
+ * (T15)を一定間隔でポーリングして最新状態へ更新する(設計 §5.3「生成中は
+ * 共通の処理中画像…生成失敗時は共通の代替画像」)。`pending`のカードが
+ * 画面に無いときはポーリングしない。
  */
 import { useEffect, useRef, useState } from "react";
 import { Form, useFetcher, useRevalidator } from "react-router";
@@ -89,6 +94,22 @@ export async function loader({ request }: Route.LoaderArgs): Promise<AppLoaderDa
 
 export const meta: Route.MetaFunction = () => [{ title: "資料みて！" }];
 
+/**
+ * プレビュー状態ポーリングの間隔(ms、設計 §5.3)。設計書に具体値の指定は無いため、
+ * サーバーへの負荷と反映の速さの折り合いとして5秒に決め打ちする(仮定。判断は
+ * 司令塔・QUESTIONS.mdへ委ねる)。
+ */
+const PREVIEW_POLL_INTERVAL_MS = 5_000;
+
+/**
+ * 資料1件あたりのポーリング最大試行回数。プレビュー生成が長時間終わらない
+ * (または失敗の更新が届かない)場合でも無限にポーリングし続けないための
+ * 安全側の上限(仮定)。5秒間隔で24回、すなわち約2分間試行して`pending`の
+ * ままなら、その資料のポーリングだけを諦める(カード表示は処理中のまま。
+ * 一覧の再取得(アップロードや「次を表示」)で状態を取り直す機会は残る)。
+ */
+const PREVIEW_POLL_MAX_ATTEMPTS = 24;
+
 type UploadUiState =
   | { status: "idle" }
   | { status: "uploading" }
@@ -128,6 +149,95 @@ export default function Application({ loaderData }: Route.ComponentProps) {
     // 取得のたびに1回だけ追記される。
     // eslint系のexhaustive-depsは未使用のためコメントで意図を残す。
   }, [loadMoreFetcher.data, loadMoreFetcher.state]);
+
+  // ポーリング中に`documents`の最新値を参照するためのref。効果本体は
+  // 「pendingのカードが存在するか」だけに依存させ(下記依存配列)、ポーリング
+  // 自体が呼ぶ`setDocuments`のたびにtimerを作り直さないようにする。
+  const documentsRef = useRef(documents);
+  useEffect(() => {
+    documentsRef.current = documents;
+  }, [documents]);
+
+  // 資料ごとの試行回数(`PREVIEW_POLL_MAX_ATTEMPTS`)を跨いで覚えておくためのref。
+  const pollAttemptsRef = useRef(new Map<string, number>());
+
+  const hasPendingPreview = documents.some(
+    (document) => document.previewStatus === "pending",
+  );
+
+  useEffect(() => {
+    // 画面に`pending`の資料が無いときはポーリングしない(設計 §5.3、無駄な
+    // サーバー要求を避ける)。
+    if (!hasPendingPreview) {
+      return;
+    }
+
+    let disposed = false;
+    const controller = new AbortController();
+
+    async function pollPendingDocuments(): Promise<void> {
+      const pendingIds = documentsRef.current
+        .filter((document) => document.previewStatus === "pending")
+        .map((document) => document.id);
+
+      for (const documentId of pendingIds) {
+        if (disposed) {
+          return;
+        }
+
+        const attempts = (pollAttemptsRef.current.get(documentId) ?? 0) + 1;
+        pollAttemptsRef.current.set(documentId, attempts);
+        if (attempts > PREVIEW_POLL_MAX_ATTEMPTS) {
+          // 上限へ達した資料はこれ以上要求しない(無限ポーリング防止)。
+          continue;
+        }
+
+        try {
+          const response = await fetch(
+            `/documents/${documentId}/preview-status`,
+            { signal: controller.signal },
+          );
+          if (!response.ok) {
+            // 404(削除された等)や一時的なサーバーエラーは次回の試行間隔まで
+            // 静かに待つ(業務エラーとして利用者へは通知しない)。
+            continue;
+          }
+          const body = (await response.json()) as {
+            previewStatus: PreviewStatus | null;
+          };
+          if (disposed) {
+            return;
+          }
+          if (body.previewStatus === "pending") {
+            continue;
+          }
+          // pending以外になったので、このカードのポーリングを止める
+          // (試行回数の記録も不要になったため削除する)。
+          pollAttemptsRef.current.delete(documentId);
+          setDocuments((prev) =>
+            prev.map((document) =>
+              document.id === documentId
+                ? { ...document, previewStatus: body.previewStatus }
+                : document,
+            ),
+          );
+        } catch {
+          // fetch自体の失敗(ネットワーク断・abort等)は次回の試行間隔まで
+          // 静かに待つ。
+        }
+      }
+    }
+
+    const timer = setInterval(() => {
+      void pollPendingDocuments();
+    }, PREVIEW_POLL_INTERVAL_MS);
+
+    return () => {
+      disposed = true;
+      controller.abort();
+      clearInterval(timer);
+    };
+  }, [hasPendingPreview]);
 
   function handleFiles(files: FileList | null): void {
     setSelectError(null);

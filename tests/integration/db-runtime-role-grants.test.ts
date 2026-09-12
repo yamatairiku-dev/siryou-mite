@@ -65,6 +65,9 @@ describe("when the runtime role does not exist", () => {
     expect(
       await grantedPrivileges(schemaWithoutRole, "audit_events"),
     ).toEqual([]);
+    expect(
+      await grantedPrivileges(schemaWithoutRole, "upload_attempts"),
+    ).toEqual([]);
   });
 });
 
@@ -81,6 +84,16 @@ describe("when the runtime role exists", () => {
     expect(await grantedPrivileges(schemaWithRole, "audit_events")).toEqual([
       "INSERT",
       "SELECT",
+    ]);
+  });
+
+  // T08: upload_attempts(設計 §6.1の頻度・同時実行判定)。解放はUPDATEで行い、
+  // 古い行のpurgeはMaintenance Job側の作業とするためDELETEは与えない。
+  it("grants only SELECT/INSERT/UPDATE on upload_attempts (no DELETE)", async () => {
+    expect(await grantedPrivileges(schemaWithRole, "upload_attempts")).toEqual([
+      "INSERT",
+      "SELECT",
+      "UPDATE",
     ]);
   });
 });

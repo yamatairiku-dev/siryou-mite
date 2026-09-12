@@ -167,6 +167,21 @@ migrationを`down`実行不可として扱うため、誤ってdown migrationを
   `audit_events (occurred_at DESC, id DESC)`)を追加し、前方一致で完全に代替される
   既存indexを削除する migration を追加しています(forward-only。既存migrationファイルは
   書き換えません)。
+- `upload_attempts`: アップロード試行の記録(設計 §6.1の頻度・同時実行・容量制限)。
+  「1分あたりの回数」と「進行中のアップロード」は既存テーブルに残りません(検証で
+  拒否したアップロードは資料レコードを作らないため。設計 §11.1)。Redisなどを追加
+  しない方針(設計 §6.1)のため、PostgreSQLの1テーブルで表します。進行中は
+  `finished_at IS NULL AND expires_at > now()`で表し、明示的な解放が行われないまま
+  処理が異常終了しても`expires_at`で自動的に失効します。上限判定と資料登録は別
+  トランザクションで行われる(設計 §10.1)ため、`byte_size`(予約byte数)も保持し、
+  件数・容量の判定では`documents`の集計に進行中の予約分を加算します(加算しないと
+  並行アップロードが同じ集計値を見て全て許可され、システム全体50GB・利用者500MBを
+  超過できます)。保存するのは`owner_subject_id`(Entraのoid)・時刻・byte数だけで、
+  ファイル名・HTML本文は持ちません。runtime roleへはSELECT/INSERT/UPDATEだけを与え、
+  古い行のpurgeはMaintenance Job側の運用作業とします(設計 §7.7)。集計は
+  `documents (owner_subject_id) INCLUDE (byte_size) WHERE status = 'active'`と
+  `upload_attempts (expires_at) INCLUDE (byte_size) WHERE finished_at IS NULL`の
+  部分indexで、システムロック保持中の集計を短く保ちます。
 
 結合テスト(`tests/integration/`、`npm run test:integration`)は、専用schemaへ
 migrationを適用してテーブル・カラム・型・制約・index・追記専用triggerを検証します。
@@ -208,6 +223,30 @@ loader/action、service、repositoryを分離し、SQLはrepositoryの`*.server.
   repository側で固定の分類(Zod enum)に閉じ、エラーメッセージや外部サービス応答が
   そのまま保存されないようにします。`occurred_at`はDBの`now()`だけを使い、
   呼び出し側から指定できません(発生日時の偽装と保持期間の引き延ばしを防ぐため)。
+- `app/lib/db/upload-limits.server.ts`: アップロード上限(件数・容量・頻度・同時実行)の
+  判定です(設計 §6.1, §10.1(3))。1つのトランザクションの中で、利用者単位の
+  `pg_advisory_xact_lock`→集計→システム全体の`pg_advisory_xact_lock`(upload判定の
+  直列化)→集計→`upload_attempts`への登録、の順に実行します。advisory lockは
+  transaction有効期間のため、commit・rollback・接続断のいずれでも必ず解放されます。
+  ロックキーは、用途ごとの固定文字列(`siryou-mite/upload-limits/owner`、
+  `.../system`)のSHA-256先頭4byteをnamespace(第1キー)とし、利用者側の第2キーは
+  `owner_subject_id`のSHA-256先頭4byteとします(advisory lockはDB cluster全体で
+  共有されるため名前空間を分け、`pg_locks`から利用者識別子が読めないようにします)。
+  ロックの取得順は「利用者→システム」に固定してデッドロックを避け、待ち時間は
+  `SET LOCAL lock_timeout`(既定5秒、`poolSettings.statementTimeoutMillis`以下)で
+  打ち切り、取得できない場合は待ち続けずに拒否(`lock_wait_timeout`)を返します。
+  件数・容量の集計には、まだ`documents`へ登録されていない進行中の試行の予約分
+  (`upload_attempts.byte_size`と進行中件数)を必ず加算します。資料登録commitの後・
+  解放の前は同じbyte数が両方に現れますが、常に安全側(多め)へ倒れます。呼び出し側
+  (T09)は判定時にbyte数を渡し、資料登録をcommitした**後**に
+  `releaseUploadSlot({ attemptId, ownerSubjectId })`で解放します(解放は所有者で
+  絞り込み、他人の試行を解放できないようにしています)。判定本体
+  (`reserveUploadSlotWithin`)の引数は`runInTransaction`と同じ理由で`PoolClient`に
+  限定し、`getPool()`を渡してadvisory lockが文ごとに解放される誤用を型で防ぎます。
+  判定結果は拒否理由を区別でき、監査の`error_category`(`quota_exceeded`/
+  `rate_limited`)への対応も同じmoduleで持ちます。上限値はすべて
+  `app/lib/env.server.ts`(設計 §6.1「制限値は環境設定で変更可能」)から読み、
+  呼び出し側から上書きできます。
 
 ## ディレクトリ構成とTypeScript build(Web / Display / Preview / Maintenance)
 

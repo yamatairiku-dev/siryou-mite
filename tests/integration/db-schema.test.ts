@@ -292,3 +292,98 @@ describe("audit_events table", () => {
     ).rejects.toThrow(/append-only/);
   });
 });
+
+describe("upload_attempts table (T08: 設計 §6.1の頻度・同時実行判定)", () => {
+  it("has the columns and types for rate/concurrency judgement", async () => {
+    const columns = await columnsOf("upload_attempts");
+
+    expect(findColumn(columns, "id")).toMatchObject({
+      data_type: "uuid",
+      is_nullable: "NO",
+    });
+    expect(findColumn(columns, "owner_subject_id")).toMatchObject({
+      data_type: "text",
+      is_nullable: "NO",
+    });
+    expect(findColumn(columns, "started_at")).toMatchObject({
+      data_type: "timestamp with time zone",
+      is_nullable: "NO",
+    });
+    expect(findColumn(columns, "expires_at")).toMatchObject({
+      data_type: "timestamp with time zone",
+      is_nullable: "NO",
+    });
+    // 明示的な解放時刻。未解放(NULL)かつ未失効の行だけを「進行中」として数える。
+    expect(findColumn(columns, "finished_at")).toMatchObject({
+      data_type: "timestamp with time zone",
+      is_nullable: "YES",
+    });
+    // 予約byte数。旧versionのアプリがINSERTしても失敗しないよう既定値0を持つ。
+    expect(findColumn(columns, "byte_size")).toMatchObject({
+      data_type: "bigint",
+      is_nullable: "NO",
+    });
+    expect(findColumn(columns, "byte_size").column_default).toContain("0");
+
+    // HTML本文・ファイル名など設計 §12.2の非記録項目を持たない。
+    expect(columns.map((column) => column.column_name).sort()).toEqual([
+      "byte_size",
+      "expires_at",
+      "finished_at",
+      "id",
+      "owner_subject_id",
+      "started_at",
+    ]);
+  });
+
+  it("has indexes for the rate window and in-progress lookups", async () => {
+    const indexes = await indexNamesOf("upload_attempts");
+    expect(indexes).toEqual(
+      expect.arrayContaining([
+        "upload_attempts_pkey",
+        "upload_attempts_owner_started_at_idx",
+        "upload_attempts_owner_in_progress_idx",
+        "upload_attempts_in_progress_byte_size_idx",
+      ]),
+    );
+  });
+
+  it("has a partial index for active document usage aggregation", async () => {
+    expect(await indexNamesOf("documents")).toEqual(
+      expect.arrayContaining(["documents_active_owner_byte_size_idx"]),
+    );
+  });
+
+  it("rejects an expires_at that is not after started_at", async () => {
+    await expect(
+      client.query(
+        `INSERT INTO upload_attempts (owner_subject_id, started_at, expires_at)
+         VALUES ('owner-1', now(), now() - interval '1 second')`,
+      ),
+    ).rejects.toThrow(/upload_attempts_expires_at_check/);
+  });
+
+  it("rejects a negative byte_size", async () => {
+    await expect(
+      client.query(
+        `INSERT INTO upload_attempts (owner_subject_id, expires_at, byte_size)
+         VALUES ('owner-1', now() + interval '1 minute', -1)`,
+      ),
+    ).rejects.toThrow(/upload_attempts_byte_size_check/);
+  });
+
+  it("defaults to an in-progress attempt with generated id", async () => {
+    const result = await client.query(
+      `INSERT INTO upload_attempts (owner_subject_id, expires_at)
+       VALUES ('owner-defaults', now() + interval '2 minutes')
+       RETURNING id, started_at, finished_at, byte_size`,
+    );
+    const row = result.rows[0];
+    expect(row.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    expect(row.started_at).toBeInstanceOf(Date);
+    expect(row.finished_at).toBeNull();
+    expect(row.byte_size).toBe("0");
+  });
+});

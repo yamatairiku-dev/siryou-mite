@@ -65,7 +65,8 @@
 - 内容: `parse5` で解析し、拡張子・サイズ・UTF-8・空ファイル、`meta refresh`、`base href`、ページ内以外の相対リンク、禁止scheme、外部resourceを判定する。拒否理由と警告コードを返す純粋関数として実装する(HTMLは書き換えない)
 - 完了条件: §18.1のHTML・URL関連の単体テストを網羅
 
-### T08 [ ] 件数・容量・頻度・同時実行の制限 🔒
+### T08 [x] 件数・容量・頻度・同時実行の制限 🔒
+- 実装メモ: `app/lib/db/upload-limits.server.ts` に実装。1 transaction内で利用者→システムの順に `pg_advisory_xact_lock` を取り(システムは固定キーで直列化)、件数・容量・頻度・同時実行を判定する。進行中の予約は `upload_attempts` テーブル(lease方式)で表し、その予約byte数・件数を集計に加算して並行時の上限超過を防ぐ(Q-010〜Q-012)
 - 設計: §6.1, §10.1(3)
 - 依存: T04
 - 内容: PostgreSQLのtransactionとadvisory lockで判定する。Redisなどは追加しない
@@ -138,7 +139,7 @@
 ### T19 [ ] 定期保守Job
 - 設計: §7.7, §16
 - 依存: T14
-- 内容: `blob_cleanup_pending` の冪等な再試行、削除済み資料と監査の1年経過後のpurge(Blob削除未完了はpurgeしない)
+- 内容: `blob_cleanup_pending` の冪等な再試行、削除済み資料と監査の1年経過後のpurge(Blob削除未完了はpurgeしない)。あわせてT08で追加した `upload_attempts` の古い行(`finished_at` または `expires_at` が十分過去)をpurgeする(Q-011。runtime roleへのDELETE権限のGRANTもこのタスクのmigrationで追加する)
 - 完了条件: 結合テスト
 
 ## Phase 4: 仕上げ

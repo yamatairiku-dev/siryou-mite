@@ -68,3 +68,21 @@
 - 置いた仮定: 検査は多層防御の1層目と位置づけ、表示サービスのCSPとsandbox(T12)で遮断する前提にした。`iframe srcdoc`の中身も文書として検査するが、段数(5)、文書数(1000)、合計文字数(元HTMLの3倍)の上限を超えた分は検査せず、CSPに委ねる
 - 影響範囲: `app/lib/html/inspection.server.ts`、T12(表示サービスのCSP)。T12でCSPが設計どおり効いていることを必ず確認する
 - 回答:
+
+### Q-010 [未回答] T08: 頻度窓・lease・lock待ちtimeoutを環境変数にしていない
+- 状況: 設計§6.1は「制限値は環境設定で変更可能とする」と定めるが、T08で必要になった3つの値(頻度判定の窓、同時実行予約のlease、advisory lock待ちのtimeout)は§6.1の制限値一覧に無く、T02で追加した環境変数にも対応するものが無い
+- 置いた仮定: `app/lib/db/upload-limits.server.ts` の既定値(頻度窓60秒、lease 120秒、lock待ち5秒)とし、引数で上書きできる形にした。環境変数は追加していない。lock待ちは `poolSettings.statementTimeoutMillis`(10秒)以下であることをZodで強制している
+- 影響範囲: `app/lib/db/upload-limits.server.ts`。env化する場合はT02のschema・`.env.example`・`docs/OPERATIONS.md`の更新が必要。lease値はT09のBlob保存〜DB登録の所要時間より十分長い必要がある(超えると予約が失効し、同時実行数×10MBの上限超過の窓が開く)
+- 回答:
+
+### Q-011 [未回答] T08: `upload_attempts` の定期purgeが設計§7.7のJobの責務に無い
+- 状況: T08で頻度・同時実行の判定用に `upload_attempts` テーブルを追加した(§6.1「判定はPostgreSQLを使いRedisなどは追加しない」)。設計§7.7の定期保守Jobの責務は `blob_cleanup_pending` の再試行と1年経過後のpurgeだけで、この新テーブルの古い行の削除先が無い
+- 置いた仮定: runtime roleにはSELECT/INSERT/UPDATEのみをGRANTし、DELETEは与えていない。purgeはT19(定期保守Job)の作業項目として `TASKS.md` のT19へ追記した(DELETE権限のGRANTもT19のmigrationで追加する想定)
+- 影響範囲: `migrations/1789208206678_add-upload-attempts-table.sql`、T19
+- 回答:
+
+### Q-012 [未回答] T08: 予約枠の解放タイミングがT09の実装に依存する
+- 状況: T08の上限判定は「進行中の予約(`upload_attempts`)のbyte数・件数を `documents` の集計に加算する」ことで並行アップロード時の超過を防いでいる。この安全性は、T09が資料レコードのINSERTをcommitした**後**に `releaseUploadSlot()` を呼ぶことに依存する。設計§10.1は解放のタイミングまで定めていない
+- 置いた仮定: `reserveUploadSlot()` / `reserveUploadSlotWithin()` のdocstringに契約として明記した。T09では `finally` での素朴な解放(成功時にcommit前へ回りやすい)を避け、「登録commit後に解放」を検証するテストを入れる。また `reserveUploadSlot` に渡すbyte数は、Content-Lengthのような自己申告値ではなくstreaming上限で強制した実byte数を使う
+- 影響範囲: `app/lib/db/upload-limits.server.ts`、T09。`releaseUploadSlot` は attemptId 不正時は `false` を返す一方 `ownerSubjectId` 不正時は例外を投げるため、T09の後始末から呼ぶ際は元の処理結果を覆わないよう注意が必要
+- 回答:

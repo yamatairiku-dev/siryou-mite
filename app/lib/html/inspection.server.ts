@@ -430,8 +430,11 @@ class HtmlDocumentInspector {
         }
       }
 
-      for (const child of childrenOf(node)) {
-        stack.push(child);
+      // stackはLIFOのため、文書順で処理されるよう子は逆順に積む
+      // (例: `<title>A</title><title>B</title>`ではAを先に見つける必要がある)。
+      const children = childrenOf(node);
+      for (let i = children.length - 1; i >= 0; i -= 1) {
+        stack.push(children[i] as Node);
       }
     }
   }

@@ -58,7 +58,8 @@
 
 ## Phase 1: 業務コア
 
-### T07 [ ] HTML受け入れ検査 🔒
+### T07 [x] HTML受け入れ検査 🔒
+- 実装メモ: `app/lib/html/{inspection-codes.ts,inspection.server.ts}` にHTMLを書き換えない純粋関数として実装。拡張子・サイズ・UTF-8・空ファイル・`meta refresh`・`base href`・相対リンク・禁止scheme・外部resourceを判定し、文字参照やprotocol-relativeなどの回避策もfail closedで拒否。入れ子/要素数の上限で解析を打ち切る(Q-007〜Q-009)
 - 設計: §6.1, §6.2, §6.3, §10.1(5), §18.1
 - 依存: T01
 - 内容: `parse5` で解析し、拡張子・サイズ・UTF-8・空ファイル、`meta refresh`、`base href`、ページ内以外の相対リンク、禁止scheme、外部resourceを判定する。拒否理由と警告コードを返す純粋関数として実装する(HTMLは書き換えない)

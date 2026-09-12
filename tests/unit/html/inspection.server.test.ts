@@ -174,6 +174,14 @@ describe("基本条件の検証(設計 §6.1)", () => {
     expect(inspect("<p>本文だけ</p>").title).toBeNull();
     expect(inspect("<title>   </title>").title).toBeNull();
   });
+
+  it("`title`が複数あるときは文書順で最初のものを採る", () => {
+    const result = inspect(
+      "<html><head><title>A</title><title>B</title></head><body></body></html>",
+    );
+
+    expect(result.title).toBe("A");
+  });
 });
 
 describe("URLのscheme正規化と許可・拒否(設計 §6.3)", () => {

@@ -261,3 +261,28 @@ tsconfig.services.json    services/専用のTypeScript設定。build/services/�
     APIバージョンとこの定数を合わせて見直す。
 - `npm run verify`は`typecheck`（Web）→`typecheck:services`→`test:coverage`→`build`
   （Web）→`build:services`の順に実行し、Web側の既存手順を壊さない。
+
+## HTML受け入れ検査(`app/lib/html/`)
+
+アップロードされたHTMLの受け入れ可否は、I/Oを持たない純粋関数として
+`app/lib/html/inspection.server.ts`の`inspectHtmlUpload()`に集約します(設計 §6, §10.1(5))。
+HTMLは**書き換えず**、拒否理由コードと警告コードだけを返します。
+
+- 上限値(サイズ、ファイル名・`title`の長さ、解析上限)は引数で受け取り、モジュール内で
+  環境変数を読みません。呼び出し側(T09のアップロードaction)が`app/lib/env.server.ts`の
+  `MAX_HTML_UPLOAD_BYTES`などを渡します。
+- 結果コードは`app/lib/html/inspection-codes.ts`に置き、`parse5`へ依存させません
+  (画面側の警告表示から読み込めるようにするため)。コードは監査・テスト・UIで
+  共通に使う安定した識別子とし、利用者向けの日本語メッセージと分離します。
+  値は`documents.warning_codes`(1要素100文字以内)へそのまま保存できる長さに保ちます。
+- URLの判定は標準の`URL`パーサーで行い、値はHTML/URL標準と同じ前処理(前後のC0制御文字・
+  空白の除去、tab・改行の除去)だけを適用します。属性値の文字参照は`parse5`が復号済みの
+  ため、二重に復号しません。
+- `parse5`は`scriptingEnabled: false`で解析します。表示時はsandboxでJavaScriptを
+  無効化するため、`noscript`の中身もmarkupとして解釈されるためです。
+- 解析量の上限(入れ子の深さ、要素数、`iframe srcdoc`の段数と合計文字数)を持ちます。
+  `parse5`の終了タグ処理はopen element stackを走査するため、上限が無いと数MBの
+  `<div>`の羅列だけで検査が終わりません。上限超過は`excessive_complexity`として
+  拒否します(設計に無い分類。`docs/agent/QUESTIONS.md`のQ-007を参照)。
+- 検査は多層防御の1層目です。inline CSSのescapeなど属性検査をすり抜けた外部resourceは、
+  表示サービスのCSPとsandboxで遮断します(設計 §6.2)。

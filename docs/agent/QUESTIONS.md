@@ -50,3 +50,21 @@
 - 置いた仮定: T05 の完了条件(timeoutを設定している)の検証としてはこのままとし、アサーションは `name` が `AbortError`/`TimeoutError` であることまで確認する形へ強化済み。値の見直しはしていない
 - 影響範囲: `tests/integration/blob-queue.test.ts`。CIで flaky になる場合は、実時間に依存しない検証(渡された `abortSignal` を確認する単体テスト側)へ寄せる判断が必要
 - 回答:
+
+### Q-007 [未回答] T07: 設計に無い拒否理由コードを2つ足した
+- 状況: 設計§6・§10.2の拒否理由は「形式不正、`meta refresh`、`base href`、ページ内以外の相対リンク、禁止scheme、外部resource」だが、`parse5`の解析は入れ子の深さに対して計算量が二次的に増える(終了タグごとにopen element stackを走査する)。上限を設けないと、10MB以内でも`<div>`を並べただけのHTMLで検査が終わらず、treeのメモリも増え続ける
+- 置いた仮定: `app/lib/html/inspection-codes.ts`に`excessive_complexity`(入れ子512段・要素50万を超えたら解析を打ち切って拒否)を追加した。合わせて、設計§6.1の「ファイル名は表示用文字列として長さを制限する」から`invalid_file_name`(制御文字・パス区切り)と`file_name_too_long`も拒否理由として起こした。上限値はすべて`inspectHtmlUpload()`の引数(既定値あり)で、環境変数は追加していない
+- 影響範囲: `app/lib/html/inspection-codes.ts`、`app/lib/html/inspection.server.ts`。分類名を変えるとT09のエラー表示・監査呼び出しも変わる
+- 回答:
+
+### Q-008 [未回答] T07: 外部resource判定でfail closedにした箇所
+- 状況: 設計§6.2は「HTML属性で検出できる外部画像、stylesheet、font、media、`iframe`などの外部resource参照は拒否する」とだけ定め、個々の属性の扱いまでは定めていない
+- 置いた仮定: 自己完結HTMLが前提(設計§6.2)であることから、resource系URLは`data:`・同一文書内(`#id`)・値なし・`about:blank`だけを許可し、それ以外(`http(s):`、protocol-relative、相対、その他scheme)はすべて`external_resource`として拒否した。`<link href>`はrelの種類を問わず対象にしているため、`rel="canonical"`のような読み込みを伴わない参照も拒否される。`<form action>`と`formaction`はリンク規則(相対と禁止schemeを拒否)で判定した
+- 影響範囲: `app/lib/html/inspection.server.ts`。利用者の実ファイルで誤検知が出た場合は、relによる絞り込みなどの緩和を検討する
+- 回答:
+
+### Q-009 [未回答] T07: 検査しきれない箇所はCSP・sandbox前提で割り切った
+- 状況: 設計§6.2は「inline CSS内など検査をすり抜けた外部resourceはCSPで遮断する」としている。属性・`style`要素のCSSは`url()`と`@import`のテキスト抽出で見るが、CSSのescape(`\68 ttps:`)の復号、`<object><param value>`、JavaScriptが組み立てるURLまでは判定していない(CSSのescapeは復号しない結果として相対参照扱いになり、拒否側へ倒れる)
+- 置いた仮定: 検査は多層防御の1層目と位置づけ、表示サービスのCSPとsandbox(T12)で遮断する前提にした。`iframe srcdoc`の中身も文書として検査するが、段数(5)、文書数(1000)、合計文字数(元HTMLの3倍)の上限を超えた分は検査せず、CSPに委ねる
+- 影響範囲: `app/lib/html/inspection.server.ts`、T12(表示サービスのCSP)。T12でCSPが設計どおり効いていることを必ず確認する
+- 回答:

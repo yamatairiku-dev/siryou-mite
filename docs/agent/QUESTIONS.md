@@ -86,3 +86,33 @@
 - 置いた仮定: `reserveUploadSlot()` / `reserveUploadSlotWithin()` のdocstringに契約として明記した。T09では `finally` での素朴な解放(成功時にcommit前へ回りやすい)を避け、「登録commit後に解放」を検証するテストを入れる。また `reserveUploadSlot` に渡すbyte数は、Content-Lengthのような自己申告値ではなくstreaming上限で強制した実byte数を使う
 - 影響範囲: `app/lib/db/upload-limits.server.ts`、T09。`releaseUploadSlot` は attemptId 不正時は `false` を返す一方 `ownerSubjectId` 不正時は例外を投げるため、T09の後始末から呼ぶ際は元の処理結果を覆わないよう注意が必要
 - 回答:
+
+### Q-013 [未回答] T09: 上限判定(設計§10.1(3))とbody読み込み(同(4))の実行順
+- 状況: 設計§10.1は「3. 上限判定 → 4. raw bodyと`X-File-Name`の検証」の順だが、上限判定に渡すbyte数はContent-Lengthのような自己申告値ではなく実byte数でなければならない(Q-012)。実byte数はbodyを読み切るまで分からない
+- 置いた仮定: bodyをstreaming上限(10MB)付きで読み切った直後に上限判定を行い、以降(HTML受け入れ検査、Blob保存、DB登録)は設計どおりの順にした。10MB超過・Content-Type不正・`X-File-Name`不正はDBへ触れる前に拒否されるため、上限判定より前に読むのは「上限10MBのbodyをメモリへ読む」ところまで
+- 影響範囲: `app/lib/upload/upload.server.ts`。Content-Lengthによる事前拒否(設計§7.1)は残しているが、これだけでは信用していない
+- 回答:
+
+### Q-014 [未回答] T09: 未認証のアップロード拒否を監査へ残していない
+- 状況: 設計§15.1は「成功、拒否、失敗を記録」とするが、`audit_events.actor_subject_id`はNOT NULL(設計§12.2)で、未認証の要求には記録できる利用者識別子が無い。`requireUser`は認証前にredirect/403をthrowする
+- 置いた仮定: 未認証(および`requireUser`が弾くApp Role・所属なし)の拒否は監査へ残さず、`requireUser`の既定動作(ログイン画面へのredirect / 403)のままにした。認証後の拒否(cross-origin、入力検証、HTML検査、上限超過)と失敗はすべて監査している
+- 影響範囲: `app/lib/upload/upload.server.ts`。認証失敗自体を監査したい場合は、`audit_events`のNOT NULL制約か「未認証利用者」を表す値の決めが必要(migrationを伴う)
+- 回答:
+
+### Q-015 [未回答] T09: 応答形式(JSON)とHTTPステータスが設計に無い
+- 状況: 設計§10.1(10)は「資料表示画面へ案内する」、§14は「短い日本語メッセージと相関IDを表示する」とだけ定め、`POST /documents`の応答形式・ステータスは定めていない。アップロードは`application/octet-stream`のraw bodyで送るためHTML formからは送れず、画面側のJavaScriptが`fetch`で送る前提になる
+- 置いた仮定: 成功は`201`でJSON(`documentId`、`documentUrl`=`/documents/{id}`、`previewStatus`、警告コードとメッセージ、`correlationId`)を返し、`Location`ヘッダーにも資料表示画面のpathを入れた。拒否は`400`(入力・HTML検査)、`403`(cross-origin)、`413`(サイズ超過)、`415`(Content-Type不正)、`409`(件数・容量上限)、`429`(頻度・同時実行。`Retry-After`付き)、失敗は`500`/`503`で、いずれもJSON(`message`、`correlationId`、拒否理由コード)を返す。画面遷移はT10のUIが`documentUrl`で行う
+- 影響範囲: `app/lib/upload/upload.server.ts`、T10(初期画面のアップロードUI)
+- 回答:
+
+### Q-016 [未回答] T09: 監査・`documents`へ保存するメールアドレスの扱い
+- 状況: 設計§12.1・§12.2はアップロード時・操作時点のメールアドレスを保存すると定めるが、Easy Authの`email`/`preferred_username` claimはメールアドレス形式とは限らない(UPNなど)。repository側のZodは`z.email()`で検証するため、形式が違うと保存に失敗し、アップロード全体が失敗する
+- 置いた仮定: メールアドレス形式として解釈できない場合は`null`として保存し、アップロード自体は成功させた(認可・owner判定には`oid`だけを使うため業務影響は無い)
+- 影響範囲: `app/lib/upload/upload.server.ts`。厳密に保存を要求する場合はclaim側の運用(mail claimの発行)を決める必要がある
+- 回答:
+
+### Q-017 [未回答] T09: `documents` repositoryへプレビュー状態の更新関数を追加した
+- 状況: 設計§10.1(9)はQueue送信失敗時にプレビュー状態を`failed`へ変更すると定めるが、T04時点の`app/lib/db/documents.server.ts`にはプレビュー状態だけを更新する関数が無かった
+- 置いた仮定: 既存関数の契約は変えず、`updateDocumentPreviewStatus({ documentId, previewStatus }, executor)`を追加した(`status`は変更せず、`active`かつ`preview_status`がNULLでない資料だけを更新する)。T15(プレビュー状態resource route)・T18(プレビュー生成ワーカー)も同じ関数を使える
+- 影響範囲: `app/lib/db/documents.server.ts`、`tests/unit/db/documents.server.test.ts`
+- 回答:

@@ -377,6 +377,38 @@ export async function deleteDocumentAsAdmin(
   return markDeleted(executor, params.documentId, adminSubjectId, null);
 }
 
+/**
+ * プレビュー状態だけを更新する(設計 §10.1(9), §11.1)。
+ *
+ * プレビュー状態は資料状態と分けて持つため、この更新は`status`を変えない。
+ * 削除済み資料(`preview_status`はNULLへ消去済み)は対象外とし、更新できた場合だけ
+ * `true`を返す。
+ *
+ * `executor`に既定値を持たせない。プレビュー状態の変更は失敗・成功の監査
+ * (`insertAuditEvent`)と同じトランザクションで保存する必要があり(設計 §15.1)、
+ * 既定値があると呼び出し側が`tx`を渡し忘れても`getPool()`で動いてしまうため、
+ * 渡し忘れを型エラーにする(`createDocument`・`deleteDocumentAsOwner`と同じ方針)。
+ */
+export async function updateDocumentPreviewStatus(
+  params: { documentId: string; previewStatus: PreviewStatus },
+  executor: Queryable,
+): Promise<boolean> {
+  if (!z.uuid().safeParse(params.documentId).success) {
+    return false;
+  }
+
+  const result = await executor.query<{ id: string }>(
+    `UPDATE documents
+        SET preview_status = $2
+      WHERE id = $1
+        AND status = 'active'
+        AND preview_status IS NOT NULL
+     RETURNING id`,
+    [params.documentId, params.previewStatus],
+  );
+  return result.rows.length > 0;
+}
+
 /** Blob削除が完了した資料の再試行フラグを下ろす(設計 §10.4(4)(5))。 */
 export async function markBlobCleanupCompleted(
   documentId: string,

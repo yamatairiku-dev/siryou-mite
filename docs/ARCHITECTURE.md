@@ -325,3 +325,41 @@ HTMLは**書き換えず**、拒否理由コードと警告コードだけを返
   拒否します(設計に無い分類。`docs/agent/QUESTIONS.md`のQ-007を参照)。
 - 検査は多層防御の1層目です。inline CSSのescapeなど属性検査をすり抜けた外部resourceは、
   表示サービスのCSPとsandboxで遮断します(設計 §6.2)。
+
+## アップロード(`app/routes/documents.ts`、`app/lib/upload/`)
+
+`POST /documents`(設計 §13)は画面を持たないresource routeで、処理本体は
+`app/lib/upload/upload.server.ts`の`handleDocumentUpload()`にあります。
+
+- route moduleはHTTP methodの判定だけを行い、`GET`と`POST`以外は`405`を返します。
+- 手順は設計 §10.1のとおり、認証(`requireUser`)→同一オリジン検証
+  (`assertSameOrigin`)→上限判定(`reserveUploadSlot`)→raw bodyと`X-File-Name`の検証→
+  HTML受け入れ検査(`inspectHtmlUpload`)→資料ID発行→Blob保存→DB登録(監査と同一
+  トランザクション)→Queue送信→資料表示画面への案内、の順に実行します。ただし
+  上限判定へ渡すbyte数は`Content-Length`ではなくstreaming上限で強制した実byte数で
+  なければならないため(`docs/agent/QUESTIONS.md` Q-012)、実装順としてはbodyを
+  上限付きで読み切った直後に上限判定を行います。10MBを超えるbodyはこの時点で
+  中断され、DBへは触れません。
+- `app/lib/upload/upload-request.server.ts`はheaderとraw bodyの検証だけを持ちます。
+  `X-File-Name`はcanonicalなbase64urlだけを受け付け、UTF-8として復号できない値は
+  拒否します。bodyは`ReadableStream`を読みながら累計byte数を数え、上限を超えた
+  時点でstreamをcancelします(全体を読み終えてから長さを見ません)。
+- 外部依存(上限判定、トランザクション、repository、Blob、Queue、資料IDの発行)は
+  `UploadDependencies`として差し替えられるようにしてあります。単体テストは
+  呼び出し順と補償処理を、結合テストは実PostgreSQL・Azuriteに対する同じ処理を
+  検証します(テスト専用schema・containerへ向けるためにこの差し替えを使います)。
+- 補償処理(設計 §10.2): DB登録に失敗した場合は保存済みの不完全なBlobを削除します
+  (DBは`withTransaction`がrollbackします)。監査保存に失敗した操作は成功させません
+  (設計 §15.1)。Queue送信に失敗した場合はプレビュー状態を`failed`へ更新し、資料は
+  閲覧可能なまま残します。予約枠(`upload_attempts`)は資料登録をcommitした**後**に
+  解放し、失敗時も必ず解放します。
+- 利用者向けの応答はJSON(`message`・`correlationId`、拒否時は拒否理由コード)で、
+  stack trace、Blobキー、DB情報、内部URL、外部サービス応答を含めません(設計 §14)。
+
+## 運用ログ(`app/lib/log.server.ts`)
+
+stdoutへ1行1eventのJSONを出力します(設計 §15.2)。記録してよい項目(時刻、処理名、
+成否、相関ID、エラー分類、資料ID、pseudonymize化した利用者識別子)だけを引数に取り、
+HTML本文・ファイル名・メールアドレス・token・Cookie・principal・request bodyは
+型として受け取れません。利用者の`oid`は`LOG_HMAC_KEY`でHMAC化してから出力します。
+ログ出力自体の失敗は業務処理を止めません。

@@ -11,6 +11,7 @@ import {
   InvalidCursorError,
   listDocumentsByOwner,
   markBlobCleanupCompleted,
+  updateDocumentPreviewStatus,
 } from "~/lib/db/documents.server";
 import { createStubExecutor, lastCall } from "./stub-executor";
 
@@ -354,6 +355,46 @@ describe("削除(active から deleted への状態遷移)", () => {
       deleteDocumentAsAdmin({ documentId, adminSubjectId: "admin-oid" }),
     ];
     expect(typeof shouldNotCompile).toBe("function");
+  });
+});
+
+describe("updateDocumentPreviewStatus(設計 §10.1(9))", () => {
+  it("`active`な資料のプレビュー状態だけを更新する", async () => {
+    const { executor, calls } = createStubExecutor([[{ id: documentId }]]);
+
+    expect(
+      await updateDocumentPreviewStatus(
+        { documentId, previewStatus: "failed" },
+        executor,
+      ),
+    ).toBe(true);
+    expect(lastCall(calls).text).toContain("SET preview_status = $2");
+    expect(lastCall(calls).text).toContain("status = 'active'");
+    expect(lastCall(calls).text).not.toContain("SET status");
+    expect(lastCall(calls).values).toEqual([documentId, "failed"]);
+  });
+
+  it("該当が無い場合はfalseを返す", async () => {
+    const { executor } = createStubExecutor([[]]);
+
+    expect(
+      await updateDocumentPreviewStatus(
+        { documentId, previewStatus: "ready" },
+        executor,
+      ),
+    ).toBe(false);
+  });
+
+  it("UUIDでない資料IDではSQLを実行しない", async () => {
+    const { executor, calls } = createStubExecutor([[{ id: documentId }]]);
+
+    expect(
+      await updateDocumentPreviewStatus(
+        { documentId: "not-a-uuid", previewStatus: "ready" },
+        executor,
+      ),
+    ).toBe(false);
+    expect(calls).toHaveLength(0);
   });
 });
 

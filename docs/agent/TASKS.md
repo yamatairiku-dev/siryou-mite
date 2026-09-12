@@ -72,7 +72,8 @@
 - 内容: PostgreSQLのtransactionとadvisory lockで判定する。Redisなどは追加しない
 - 完了条件: 結合テストで各上限と同時実行の競合を確認
 
-### T09 [ ] アップロード `POST /documents` 🔒
+### T09 [x] アップロード `POST /documents` 🔒
+- 実装メモ: `app/routes/documents.ts`(POST以外は405)と `app/lib/upload/{upload,upload-request}.server.ts` に実装。§10.1の手順順に認証→同一オリジン→上限判定→streaming 10MB上限の検証→HTML検査→Blob保存→DB登録(監査と同一transaction)→Queue送信を行い、失敗時はBlob削除・予約枠解放・失敗監査で補償する。運用ログは `app/lib/log.server.ts`(oidはHMAC化)(Q-013〜Q-017)
 - 設計: §7.1, §10.1, §10.2, §13
 - 依存: T05, T06, T07, T08
 - 内容: `application/octet-stream`、`X-File-Name`(base64url)、streaming中の10MB上限、UUID v4、Blob保存→DB登録→Queue送信、失敗時の補償処理、アップロード監査
@@ -139,7 +140,7 @@
 ### T19 [ ] 定期保守Job
 - 設計: §7.7, §16
 - 依存: T14
-- 内容: `blob_cleanup_pending` の冪等な再試行、削除済み資料と監査の1年経過後のpurge(Blob削除未完了はpurgeしない)。あわせてT08で追加した `upload_attempts` の古い行(`finished_at` または `expires_at` が十分過去)をpurgeする(Q-011。runtime roleへのDELETE権限のGRANTもこのタスクのmigrationで追加する)
+- 内容: `blob_cleanup_pending` の冪等な再試行、削除済み資料と監査の1年経過後のpurge(Blob削除未完了はpurgeしない)。あわせてT09でBlob削除の補償自体が失敗した場合の孤児Blob(DBに行が無く回収経路が無い)の掃除と、T08で追加した `upload_attempts` の古い行(`finished_at` または `expires_at` が十分過去)をpurgeする(Q-011。runtime roleへのDELETE権限のGRANTもこのタスクのmigrationで追加する)
 - 完了条件: 結合テスト
 
 ## Phase 4: 仕上げ

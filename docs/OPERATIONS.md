@@ -148,6 +148,39 @@ App Roleまたは所属グループの割り当てを変更した場合は、対
 チケットやログへ貼り付けず、claim typeとマスキングした値だけを共有します。緊急遮断は
 Entra IDの割り当て解除・アカウント制御とセッション失効手順を組み合わせます。
 
+## DBマイグレーション
+
+`migrations/`配下のSQL migrationを`node-pg-migrate`で適用します。forward-onlyとし、
+自動down migrationは行いません(破壊的変更は新しいmigrationファイルを追加する2段階
+変更にします、設計 §7.4)。
+
+- ローカル・devcontainer: `npm run db:migrate`(`.devcontainer/docker-compose.yml`が
+  設定する`DATABASE_URL`を使い、`postgres`serviceの`public`schemaへ適用する)
+- 新しいmigrationファイルの雛形作成: `npm run db:migrate:create -- <名前>`
+  (SQL形式で`migrations/`直下に作成される)
+- production: 専用Managed IdentityのMigration Jobがdeploy前に1回実行する
+  (runtime identityにはDDL権限を与えない、設計 §7.4)。Migration Job用の
+  `DATABASE_URL`はManaged IdentityのEntra ID access tokenをpasswordとして使う
+
+`documents`・`audit_events`のrole権限分離(設計 §7.4, §12.2):
+
+- runtime用DB role(`siryou_mite_runtime`という名前を仮定)には、`documents`へ
+  SELECT/INSERT/UPDATEだけ、`audit_events`へSELECT/INSERTだけを与える
+  (`restrict-runtime-role-privileges` migration)。DELETEはどちらにも与えない
+  (削除は`documents.status`の更新で表すsoft deleteのため)
+- このroleが存在しない環境(ローカル・CI)ではmigrationは何もせず成功する。
+  Managed Identityと対応付ける実際のrole作成・用途別分割はIaC(Bicep)側の
+  別タスクで行う
+- `audit_events`は追記専用で、`BEFORE UPDATE OR DELETE` triggerがDB role設定に
+  関わらずUPDATE・DELETEを拒否する。1年経過分のpurgeなど正当な運用作業は、
+  テーブル所有者相当の権限で該当triggerを一時的に無効化する手順が別途必要になる
+  (Maintenance Jobの具体的な手順は別タスクで設計する)
+
+結合テスト`npm run test:integration`(`tests/integration/`)は、ローカルPostgreSQLへ
+専用schemaを作ってmigrationを適用し、テーブル・制約・indexと追記専用の拒否動作を
+検証します。`npm run test`・`npm run verify`には含まれないため、CIへ組み込む場合は
+別途PostgreSQL service containerの起動が必要です。
+
 ## バックアップ
 
 - PostgreSQL point-in-time restoreとBlob soft deleteを7日間保持する

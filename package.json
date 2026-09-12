@@ -15,7 +15,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:e2e": "playwright test",
+    "db:migrate": "node-pg-migrate up",
+    "db:migrate:create": "node-pg-migrate create -j sql",
     "verify": "npm run typecheck && npm run typecheck:services && npm run test:coverage && npm run build && npm run build:services"
   },
   "dependencies": {

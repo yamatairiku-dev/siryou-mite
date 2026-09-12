@@ -115,6 +115,46 @@ Container Apps Jobとして実行します。production DB migrationはforward-o
 新旧applicationに互換とし、application rollback時にdown migrationは行いません。
 詳細は`docs/APPLICATION_DESIGN.md`で定義します。
 
+## DBマイグレーション(`migrations/`)
+
+`migrations/`配下に`node-pg-migrate`用のSQL形式migrationを置き、`npm run db:migrate`
+(`node-pg-migrate up`)で`public`schemaへ適用します。forward-onlyとし、
+`-- Down Migration`セクションは書きません(node-pg-migrateはセクションが無い
+migrationを`down`実行不可として扱うため、誤ってdown migrationを実行することを
+防げます)。破壊的変更が必要な場合は新しいmigrationファイルを追加し、複数リリースへ
+分けます(設計 §7.4)。
+
+- `documents`: 資料メタデータ(設計 §12.1)。`status`(`active`/`deleted`)と
+  `preview_status`(`pending`/`ready`/`failed`)はCHECK制約で値域を制約し、
+  `status`と`deleted_at`の整合性もCHECK制約で担保します(設計 §11.1の状態モデル)。
+  削除時に消去する項目(`owner_email_at_upload`、`original_file_name`、`title`、
+  `byte_size`、`preview_status`、`warning_codes`)はNULL許容にします。所有者別の
+  新しい順一覧(`owner_subject_id, created_at DESC`)と、管理画面検索
+  (`created_at`、`owner_email_at_upload`、`original_file_name`)向けのindexを
+  持ちます(設計 §5.2, §5.6)。
+- `audit_events`: 監査イベント(設計 §12.2)。`action`・`result`はCHECK制約で
+  値域を制約し、`retain_until`(1年後の削除予定日時、設計 §16)は`occurred_at`から
+  `BEFORE INSERT` triggerで機械的に計算します(`timestamptz + interval`は
+  timezoneに依存しIMMUTABLEでないため、GENERATED列にはできません)。
+  **追記専用**: `BEFORE UPDATE OR DELETE` triggerがDB roleの設定に関わらず
+  `RAISE EXCEPTION`するため、通常のアプリ操作からUPDATE・DELETEできません
+  (設計 §12.2)。1年経過後のpurgeなど正当な運用作業だけが、テーブル所有者相当の
+  権限で`ALTER TABLE audit_events DISABLE TRIGGER audit_events_append_only`を
+  一時的に使う想定です(Maintenance Jobの具体的な手順は別タスクで設計します)。
+  `document_id`は資料へのFK(`ON DELETE`指定なし)ですが、検証・保存失敗時の
+  監査は資料レコード自体を作らないため`document_id`を持ちません(設計 §11.1)。
+- runtime用DB role(`siryou_mite_runtime`という名前を仮定)には、`documents`へ
+  SELECT/INSERT/UPDATEだけ、`audit_events`へSELECT/INSERTだけを与えます(削除は
+  `documents.status`の更新で表すsoft deleteのため、DELETEはどちらにも与えません)。
+  Managed Identityと対応付けるDB roleの実際の作成・用途別分割(Web/Display/Preview/
+  Maintenanceを分けるか)はIaC(Bicep)側の別タスクの範囲とし、このmigrationは
+  roleが存在する場合だけGRANTし、存在しない環境(ローカル・CI)では何もしません。
+
+結合テスト(`tests/integration/`、`npm run test:integration`)は、専用schemaへ
+migrationを適用してテーブル・カラム・型・制約・index・追記専用triggerを検証します。
+ローカルPostgreSQLへの実接続が必要なため、`npm run test`・`npm run verify`には
+含めません(GitHub ActionsでPostgreSQL service containerを使う設定が別途必要です)。
+
 ## ディレクトリ構成とTypeScript build(Web / Display / Preview / Maintenance)
 
 5つのAzure実行単位（Web、Display、Preview Job、Migration Job、Maintenance Job）のうち、

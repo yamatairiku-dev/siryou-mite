@@ -108,6 +108,24 @@ Maintenance Job用)。`services/`配下は`app/`をimportせず、共通の検�
 `SESSION_SECRET`はlocal開発の`AUTH_MODE=dev`専用で、本番(`AUTH_MODE=easyauth`)では
 設定しません。
 
+### コンテナimageと起動command
+
+Web・Display・Migration Job・Maintenance Jobは**同じNode.js image**を使い、起動command
+だけを変えます(設計 §7.6)。Dockerfileのbuild stageは`npm run build`(Web)に続けて
+`npm run build:services`を実行し、`build/client`・`build/server`・`build/services`を
+同じimageへ入れます。コンテナは非root(`USER node`)のまま変更しません。
+
+| 実行単位 | 起動command |
+|---|---|
+| Web(App Service) | `node node_modules/@react-router/serve/bin.cjs ./build/server/index.js`(imageの既定CMD) |
+| Display(Container Apps) | `node build/services/display/index.js` |
+| Migration Job | `npm run db:migrate` |
+| Maintenance Job | `node build/services/maintenance/index.js` |
+
+Preview JobだけはChromiumを含む専用image(別Dockerfile)を使います。DisplayはWebと同じ
+`/health`(`GET`のみ)を持つため、imageのHEALTHCHECKは両方で使えます。Displayは
+`SIGTERM`・`SIGINT`で待受けを止め、DB接続を閉じてから終了します(猶予10秒)。
+
 ### Display / Preview Job / Maintenance Job
 
 Display、Preview Job、Maintenance Jobは`DATABASE_URL`、Storage接続設定
@@ -180,6 +198,11 @@ Entra IDの割り当て解除・アカウント制御とセッション失効手
 専用schemaを作ってmigrationを適用し、テーブル・制約・indexと追記専用の拒否動作を
 検証します。`npm run test`・`npm run verify`には含まれないため、CIへ組み込む場合は
 別途PostgreSQL service containerの起動が必要です。
+
+Display(HTML表示サービス)の結合テスト(`tests/integration/display-service.test.ts`)は、
+テスト専用schemaのPostgreSQLとAzuriteに対して本番と同じ組み立てでDisplayを起動し、
+表示grantの正常系・60秒以内の再利用・期限切れ・削除直後の拒否・CSPヘッダーを検証します
+(設計 §18.2)。
 
 同じ結合テスト(`tests/integration/blob-queue.test.ts`)はAzuriteへも接続し、
 専用container/queueを作ってBlob/Queue操作(保存・取得・削除、送受信、timeout)を

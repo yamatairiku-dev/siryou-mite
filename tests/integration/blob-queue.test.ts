@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ContainerClient } from "@azure/storage-blob";
 import type { QueueClient } from "@azure/storage-queue";
 import {
@@ -117,17 +117,38 @@ describe("Blob操作", () => {
     ).rejects.toThrow(InvalidDocumentIdError);
   });
 
-  it("明示的なtimeoutを超えると操作を中止する", async () => {
-    // 実際のAzuriteに対して、既に期限切れのtimeout(1ms)を渡すと中止される。
+  it("操作へ渡したtimeoutのabortSignalで実際のSDK呼び出しを中止する", async () => {
+    // `timeoutMs: 1`のような短いtimeoutは、Azuriteが1ms以内に応答すると中止が
+    // 間に合わず不安定になる(Q-006)。実時間に依存させないため、`AbortSignal.timeout`が
+    // 返すsignalだけを「既に中断済み」のものへ差し替える。
+    // これにより次の2点をAzuriteの応答速度に関係なく確認できる。
+    //   1. 呼び出し側が指定したtimeout値がそのままsignalの生成へ渡っていること
+    //   2. そのsignalが、実際のAzuriteに対するSDK呼び出しを中止させること
     // `name`が`AbortError`/`TimeoutError`であることまで確認し、他の理由(例えば
     // API version不整合)による失敗を誤って合格させないようにする。
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(AbortSignal.abort());
+
+    try {
+      await expect(
+        uploadDocumentHtml(containerClient, documentId, Buffer.from("x"), {
+          timeoutMs: 1234,
+        }),
+      ).rejects.toMatchObject({
+        name: expect.stringMatching(/^(AbortError|TimeoutError)$/),
+      });
+      expect(timeoutSpy).toHaveBeenCalledWith(1234);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+
+    // 差し替えを戻すと同じ操作が成功する(上の失敗がsignalによる中止であって、
+    // 設定ミスや接続不良ではないことの確認)。
     await expect(
-      uploadDocumentHtml(containerClient, documentId, Buffer.from("x"), {
-        timeoutMs: 1,
-      }),
-    ).rejects.toMatchObject({
-      name: expect.stringMatching(/^(AbortError|TimeoutError)$/),
-    });
+      uploadDocumentHtml(containerClient, documentId, Buffer.from("x")),
+    ).resolves.toBeUndefined();
+    await deleteDocumentHtml(containerClient, documentId);
   });
 });
 

@@ -93,7 +93,8 @@
 - 内容: Ed25519、60秒有効、nonce、`keyId`による鍵rotation。grantにBlobキーやファイル名を含めない
 - 完了条件: 正常・期限切れ・改ざん・対象不一致・未知keyIdの単体テスト
 
-### T12 [ ] HTML表示サービス(Display) 🔒
+### T12 [x] HTML表示サービス(Display) 🔒
+- 実装メモ: `services/display/{index,server,headers,dependencies}.ts` にNode.js標準HTTPサーバーで実装。`GET /health`・`POST /display` のみ公開し、Origin完全一致・body 8KBのstreaming打ち切り・クエリ文字列拒否・Cookie不使用で入口を絞る。grant検証(`result.valid`を明示判定)→DBで`active`再確認→Blob取得→閲覧監査INSERT→HTML返却の順で、監査保存に失敗したらHTMLを返さない。CSPは設計§9.2の12ディレクティブを記載順・記載値のまま実装し、`frame-ancestors`は`APP_ORIGIN`限定。grant検証失敗は監査を作らず運用ログのみ(Q-021)。あわせてDB・ログの実処理を `services/shared/{db,log}` へ移してDisplayから再利用可能にし(Q-005)、Dockerfileに`build:services`を追加した(Q-002)
 - 設計: §7.2, §9.2, §10.3
 - 依存: T04, T05, T11
 - 内容: Node.js標準HTTPサーバー、`GET /health` と `POST /display` のみ、POST body 8KB上限、Origin検証、DBで `active` を再確認、閲覧監査を保存してから返す、CSPとsandboxのレスポンスヘッダー。grantとbodyをログに出さない

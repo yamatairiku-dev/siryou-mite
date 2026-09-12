@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 
 describe("サービスのエントリーポイント", () => {
   it.each([
-    ["../../../services/display/index", "display", "T12"],
     ["../../../services/preview/index", "preview", "T18"],
     ["../../../services/maintenance/index", "maintenance", "T19"],
   ] as const)(
@@ -22,4 +21,21 @@ describe("サービスのエントリーポイント", () => {
       logSpy.mockRestore();
     },
   );
+
+  it("display は公開する経路を説明し、importだけでは起動しない(T12で実装済み)", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const service = await import("../../../services/display/index");
+
+    expect(service.SERVICE_NAME).toBe("display");
+    expect(service.describeService()).toContain("display");
+    // 公開するのは`GET /health`と`POST /display`だけ(設計 §7.2)。
+    expect(service.describeService()).toContain("GET /health");
+    expect(service.describeService()).toContain("POST /display");
+
+    // 環境変数の検証もサーバー起動もimport時には行わない。
+    expect(logSpy).not.toHaveBeenCalled();
+
+    logSpy.mockRestore();
+  });
 });

@@ -191,22 +191,34 @@ migrationを適用してテーブル・カラム・型・制約・index・追記
 場合だけ実行します(schemaとテスト用roleをDROPするため、本番・共有DBへ向いた設定では
 fail closedで停止します。設計 §18.2)。
 
-## DB接続とrepository層(`app/lib/db/`)
+## DB接続とrepository層(`services/shared/db/` と `app/lib/db/`)
 
-loader/action、service、repositoryを分離し、SQLはrepositoryの`*.server.ts`の中だけに
-置きます(設計 §7.4)。ORMは導入しません。
+loader/action、service、repositoryを分離し、SQLはrepositoryの中だけに置きます
+(設計 §7.4)。ORMは導入しません。
 
-- `app/lib/db/pool.server.ts`: `pg`のPoolをプロセス内で1つだけ生成します。接続数上限、
-  idle/接続timeout、statement timeoutはこのファイルの`poolSettings`に固定し、環境変数
-  では変更できないようにしています(環境ごとの設定ミスでDB接続が枯渇しないため)。
-  接続先は`app/lib/env.server.ts`(Zod検証済み)の`DATABASE_URL`だけを使い、
-  productionではTLS証明書検証を有効にしたTLS接続を要求します。idle接続のエラーは
-  分類(SQLSTATE)だけを記録し、接続文字列や資格情報はログへ出しません。
+DBはWebだけでなくDisplay(閲覧監査と`active`再確認)・Preview・Maintenanceも触るため、
+**SQLとZod schemaの実処理は`services/shared/db/`へ集約**し、`app/lib/db/*.server.ts`は
+そこを再exportする薄いラッパーにしています(`services/shared/storage.ts`と
+`app/lib/storage.server.ts`の関係と同じ形)。`services/`配下は`app/`をimportできない
+(`tsconfig.services.json`の`rootDir: services`)ため、この形にしないとSQLと
+`error_category`のenumが二重管理になり、契約が食い違います。依存方向は
+`app/` → `services/shared/`の一方向のみです。
+
+- `services/shared/db/pool.ts`: `pg`のPoolを作る実処理です。接続数上限、idle/接続
+  timeout、statement timeoutは`poolSettings`に固定し、環境変数では変更できないように
+  しています(環境ごとの設定ミスでDB接続が枯渇しないため)。**このモジュールは環境変数を
+  読みません**。接続文字列・`application_name`・TLS要求の有無は`createDatabasePool()`の
+  引数で受け取り、Webは`app/lib/env.server.ts`から、Displayなどは
+  `services/<name>/env.ts`から渡します(`application_name`は実行単位ごとに変え、DB側で
+  識別できるようにします)。productionではTLS証明書検証を有効にしたTLS接続を要求します。
+  idle接続のエラーは分類(SQLSTATE)だけを記録し、接続文字列や資格情報はログへ出しません。
+- `app/lib/db/pool.server.ts`: Web向けの薄いラッパーです。プロセス内で使い回すPoolの
+  キャッシュ(`getPool()`・`withTransaction()`・`closePool()`)だけをWeb固有に持ちます。
 - `withTransaction(run)`は業務更新と監査を同じトランザクションで保存するために使います
   (監査保存に失敗した操作は成功させない。設計 §15.1)。repositoryの各関数は
   `Queryable`(Pool・transaction中のclientの共通interface)を引数に取り、
   トランザクションの内外から同じ関数を呼べます。
-- `app/lib/db/documents.server.ts`: 資料メタデータのrepositoryです。値は必ず
+- `services/shared/db/documents.ts`: 資料メタデータのrepositoryです。値は必ず
   プレースホルダーで渡します。所有者スコープが必要な操作は所有者IDを必須引数にした
   専用関数(`listDocumentsByOwner`、`deleteDocumentAsOwner`)として公開し、
   管理者の強制削除だけを別関数(`deleteDocumentAsAdmin`)にして、所有者条件の
@@ -215,7 +227,7 @@ loader/action、service、repositoryを分離し、SQLはrepositoryの`*.server.
   cursorは`(created_at, id)`をbase64urlへ符号化しただけの位置情報です。cursorは署名
   しませんが、SQLが常に`owner_subject_id`で絞り込むため、改ざんしても他人の資料は
   返りません。壊れたcursorはZod検証で拒否します。
-- `app/lib/db/audit-events.server.ts`: 監査イベントのrepositoryです。**INSERTだけ**を
+- `services/shared/db/audit-events.ts`: 監査イベントのrepositoryです。**INSERTだけ**を
   公開し、UPDATE・DELETEを行う関数を持ちません(DB側でもtriggerとrole権限で禁止)。
   入力はZodのstrict objectで検証し、設計 §12.2に無い項目(HTML本文、ファイル名、
   token、表示grant、Cookie、principal header、IPアドレスなど)は型にも実装にも
@@ -223,7 +235,13 @@ loader/action、service、repositoryを分離し、SQLはrepositoryの`*.server.
   repository側で固定の分類(Zod enum)に閉じ、エラーメッセージや外部サービス応答が
   そのまま保存されないようにします。`occurred_at`はDBの`now()`だけを使い、
   呼び出し側から指定できません(発生日時の偽装と保持期間の引き延ばしを防ぐため)。
-- `app/lib/db/upload-limits.server.ts`: アップロード上限(件数・容量・頻度・同時実行)の
+- `services/shared/db/`のrepository関数は`executor`(`Pool`またはtransaction中の
+  `PoolClient`)を**必ず引数で受け取り**、既定値を持ちません(Pool生成が環境変数に
+  依存するため)。「省略時は`getPool()`」というWeb向けの既定値は、読み取り系だけ
+  `app/lib/db/documents.server.ts`のラッパーで足しています。更新系と監査INSERTは
+  Web側でも既定値を持たせず、業務更新と同じ`tx`の渡し忘れを型エラーにします
+  (設計 §15.1)。
+- `app/lib/db/upload-limits.server.ts`: Web専用のためservicesへは移していません。 アップロード上限(件数・容量・頻度・同時実行)の
   判定です(設計 §6.1, §10.1(3))。1つのトランザクションの中で、利用者単位の
   `pg_advisory_xact_lock`→集計→システム全体の`pg_advisory_xact_lock`(upload判定の
   直列化)→集計→`upload_attempts`への登録、の順に実行します。advisory lockは
@@ -261,7 +279,14 @@ services/
   shared/env.ts           Display/Preview/Maintenance共有の環境変数検証ヘルパー(Zod)
   shared/storage.ts       Blob/Queueクライアントの実処理(Web・Display・Preview・Maintenanceで共有)
   shared/grant.ts         表示grantの署名・検証(Web=署名、Display=検証で共有)
-  display/index.ts        Display（HTML表示サービス）のエントリーポイント
+  shared/log.ts           運用ログ(1行1event JSON)の実処理。Web・各serviceで共有
+  shared/db/pool.ts       pg Poolの生成・トランザクション(環境変数は読まない)
+  shared/db/documents.ts  documents repository(SQL・Zod schema)
+  shared/db/audit-events.ts  audit_events repository(追記専用)
+  display/index.ts        Display（HTML表示サービス）のエントリーポイント(環境変数検証と起動のみ)
+  display/server.ts       Displayのnode:http ハンドラー(経路・Origin・body上限・grant検証・監査)
+  display/headers.ts      表示レスポンスのCSP・sandbox(設計 §9.2)
+  display/dependencies.ts DisplayのDB・Blobクライアント組み立て
   display/env.ts          Display用環境変数schema
   preview/index.ts        Preview Job（プレビュー生成ワーカー）のエントリーポイント
   preview/env.ts          Preview Job用環境変数schema
@@ -283,10 +308,14 @@ tsconfig.services.json    services/専用のTypeScript設定。build/services/�
   切り出し、`services/<name>/env.ts`はそこから部品を読み込んで固有schemaを組み立てる。
   Web側とservices側で検証ヘルパーの実装が一部重複するが、`tsconfig.services.json`の
   `rootDir: services`制約により`app/`をimportできないための意図した重複とする。
-- サービス間で共有したいコード（DB接続、Blob/Queueクライアントなど）が増えた場合も
-  同様に`services/shared/`へ追加する。`services/<name>/index.ts`自体は引き続き
-  起動確認用の最小実装（担当タスクを示すコメント付き）であり、`env.ts`の呼び出しを
-  含む業務ロジックはT12(Display)、T18(Preview)、T19(Maintenance)で追加する。
+- サービス間で共有したいコード（DB接続、Blob/Queueクライアント、運用ログなど）が
+  増えた場合も同様に`services/shared/`へ追加する。Display(`services/display/`)は実装済みで、
+  Preview・Maintenanceの`index.ts`は引き続き起動確認用の最小実装（担当タスクを示す
+  コメント付き）であり、業務ロジックはT18(Preview)、T19(Maintenance)で追加する。
+- Dockerfileのbuild stageは`npm run build`（Web）に続けて`npm run build:services`を
+  実行し、`build/client`・`build/server`・`build/services`を同じimageへ入れる（設計 §7.6:
+  Web・Display・Migration・MaintenanceでNode.js imageは1種類）。実行単位の切り替えは
+  起動commandだけで行い、非rootコンテナ（`USER node`）は変更しない。
 - `services/shared/storage.ts`（Blob Storage / Storage Queueクライアント、設計 §7.3,
   §7.5）はWeb・Display・Preview・Maintenanceすべてで使う実処理のため、Web専用の
   `app/lib/env.server.ts`のように重複させず、ここへ集約する。依存方向は
@@ -320,6 +349,57 @@ tsconfig.services.json    services/専用のTypeScript設定。build/services/�
     nonceはログへ記録しない（設計 §9.5）。
 - `npm run verify`は`typecheck`（Web）→`typecheck:services`→`test:coverage`→`build`
   （Web）→`build:services`の順に実行し、Web側の既存手順を壊さない。
+
+## HTML表示サービス(`services/display/`)
+
+アップロードされたHTMLは、アプリ本体とは別オリジンのDisplayだけが配信します
+(設計 §7.2, §9.2, §10.3)。Node.js標準の`node:http`で実装し、Express等のHTTP
+frameworkは追加しません。
+
+- 公開するのは`GET /health`と`POST /display`だけです。pathが違えば404、pathが同じで
+  methodが違えば405(`Allow`付き)で拒否します。`POST /display`にクエリ文字列が付いた
+  要求は、内容を読まずに400で拒否します(grantをURL・クエリ文字列で受け取らないため。
+  ingressログへ値が残る経路を作りません)。Cookieヘッダーは読まず、使いません。
+- `Origin`がアプリオリジン(`APP_ORIGIN`)と完全一致しない要求は、欠落も含めて拒否します
+  (fail closed)。`Content-Type`は`application/x-www-form-urlencoded`だけを受け付けます。
+- POST bodyは`DISPLAY_MAX_POST_BODY_BYTES`(既定8KB)を**streaming中に超えた時点で
+  打ち切り**、それまでのchunkも破棄します(`Content-Length`の事前検査も行いますが、
+  ヘッダーが無い場合に備えて上限判定は必ずstreaming側でも行います)。
+- grantの検証は`services/shared/grant.ts`の`verifyDisplayGrant`に集約しています。起動時に
+  `GRANT_VERIFICATION_KEYS`から検証鍵の索引を1回だけ作り、要求ごとに署名・`typ`・`kid`・
+  期限・有効期間上限を検証します。**有効期限内のgrantの再利用は許容**します(設計 §18.2
+  「60秒以内の再利用」の解釈。iframeのリロードで同じgrantが再POSTされるため)。使用済み
+  nonceは保存しません。
+- 対象資料は**署名済みpayloadの`documentId`だけ**から決めます。POST bodyの他の項目は
+  読みません。
+- grantが有効でもDBで`status = 'active'`を再確認し、未存在・削除済みは同じ404
+  (「資料が見つかりません」)として拒否します(設計 §10.4)。
+- 処理順は「`active`確認 → Blob取得 → 閲覧監査INSERT → HTML返却」で、**監査を保存
+  できなかった場合はHTMLを返しません**(設計 §10.3(6), §15.1)。拒否(`denied`)・失敗
+  (`failed`)も監査へ残します。Displayは業務更新を行わないため、監査は単独INSERT
+  (Poolの自動commit)で保存します。
+- **grantの署名検証が通らなかった場合は監査を残しません**。`audit_events`は
+  `actor_subject_id`・`actor_tenant_id`が必須の追記専用テーブルで、署名が壊れているgrantの
+  利用者情報は信用できないためです(検証していない値を監査へ書くと、到達できる相手なら
+  誰でも任意の識別子で追記でき、監査の信頼性と容量を毀損します)。代わりに運用ログへ
+  相関IDとエラー分類(`grant_invalid`/`grant_expired`)だけを記録します。T04 Q-014と
+  同じ考え方です。
+- レスポンスヘッダーは`services/display/headers.ts`に集約し、設計 §9.2 のCSPをそのまま
+  組み立てます。資料HTMLとアプリのiframe内に表示する短いエラー画面は
+  `frame-ancestors <APP_ORIGIN>`、health・許可外経路・Origin不正のレスポンスは
+  `frame-ancestors 'none'`です。アプリ本体用の`X-Frame-Options: DENY`は流用しません
+  (設計 §9.2)。あわせて`Cache-Control: no-store`、`Referrer-Policy: no-referrer`
+  (grant漏えい対策、設計 §9.4)、`X-Content-Type-Options: nosniff`を付けます。
+- ログにはgrant、POST body、メールアドレス、HTML本文、ファイル名を出しません(設計 §9.5)。
+  出すのは相関ID・処理名・成否・エラー分類・HMAC化した`oid`・資料IDだけで、
+  `services/shared/log.ts`の共通実装を使います。相関IDは`X-Correlation-Id`レスポンス
+  ヘッダーとエラー画面にも出します(設計 §14, §15.2)。
+- 外部呼び出しにはtimeoutを設定します。Blob取得は`abortSignal`(5秒)、DBは
+  `poolSettings`のstatement/query timeout、HTTPは`requestTimeout`・`headersTimeout`です。
+- HTTP処理(`server.ts`)は外部I/Oを`DisplayDependencies`として受け取るため、単体テストでは
+  偽のDB・Blobで実サーバーを立てて経路・ヘッダー・上限を検証し、結合テスト
+  (`tests/integration/display-service.test.ts`)では本番と同じ組み立て
+  (`createDisplayRuntime`)で実PostgreSQL・Azuriteへ接続して検証します。
 
 ## HTML受け入れ検査(`app/lib/html/`)
 
@@ -376,7 +456,12 @@ HTMLは**書き換えず**、拒否理由コードと警告コードだけを返
 - 利用者向けの応答はJSON(`message`・`correlationId`、拒否時は拒否理由コード)で、
   stack trace、Blobキー、DB情報、内部URL、外部サービス応答を含めません(設計 §14)。
 
-## 運用ログ(`app/lib/log.server.ts`)
+## 運用ログ(`services/shared/log.ts` と `app/lib/log.server.ts`)
+
+出力形式をWeb・Display・Preview・Maintenanceで揃えるため、実処理は
+`services/shared/log.ts`の`createOperationLogger(logHmacKeyBase64)`にあり、
+`app/lib/log.server.ts`は`app/lib/env.server.ts`のHMAC鍵を渡すだけの薄いラッパーです
+(DB・Blobと同じ方針)。
 
 stdoutへ1行1eventのJSONを出力します(設計 §15.2)。記録してよい項目(時刻、処理名、
 成否、相関ID、エラー分類、資料ID、pseudonymize化した利用者識別子)だけを引数に取り、

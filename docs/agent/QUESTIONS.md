@@ -25,7 +25,7 @@
 - 状況: 設計§7.6ではWebとDisplay・各Jobで同じNode.js imageを使うが、現在の `Dockerfile` のbuild stageは `npm run build`(Web)だけを実行している
 - 置いた仮定: T01の完了条件は「空のservice entryがbuildされる」ことなのでDockerfileは変更していない。Displayを実装するT12(またはT19)でDockerfileに `npm run build:services` と成果物のコピーを追加する
 - 影響範囲: `Dockerfile`。T12着手時に対応する
-- 回答:
+- 回答: (司令塔判断・T12で対応済み)build stageを `npm run build && npm run build:services` にし、既存の `COPY --from=build /app/build ./build` で `build/services` も最終imageへ入るようにした。非root(`USER node`)は維持。起動commandでWeb/Displayを切り替える形を `docs/OPERATIONS.md` に記載した
 
 ### Q-003 [未回答] T04: 監査イベントの`error_category`の分類一覧が設計に無い
 - 状況: 設計§12.2は`error_category`を「秘密情報を含まない分類」とだけ定め、§14も分類の一覧を持たない。DBのカラムは自由記述TEXTのため、エラーメッセージや外部サービス応答がそのまま保存され得る
@@ -43,13 +43,13 @@
 - 状況: repositoryは`app/lib/db/*.server.ts`に置いたが、`services/`配下は`app/`をimportできない(`tsconfig.services.json`の`rootDir: services`、docs/ARCHITECTURE.md)。Display(閲覧監査の保存)、Preview(プレビュー状態更新)、Maintenance(purge)も同じテーブルを触る
 - 置いた仮定: T04の範囲はWeb用(`app/lib/db/`)に限定し、`services/`側は実装していない。環境変数と同じく「意図した重複」にするか、repositoryを`services/shared/db/`へ移してWeb側から参照する方式にするかは未決
 - 影響範囲: T12(Display)、T18(Preview)、T19(Maintenance)の着手時に方式を決める必要がある。移動する場合は`app/lib/db/`のimport元(T08・T09・T11・T17)も変わる
-- 回答:
+- 回答: (司令塔判断・T12で対応済み)T05のBlob/Queueと同じ形に揃え、実処理を `services/shared/db/{pool,documents,audit-events}.ts` と `services/shared/log.ts` へ移し、`app/lib/db/*.server.ts`・`app/lib/log.server.ts` は再exportする薄いラッパーにした。`pool.ts` は環境変数を読まず接続設定を引数で受け取る(Webは`app/lib/env.server.ts`、Displayは`services/display/env.ts`から渡す)。公開API・シグネチャ・`auditErrorCategories`は不変で、更新系の`executor`必須(監査と同一transaction)も維持。`upload-limits.server.ts` はWeb専用のため `app/lib/db/` に残した
 
 ### Q-006 [未回答] T05/T06: 結合テストのtimeout検証がタイミング依存で稀に落ちる
 - 状況: `tests/integration/blob-queue.test.ts` の timeout 系テストは `timeoutMs: 1` で `AbortError`/`TimeoutError` を期待する。T06の実装中に1度だけ失敗が観測された(再実行で成功)。司令塔が3回連続実行したときは再現しなかったが、CIの遅いrunnerでは1msの間に処理が完了せず期待どおり中断する保証と、逆に別要因のエラーになる可能性の両方がある
 - 置いた仮定: T05 の完了条件(timeoutを設定している)の検証としてはこのままとし、アサーションは `name` が `AbortError`/`TimeoutError` であることまで確認する形へ強化済み。値の見直しはしていない
 - 影響範囲: `tests/integration/blob-queue.test.ts`。CIで flaky になる場合は、実時間に依存しない検証(渡された `abortSignal` を確認する単体テスト側)へ寄せる判断が必要
-- 回答:
+- 回答: (司令塔判断・T12で対応済み)T12の最終確認で3回連続failしたため、記録どおり実時間非依存の検証へ置換した。結合テストは `AbortSignal.timeout` をspyで既に中断済みのsignalへ差し替え、(a)エラー`name`、(b)呼び出し側の`timeoutMs`がsignal生成へ渡ること、(c)spyを戻せば同じ操作が成功すること(他要因の失敗を合格にしない)を検証する。加えて `tests/unit/services/storage.test.ts` にBlob/Queue全9操作×既定/明示指定で、SDKへ渡る`abortSignal`が当該timeout由来のsignalそのものであること(`toBe`)を検証するテストを追加した。`services/shared/storage.ts` は未変更
 
 ### Q-007 [未回答] T07: 設計に無い拒否理由コードを2つ足した
 - 状況: 設計§6・§10.2の拒否理由は「形式不正、`meta refresh`、`base href`、ページ内以外の相対リンク、禁止scheme、外部resource」だが、`parse5`の解析は入れ子の深さに対して計算量が二次的に増える(終了タグごとにopen element stackを走査する)。上限を設けないと、10MB以内でも`<div>`を並べただけのHTMLで検査が終わらず、treeのメモリも増え続ける
@@ -133,4 +133,22 @@
 - 状況: 設計§7.2はgrantに「操作時点のメールアドレス」を含めると定めるが、Q-016のとおりEasy Authの`email`/`preferred_username` claimはメールアドレス形式とは限らない。形式検証を必須にするとgrant発行(=資料表示)が失敗する
 - 置いた仮定: T09の`documents`・監査と同じ扱いに揃え、メールアドレス形式として解釈できない場合は`null`をgrantへ入れる(表示自体は成功させる)。認可・owner判定には`oid`だけを使う
 - 影響範囲: `services/shared/grant.ts`、`app/lib/grant.server.ts`、T12の閲覧監査(`actor_email_at_event`が`null`になり得る)
+- 回答:
+
+### Q-021 [未回答] T12: grant検証に失敗した要求を監査へ残していない(設計§10.3との差分)
+- 状況: 設計§10.3末尾は「認証拒否、資料不存在、grant不正、Blob取得失敗は、発生した境界で `denied` または `failed` として監査する」と定めるが、実装は**grant不正・期限切れだけ監査行を作らず**、運用ログ(相関ID・`event`・`result=denied`・`error_category`)のみに記録している
+- 置いた仮定: 監査へ残さない。`audit_events` は `actor_subject_id`・`actor_tenant_id` がNOT NULLの追記専用テーブル(設計§12.2)で、署名検証が通っていないgrantの利用者情報は攻撃者が自由に指定できる。これを保存すると (1)任意の利用者になりすました監査行を作れる (2)Displayへ到達できる相手が無制限に追記でき監査領域を枯渇させられる、の2点で監査の信頼性そのものを損なう。T09のQ-014(検証前のprincipalを監査へ書かない)と同じ考え方。**署名検証が通った後**の拒否・失敗(削除済み=`denied`/`document_not_found`、Blob失敗=`failed`/`storage_failed`)は設計どおり監査している
+- 影響範囲: `services/display/server.ts`、`docs/ARCHITECTURE.md`(理由を記載済み)。grant不正も監査したい場合は、`audit_events`のNOT NULL制約の見直しか「未認証利用者」を表す値の決め、および追記量の上限(rate limit)が必要でmigrationを伴う
+- 回答:
+
+### Q-022 [未回答] T12: Displayの閲覧監査を単独INSERT(自動commit)で保存している
+- 状況: 設計§15.1は「業務更新と監査を同じDBトランザクションで保存する」と定めるが、Displayは業務更新(資料の状態変更)を伴わない閲覧のみ
+- 置いた仮定: §15.1の要件はupload・削除・管理操作に対するものと解釈し、閲覧監査はPoolを`Queryable`として渡した単独INSERT(自動commit)で保存した。「監査を保存してからHTMLを返す」(設計§7.2)は満たしている(保存失敗時はHTMLを返さない)
+- 影響範囲: `services/display/server.ts`
+- 回答:
+
+### Q-023 [未回答] T12: 設計に無いfail closed・timeout値を追加した
+- 状況: 設計§7.2はPOST bodyの上限とOrigin許可までを定めるが、クエリ文字列付き要求の扱い、Blob取得・HTTPのtimeout値は定めていない
+- 置いた仮定: (1)`POST /display` にクエリ文字列が付いた要求は、bodyを読まずに400で拒否する(grantがingressログへ残る経路を作らないため)。(2)Blob取得timeout 5秒、HTTPの`requestTimeout` 15秒・`headersTimeout` 10秒をコード内定数として明示した。(3)削除済みと未存在は同一の404表示にして存在有無を漏らさない
+- 影響範囲: `services/display/server.ts`。timeout値を環境ごとに変えたい場合は環境変数の追加(T02のschema・`.env.example`・`docs/OPERATIONS.md`の更新)が必要
 - 回答:

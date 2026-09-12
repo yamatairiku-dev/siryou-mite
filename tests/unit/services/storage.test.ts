@@ -551,3 +551,127 @@ describe("Queue操作(設計 §7.5)", () => {
     ).rejects.toThrow("network error");
   });
 });
+
+/**
+ * T05完了条件「すべてのBlob/Queue操作へtimeoutを設定している」を、実時間に依存しない
+ * 形で網羅的に検証する(Q-006)。結合テスト側では「渡したtimeoutのsignalで実際のSDK
+ * 呼び出しが中止されること」を確認し、ここでは「どの操作もSDKへtimeout由来のsignalを
+ * 渡していること」と「timeout値(既定・明示指定)」を確認する。
+ */
+describe("すべてのBlob/Queue操作のabortSignal(設計 §7.3, §7.5, §14)", () => {
+  type OperationCase = {
+    name: string;
+    /** 操作を実行し、SDKへ渡された options を返す。 */
+    run: (options?: { timeoutMs: number }) => Promise<Record<string, unknown>>;
+  };
+
+  function optionsOf(value: unknown): Record<string, unknown> {
+    return (value ?? {}) as Record<string, unknown>;
+  }
+
+  const operations: OperationCase[] = [
+    {
+      name: "uploadDocumentHtml",
+      run: async (options) => {
+        const { containerClient, blockBlobClient } = createStubContainerClient();
+        await uploadDocumentHtml(containerClient, documentId, Buffer.from("x"), options);
+        return optionsOf(blockBlobClient.uploadData.mock.calls[0]?.[1]);
+      },
+    },
+    {
+      name: "uploadDocumentPreview",
+      run: async (options) => {
+        const { containerClient, blockBlobClient } = createStubContainerClient();
+        await uploadDocumentPreview(containerClient, documentId, Buffer.from("x"), options);
+        return optionsOf(blockBlobClient.uploadData.mock.calls[0]?.[1]);
+      },
+    },
+    {
+      name: "downloadDocumentHtml",
+      run: async (options) => {
+        const { containerClient, blobClient } = createStubContainerClient();
+        await downloadDocumentHtml(containerClient, documentId, options);
+        return optionsOf(blobClient.download.mock.calls[0]?.[2]);
+      },
+    },
+    {
+      name: "downloadDocumentPreview",
+      run: async (options) => {
+        const { containerClient, blobClient } = createStubContainerClient();
+        await downloadDocumentPreview(containerClient, documentId, options);
+        return optionsOf(blobClient.download.mock.calls[0]?.[2]);
+      },
+    },
+    {
+      name: "deleteDocumentHtml",
+      run: async (options) => {
+        const { containerClient, blobClient } = createStubContainerClient();
+        await deleteDocumentHtml(containerClient, documentId, options);
+        return optionsOf(blobClient.deleteIfExists.mock.calls[0]?.[0]);
+      },
+    },
+    {
+      name: "deleteDocumentPreview",
+      run: async (options) => {
+        const { containerClient, blobClient } = createStubContainerClient();
+        await deleteDocumentPreview(containerClient, documentId, options);
+        return optionsOf(blobClient.deleteIfExists.mock.calls[0]?.[0]);
+      },
+    },
+    {
+      name: "sendPreviewGenerationMessage",
+      run: async (options) => {
+        const { queueClient, sendMessage } = createStubQueueClient();
+        await sendPreviewGenerationMessage(queueClient, documentId, options);
+        return optionsOf(sendMessage.mock.calls[0]?.[1]);
+      },
+    },
+    {
+      name: "receivePreviewGenerationMessages",
+      run: async (options) => {
+        const { queueClient, receiveMessages } = createStubQueueClient();
+        await receivePreviewGenerationMessages(queueClient, options);
+        return optionsOf(
+          (receiveMessages.mock.calls[0] as unknown[] | undefined)?.[0],
+        );
+      },
+    },
+    {
+      name: "deletePreviewGenerationMessage",
+      run: async (options) => {
+        const { queueClient, deleteMessage } = createStubQueueClient();
+        await deletePreviewGenerationMessage(queueClient, "m1", "p1", options);
+        return optionsOf(
+          (deleteMessage.mock.calls[0] as unknown[] | undefined)?.[2],
+        );
+      },
+    },
+  ];
+
+  it.each(operations)(
+    "$name は既定timeoutから作ったabortSignalをSDKへ渡す",
+    async ({ run }) => {
+      const signal = AbortSignal.abort();
+      const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(signal);
+
+      const options = await run();
+
+      expect(timeoutSpy).toHaveBeenCalledWith(DEFAULT_STORAGE_OPERATION_TIMEOUT_MS);
+      // SDKへ渡ったsignalが、timeoutから作られたsignalそのものであること。
+      expect(options.abortSignal).toBe(signal);
+    },
+  );
+
+  it.each(operations)(
+    "$name は指定したtimeoutMsからabortSignalを作る",
+    async ({ run }) => {
+      const signal = AbortSignal.abort();
+      const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(signal);
+
+      const options = await run({ timeoutMs: 4321 });
+
+      expect(timeoutSpy).toHaveBeenCalledWith(4321);
+      expect(options.abortSignal).toBe(signal);
+    },
+  );
+});

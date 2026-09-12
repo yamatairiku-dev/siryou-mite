@@ -1,4 +1,15 @@
 import { generateKeyPairSync } from "node:crypto";
+import { afterEach } from "vitest";
+import { cleanup } from "@testing-library/react";
+
+// `@testing-library/react`のauto-cleanupは`globalThis.afterEach`の存在を検知して
+// 自己登録するが、本プロジェクトのvitest設定は`globals: true`にしていないため
+// 検知されない。登録し忘れるとテストごとのDOMが後続テストに残り、
+// 前のテストで`Object.defineProperty`済みのinputや前回描画分の要素を
+// 誤って拾う(T10で顕在化)。ここで明示的に後始末する。
+afterEach(() => {
+  cleanup();
+});
 
 process.env.NODE_ENV = "test";
 process.env.APP_NAME = "テストアプリ";

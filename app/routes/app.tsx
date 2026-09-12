@@ -297,7 +297,7 @@ export default function Application({ loaderData }: Route.ComponentProps) {
           <li key={document.id} className="card document-card">
             <img
               src={previewImageSrc(document.previewStatus)}
-              alt=""
+              alt={`${document.title}のプレビュー`}
               className="document-card-preview"
             />
             <h2>{document.title}</h2>

@@ -79,7 +79,8 @@
 - 内容: `application/octet-stream`、`X-File-Name`(base64url)、streaming中の10MB上限、UUID v4、Blob保存→DB登録→Queue送信、失敗時の補償処理、アップロード監査
 - 完了条件: 正常系・各拒否・補償処理の単体/結合テスト
 
-### T10 [~] 初期画面(アップロードUIと所有資料一覧)
+### T10 [x] 初期画面(アップロードUIと所有資料一覧)
+- 実装メモ: `app/routes/app.tsx` にドロップ領域・1ファイル制限・警告表示・カード一覧(20件ずつcursor追加読込)を実装。loaderは`requireUser`の`oid`だけで`listDocumentsByOwner`を呼び、cursorはZod strictで検証して所有者条件を迂回できないようにした。日時のJST整形は`app/lib/format/document-view.ts`、`X-File-Name`のbase64urlは`app/lib/upload/file-name-header.ts`。`tests/setup.ts`に`afterEach(cleanup)`を明示登録(`globals: false`のためauto-cleanupが効いていなかった)
 - 設計: §5.2, §5.3, §13
 - 依存: T09
 - 内容: ドロップ領域とファイル選択、1ファイル制限、警告表示、自分の資料だけを新しい順に20件ずつ表示するカード一覧、日時はJST表示

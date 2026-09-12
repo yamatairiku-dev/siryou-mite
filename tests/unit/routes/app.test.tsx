@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoutesStub } from "react-router";
 import type {
@@ -257,8 +257,10 @@ describe("初期画面コンポーネント", () => {
   it("複数ファイルの選択(ドロップ)は1ファイル制限として拒否する", async () => {
     renderApp({ documents: [] });
 
-    const input = document.querySelector('input[type="file"]');
-    expect(input).not.toBeNull();
+    // loaderの解決(非同期)を待ってからinputを取得する。待たずに
+    // `document.querySelector`で同期的に探すと、まだ描画されていない
+    // (または前のテストの残骸を拾ってしまう)ため不安定になる。
+    const input = await screen.findByLabelText("アップロードするファイル");
 
     const files = [
       new File(["<html></html>"], "a.html", { type: "text/html" }),
@@ -292,10 +294,10 @@ describe("初期画面コンポーネント", () => {
 
     renderApp({ documents: [] });
 
-    const input = document.querySelector('input[type="file"]');
+    const input = await screen.findByLabelText("アップロードするファイル");
     const file = new File(["<html></html>"], "a.html", { type: "text/html" });
     Object.defineProperty(input, "files", { value: [file] });
-    fireEvent.change(input as Element);
+    fireEvent.change(input);
 
     await screen.findByText("アップロードが完了しました。");
     expect(screen.getByText("JavaScriptは実行されません。")).toBeTruthy();
@@ -321,10 +323,10 @@ describe("初期画面コンポーネント", () => {
 
     renderApp({ documents: [] });
 
-    const input = document.querySelector('input[type="file"]');
+    const input = await screen.findByLabelText("アップロードするファイル");
     const file = new File(["<html></html>"], "a.html", { type: "text/html" });
     Object.defineProperty(input, "files", { value: [file] });
-    fireEvent.change(input as Element);
+    fireEvent.change(input);
 
     await screen.findByText(errorBody.message);
     expect(screen.getByText(/corr-err-1/)).toBeTruthy();
@@ -340,10 +342,14 @@ describe("初期画面コンポーネント", () => {
       ],
     });
 
-    await waitFor(() => {
-      expect(document.querySelector("script")).toBeNull();
-    });
-    expect(screen.getByText("<script>alert(1)</script>")).toBeTruthy();
+    // まずloaderの解決(非同期)を待って描画を確定させる。`waitFor`で
+    // 「scriptタグが無い」ことだけを先に確認すると、未描画の空DOMでも
+    // 条件が満たされてしまい、実際の描画を待たずに次のアサーションへ
+    // 進んでしまう(意図しない誤通過)。
+    expect(
+      await screen.findByText("<script>alert(1)</script>"),
+    ).toBeTruthy();
     expect(screen.getByText("<img src=x onerror=alert(1)>.html")).toBeTruthy();
+    expect(document.querySelector("script")).toBeNull();
   });
 });

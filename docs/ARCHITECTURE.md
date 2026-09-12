@@ -52,7 +52,20 @@ Microsoft Graphは呼ばず、Easy AuthのToken Storeも無効にします。ロ
 `roles`は`User`・`Admin`の業務認可に使います。`groups`は複数値を前提とした所属コードで、
 画面表示と監査時点情報に使います。特定のグループ名を操作権限へ直接対応付けません。
 有効なApp Roleまたは所属クレームがない場合、アプリはfail closedで拒否します。
-グループoverage時にGraphへ自動fallbackせず、Entra側の割り当てを是正します。
+グループoverageは`hasgroups`、`_claim_names`、`_claim_sources`、`groups.link`の
+claim typeで検出して403で拒否し、Graphへ自動fallbackせずEntra側の割り当てを是正します。
+
+認証・認可のモジュールは次のとおり分けます。
+
+- `app/lib/auth/easy-auth.server.ts`: principalのBase64・JSON・Zod検証、claim type
+  allowlist、`tid`照合、group overage検出
+- `app/lib/auth/roles.server.ts`: `User`・`Admin` App Roleの判定(未知のrole値は無視)
+- `app/lib/auth/authorization.server.ts`: owner・admin判定と資料単位の閲覧・削除認可
+- `app/lib/session.server.ts`: `getUser`・`requireUser`とローカル開発専用セッション
+
+認可はloader、action、データアクセス直前でこれらを呼び出し、UIの非表示を認可として
+扱いません。拒否結果は監査の`error_category`(`not_authenticated`・`not_authorized`・
+`document_not_found`)と対応付けます。
 
 ローカル開発だけは`AUTH_MODE=dev`の署名付きCookieを使います。本番では
 `AUTH_MODE=easyauth`を必須とし、クライアントが任意に送ったprincipal headerを信頼できる

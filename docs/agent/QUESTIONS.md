@@ -44,3 +44,9 @@
 - 置いた仮定: T04の範囲はWeb用(`app/lib/db/`)に限定し、`services/`側は実装していない。環境変数と同じく「意図した重複」にするか、repositoryを`services/shared/db/`へ移してWeb側から参照する方式にするかは未決
 - 影響範囲: T12(Display)、T18(Preview)、T19(Maintenance)の着手時に方式を決める必要がある。移動する場合は`app/lib/db/`のimport元(T08・T09・T11・T17)も変わる
 - 回答:
+
+### Q-006 [未回答] T05/T06: 結合テストのtimeout検証がタイミング依存で稀に落ちる
+- 状況: `tests/integration/blob-queue.test.ts` の timeout 系テストは `timeoutMs: 1` で `AbortError`/`TimeoutError` を期待する。T06の実装中に1度だけ失敗が観測された(再実行で成功)。司令塔が3回連続実行したときは再現しなかったが、CIの遅いrunnerでは1msの間に処理が完了せず期待どおり中断する保証と、逆に別要因のエラーになる可能性の両方がある
+- 置いた仮定: T05 の完了条件(timeoutを設定している)の検証としてはこのままとし、アサーションは `name` が `AbortError`/`TimeoutError` であることまで確認する形へ強化済み。値の見直しはしていない
+- 影響範囲: `tests/integration/blob-queue.test.ts`。CIで flaky になる場合は、実時間に依存しない検証(渡された `abortSignal` を確認する単体テスト側)へ寄せる判断が必要
+- 回答:

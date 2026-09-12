@@ -49,7 +49,8 @@
 - 内容: Blobキーを資料IDから決定的に導出し(`html/{id}/document.html`、`preview/{id}/preview.jpg`)、保存・取得・削除を実装する。Queueメッセージは `schemaVersion` と `documentId` だけ。ローカルはAzurite
 - 完了条件: Azuriteに対する結合テスト成功。timeoutを設定している
 
-### T06 [ ] 認証・認可の設計適合 🔒
+### T06 [x] 認証・認可の設計適合 🔒
+- 実装メモ: group overage(`hasgroups`/`_claim_names`/`_claim_sources`/`groups.link`)の検出と `tid` 未設定の fail closed を `easy-auth.server.ts` へ追加し、App Role 判定を `auth/roles.server.ts`、owner・admin 認可を `auth/authorization.server.ts` へ分離(認可は `oid` のみで判定)
 - 設計: §4, §7.1, §7.1.2, §18.1
 - 依存: なし
 - 内容: 既存の `easy-auth.server.ts` / `session.server.ts` が設計を満たすか確認して不足分を補う(`tid`固定、`User`/`Admin` role、複数groupsと重複除去、overage・所属なしのfail closed、URI形式claim typeのallowlist)。owner・admin判定の認可ヘルパーを追加する

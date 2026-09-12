@@ -260,6 +260,7 @@ app/                      Web（React Router、SSR）。react-router buildでbui
 services/
   shared/env.ts           Display/Preview/Maintenance共有の環境変数検証ヘルパー(Zod)
   shared/storage.ts       Blob/Queueクライアントの実処理(Web・Display・Preview・Maintenanceで共有)
+  shared/grant.ts         表示grantの署名・検証(Web=署名、Display=検証で共有)
   display/index.ts        Display（HTML表示サービス）のエントリーポイント
   display/env.ts          Display用環境変数schema
   preview/index.ts        Preview Job（プレビュー生成ワーカー）のエントリーポイント
@@ -298,6 +299,25 @@ tsconfig.services.json    services/専用のTypeScript設定。build/services/�
     ヘッダーへ固定している（`options.version`では固定できない、SDKの既知の制約）。
     `@azure/storage-blob`/`@azure/storage-queue`を更新したときは、Azuriteが対応する
     APIバージョンとこの定数を合わせて見直す。
+- `services/shared/grant.ts`（表示grantの署名・検証、設計 §7.2, §9.5, §10.3）はWebと
+  Displayを**跨ぐ契約**のため、`services/shared/storage.ts`と同じ理由でここへ集約する。
+  実装を二重に持つと署名対象のbyte列が食い違って表示が壊れるため、形式を変える変更は
+  必ず本モジュールだけで行う。
+  - 形式は`<header>.<payload>.<signature>`の3セグメント（すべてbase64urlのため、
+    hidden formの`application/x-www-form-urlencoded` POST値として安全）。
+  - 署名対象のbyte列は`siryou-mite/display-grant/v1.<header>.<payload>`の
+    ASCII文字列で、先頭の固定contextはdomain separation（同じ鍵が他用途の署名へ流用された
+    場合の取り違え防止）。セグメントは`.`を含まない文字集合のため区切りの解釈は一意。
+  - `header`は`alg`（Ed25519固定）・`typ`・`kid`を持ち、署名対象に含まれる。Displayは
+    `kid`で`GRANT_VERIFICATION_KEYS`から公開鍵を引くため新旧2鍵を併用してrotationでき、
+    未知の`kid`はfail closedで拒否する（設計 §9.5）。`kid`のすげ替えは署名検証で落ちる。
+  - 鍵の配置はWebが署名用のEd25519**秘密鍵のみ**、Displayが検証用の**公開鍵のみ**
+    （設計 §9.5）。Webは`app/lib/grant.server.ts`（`app/lib/env.server.ts`から署名鍵を
+    組み立てる薄いラッパー）だけを使い、検証系APIは再exportしない。Displayは
+    `services/shared/grant.ts`を直接importする。
+  - payloadに入れてよいのは資料ID・`oid`・tenant ID・操作時点のメールアドレス・
+    `iat`/`exp`・nonceだけで、Blobキーとファイル名は含めない（設計 §7.2）。grant・鍵・
+    nonceはログへ記録しない（設計 §9.5）。
 - `npm run verify`は`typecheck`（Web）→`typecheck:services`→`test:coverage`→`build`
   （Web）→`build:services`の順に実行し、Web側の既存手順を壊さない。
 

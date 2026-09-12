@@ -116,3 +116,21 @@
 - 置いた仮定: 既存関数の契約は変えず、`updateDocumentPreviewStatus({ documentId, previewStatus }, executor)`を追加した(`status`は変更せず、`active`かつ`preview_status`がNULLでない資料だけを更新する)。T15(プレビュー状態resource route)・T18(プレビュー生成ワーカー)も同じ関数を使える
 - 影響範囲: `app/lib/db/documents.server.ts`、`tests/unit/db/documents.server.test.ts`
 - 回答:
+
+### Q-018 [未回答] T11: grantに`actorTenantId`を追加した(設計§7.2の列挙に無い)
+- 状況: 設計§7.2はgrantの内容を「資料ID、操作利用者の`oid`、操作時点のメールアドレス、有効期限、ランダムnonce、`keyId`」と列挙するが、T12(Display)が保存する閲覧監査の`actor_tenant_id`は`audit_events`でNOT NULL相当の必須項目(設計§12.2、`app/lib/db/audit-events.server.ts`)。Displayはセッションを受け取らない(設計§7.2)ため、grant以外に操作利用者のtenantを知る手段が無い
+- 置いた仮定: payloadへ`actorTenantId`を追加した。tenant IDは組織識別子であり個人データではないと判断。Blobキー・ファイル名を含めない制約(§7.2)は守っている
+- 影響範囲: `services/shared/grant.ts`、`app/lib/grant.server.ts`、T12(閲覧監査)。tenantをgrantへ入れたくない場合は、Displayが`documents`から引くか、監査側のtenant必須を見直す必要がある
+- 回答:
+
+### Q-019 [未回答] T11: 有効期限内のgrant再利用を「許容」と解釈した
+- 状況: 設計§18.2の結合テスト項目は「表示grantの正常、60秒以内の再利用、期限切れ、対象資料不一致」と並べるだけで、「60秒以内の再利用」が成功すべきか拒否すべきかを定めていない。§7.2にも単回使用の記述は無い
+- 置いた仮定: **有効期限内であれば再利用可能**とした。iframeのリロードや再表示で同じgrantが再POSTされるため、単回使用にすると正常系のUXが壊れる。§18.2の当該項目は「成功することを確認する試験」と解釈した。そのためT11・T12で使用済みnonceの保存先(新テーブル)は作らず、nonceはgrantの一意性と監査の相関用としてpayloadに残すだけにした
+- 影響範囲: `services/shared/grant.ts`、T12(Display)、T20(E2E)。単回使用にする場合は使用済みnonceの保存先(新テーブルまたは既存テーブルの流用)とgrant再発行フローの設計が必要で、migrationを伴う
+- 回答:
+
+### Q-020 [未回答] T11: grantのメールアドレスをnullable にした
+- 状況: 設計§7.2はgrantに「操作時点のメールアドレス」を含めると定めるが、Q-016のとおりEasy Authの`email`/`preferred_username` claimはメールアドレス形式とは限らない。形式検証を必須にするとgrant発行(=資料表示)が失敗する
+- 置いた仮定: T09の`documents`・監査と同じ扱いに揃え、メールアドレス形式として解釈できない場合は`null`をgrantへ入れる(表示自体は成功させる)。認可・owner判定には`oid`だけを使う
+- 影響範囲: `services/shared/grant.ts`、`app/lib/grant.server.ts`、T12の閲覧監査(`actor_email_at_event`が`null`になり得る)
+- 回答:

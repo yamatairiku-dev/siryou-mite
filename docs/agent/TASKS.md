@@ -86,7 +86,8 @@
 - 内容: ドロップ領域とファイル選択、1ファイル制限、警告表示、自分の資料だけを新しい順に20件ずつ表示するカード一覧、日時はJST表示
 - 完了条件: route/コンポーネントの単体テスト。他人の資料が出ないことをテスト
 
-### T11 [ ] 表示grantの署名・検証 🔒
+### T11 [x] 表示grantの署名・検証 🔒
+- 実装メモ: 署名・検証の実処理を `services/shared/grant.ts`(環境変数を読まない純粋関数)に集約し、Webは `app/lib/grant.server.ts` から署名のみ利用。`context.header.payload` の3セグメントをdomain separation付きでEd25519署名し、`kid`も署名対象に含める。検証は 形式→header→鍵解決→署名→payload→期限→対象 の順で、署名が通るまでpayloadを信用しない。未知keyId・`exp`超過・`exp-iat>maxAge`はfail closed(時計ずれは未来方向の`iat`に5秒のみ)
 - 設計: §7.2, §9.5
 - 依存: T02
 - 内容: Ed25519、60秒有効、nonce、`keyId`による鍵rotation。grantにBlobキーやファイル名を含めない

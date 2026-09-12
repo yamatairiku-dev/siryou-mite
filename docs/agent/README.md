@@ -16,7 +16,8 @@ Claude Code を司令塔＋サブエージェント構成で、承認なしに�
 | `.claude/autonomous.settings.json` | 自律実行時だけ適用する禁止ルールとコミット前hook |
 | `.claude/hooks/verify-before-commit.sh` | main へのコミット禁止と、コミット前の `npm run verify` 強制 |
 | `scripts/agent/run.sh` | 自律実行の本体(auto モード＋ `/goal`) |
-| `scripts/agent/start-in-tmux.sh` | tmux 内で `run.sh` を起動する |
+| `scripts/agent/start-in-tmux.sh` | tmux 内で `run.sh`(または `loop.sh`)を起動する |
+| `scripts/agent/loop.sh` | 利用上限で中断しても、解除時刻まで待って `run.sh` を再開する |
 | `scripts/agent/watch.sh` | 実行ログを司令塔/サブエージェント別に追いかけて表示する |
 | `scripts/agent/status.sh` | タスク進捗・作業中タスク・コミット・stash・未回答の確認事項を一覧する |
 | `scripts/agent/format-stream.jq` | `watch.sh` と `run.sh` が使うログ整形 |
@@ -36,10 +37,18 @@ MAX_TASKS=1 MAX_TURNS=20 scripts/agent/run.sh
 # 夜間など長時間
 MAX_TASKS=8 MAX_TURNS=120 scripts/agent/start-in-tmux.sh
 tmux attach -t siryou-agent   # 様子を見る。Ctrl-b d で離脱
+
+# 利用上限で止まっても自動で再開させる
+RUNNER=scripts/agent/loop.sh MAX_TASKS=8 MAX_TURNS=120 scripts/agent/start-in-tmux.sh
 ```
 
 Mac がスリープすると devcontainer も止まるため、長時間実行する間はホスト側で
 `caffeinate -dims` を実行しておく。
+
+`loop.sh` はログに利用上限(`hit your session limit`)を見つけると、メッセージ中の解除時刻まで
+待ってから `run.sh` を起動し直す。時刻が読み取れない場合は `RETRY_WAIT` 秒(既定900)待つ。
+`run.sh` はクリーンな作業ツリーを要求するため、中断で残った差分は `chore(wip):` として
+コミットしてから再開する。残りタスクが無くなるか `MAX_ROUNDS`(既定20)回で終了する。
 
 ## 実行中の様子を見る
 

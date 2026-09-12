@@ -107,7 +107,8 @@
 - 内容: 未ログイン時は同じURLへ戻る、hidden formでgrantをiframeへPOST、iframe sandbox、URLコピー、初期画面へ戻る
 - 完了条件: route単体テスト
 
-### T14 [ ] 削除(所有者・管理者) 🔒
+### T14 [x] 削除(所有者・管理者) 🔒
+- 実装メモ: `app/lib/documents/delete.server.ts`(処理本体・依存注入)と `app/routes/documents.$documentId.delete.tsx`(確認画面loader + 削除action)に実装。§10.4の順で`requireUser`→`assertSameOrigin`→Zod(`z.uuid()`)→**transaction内で資料を読み直した直後**に`requireDocumentDeletionScope`→owner/adminのrepository関数→同一txで削除監査(監査失敗はrollback)。Blob削除はcommit後で、HTML・プレビューの両方が成功したときだけ`markBlobCleanupCompleted`を呼び、失敗時は`blob_cleanup_pending`を立てたまま運用ログへ記録(再試行はT19)。初期画面の削除ボタンは確認画面へのGET遷移に変更(§5.5)。監査`action`は削除を一律`delete`に統一(Q-026)、未存在の拒否は`document_id=null`(Q-027)、確認画面の拒否は無監査(Q-028)、成功後は`/app`へ303(Q-029)
 - 設計: §5.5, §10.4, §11, §12.1
 - 依存: T09
 - 内容: 確認画面、`active→deleted`、機微項目の消去、Blob削除失敗時の `blob_cleanup_pending`、削除監査、一般ユーザーによる他人の資料の削除拒否

@@ -22,7 +22,10 @@ import { useEffect, useRef } from "react";
 import { useRevalidator } from "react-router";
 import { z } from "zod";
 import type { Route } from "./+types/documents.$documentId";
-import { assertCanViewDocument } from "~/lib/auth/authorization.server";
+import {
+  assertCanViewDocument,
+  isDocumentOwner,
+} from "~/lib/auth/authorization.server";
 import { findDocumentById } from "~/lib/db/documents.server";
 import { env } from "~/lib/env.server";
 import { DISPLAY_GRANT_FORM_FIELD, issueDisplayGrant } from "~/lib/grant.server";
@@ -40,6 +43,12 @@ export type DocumentViewLoaderData = {
   /** grantの失効時刻(epoch ms)。期限切れ間際の再送信を避けるために使う。 */
   grantExpiresAt: number;
   grantFormField: string;
+  /**
+   * 所有者本人にだけ削除導線(削除確認画面へのリンク)を表示する(設計 §5.2, §5.5)。
+   * 表示可否であって認可ではない。削除の可否は削除action側が再判定する
+   * (AGENTS.md 5項)。
+   */
+  canDelete: boolean;
 };
 
 export async function loader({
@@ -78,6 +87,7 @@ export async function loader({
     grant,
     grantExpiresAt: now.getTime() + env.GRANT_TTL_SECONDS * 1000,
     grantFormField: DISPLAY_GRANT_FORM_FIELD,
+    canDelete: isDocumentOwner(user, document),
   };
 }
 
@@ -164,6 +174,15 @@ export default function DocumentView({ loaderData }: Route.ComponentProps) {
         >
           表示をやり直す
         </button>
+        {loaderData.canDelete && (
+          // 削除確認画面(設計 §5.5)へ遷移するだけのリンク。ここでは削除しない。
+          <a
+            className="button button-secondary"
+            href={`/documents/${loaderData.documentId}/delete`}
+          >
+            削除
+          </a>
+        )}
       </div>
 
       {/*

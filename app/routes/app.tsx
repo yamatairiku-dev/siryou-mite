@@ -323,7 +323,10 @@ export default function Application({ loaderData }: Route.ComponentProps) {
                 URLをコピー
               </button>
               {document.canDelete && (
-                <Form method="post" action={`/documents/${document.id}/delete`}>
+                // 削除は必ず確認画面を経由する(設計 §5.5「確認後にだけ削除
+                // actionを実行する」)。このFormは削除確認画面へ遷移するだけの
+                // GETで、資料は更新しない。
+                <Form method="get" action={`/documents/${document.id}/delete`}>
                   <button type="submit" className="button button-secondary">
                     削除
                   </button>

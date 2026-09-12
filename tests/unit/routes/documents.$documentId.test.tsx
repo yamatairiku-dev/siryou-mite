@@ -132,6 +132,28 @@ describe("loader", () => {
     expect(result.grantExpiresAt).toBeGreaterThan(Date.now());
   });
 
+  it("所有者本人にはcanDelete=trueを返す(削除確認画面への導線用。設計 §5.2, §5.5)", async () => {
+    findDocumentByIdMock.mockResolvedValue(documentRecord());
+    const cookie = await sessionCookieFor(owner);
+
+    const result = await loader(
+      loaderArgs(`http://localhost:3000/documents/${DOCUMENT_ID}`, cookie),
+    );
+
+    expect(result.canDelete).toBe(true);
+  });
+
+  it("所有者以外の一般利用者にはcanDelete=falseを返す(閲覧はできる)", async () => {
+    findDocumentByIdMock.mockResolvedValue(documentRecord());
+    const cookie = await sessionCookieFor(otherUser);
+
+    const result = await loader(
+      loaderArgs(`http://localhost:3000/documents/${DOCUMENT_ID}`, cookie),
+    );
+
+    expect(result.canDelete).toBe(false);
+  });
+
   it("削除済み資料は一般利用者に404「資料が見つかりません」を返す", async () => {
     findDocumentByIdMock.mockResolvedValue(
       documentRecord({ status: "deleted", title: null, originalFileName: null }),
@@ -173,6 +195,7 @@ function renderDocumentView(overrides: Record<string, unknown> = {}) {
     grant: "header-part.payload-part.signature-part",
     grantExpiresAt: now + 60_000,
     grantFormField: "grant",
+    canDelete: false,
     ...overrides,
   };
 
@@ -229,7 +252,10 @@ describe("資料表示画面コンポーネント", () => {
     renderDocumentView();
 
     await screen.findByTestId("display-grant-form");
-    expect(requestSubmitSpy).toHaveBeenCalledTimes(1);
+    // formがDOMへ現れた時点ではuseEffect(passive effect)の実行が未完了のことが
+    // あるため、送信の確認は待ち合わせる(T14で顕在化したテストのflakiness対策。
+    // 実装の挙動は変えていない)。
+    await vi.waitFor(() => expect(requestSubmitSpy).toHaveBeenCalledTimes(1));
 
     // grantはhidden inputの値としてのみ存在し、リンクや現在のURLには現れない。
     const hiddenInput = document.querySelector(
@@ -269,6 +295,22 @@ describe("資料表示画面コンポーネント", () => {
     expect(copiedUrl).toBe(`http://localhost:3000/documents/${DOCUMENT_ID}`);
     expect(copiedUrl).not.toContain("header-part");
     expect(copiedUrl).not.toContain("localhost:3100");
+  });
+
+  it("canDeleteがtrueのときだけ削除確認画面へのリンクを表示する", async () => {
+    renderDocumentView({ canDelete: true });
+
+    const deleteLink = await screen.findByRole("link", { name: "削除" });
+    expect(deleteLink.getAttribute("href")).toBe(
+      `/documents/${DOCUMENT_ID}/delete`,
+    );
+  });
+
+  it("canDeleteがfalseの場合は削除導線を表示しない(所有者以外には出さない)", async () => {
+    renderDocumentView({ canDelete: false });
+
+    await screen.findByTestId("document-display-frame");
+    expect(screen.queryByRole("link", { name: "削除" })).toBeNull();
   });
 
   it("「初期画面へ戻る」の導線がある", async () => {

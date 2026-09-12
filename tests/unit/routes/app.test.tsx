@@ -214,6 +214,17 @@ describe("初期画面コンポーネント", () => {
     expect(screen.getByRole("button", { name: "削除" })).toBeTruthy();
   });
 
+  it("削除導線は確認画面へのGET遷移で、直接の削除POSTにしない(設計 §5.5)", async () => {
+    renderApp({ documents: [cardFrom()] });
+
+    const deleteButton = await screen.findByRole("button", { name: "削除" });
+    const form = deleteButton.closest("form");
+    expect(form?.getAttribute("method")).toBe("get");
+    expect(form?.getAttribute("action")).toBe(
+      `/documents/${cardFrom().id}/delete`,
+    );
+  });
+
   it("canDeleteがfalseの場合は削除導線を表示しない(オーナー以外には出さない)", async () => {
     renderApp({ documents: [cardFrom({ canDelete: false })] });
 

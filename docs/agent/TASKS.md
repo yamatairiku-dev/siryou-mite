@@ -139,7 +139,8 @@
 
 ## Phase 3: 非同期処理
 
-### T18 [~] プレビュー生成ワーカー(ローカル実行まで) 🔒
+### T18 [x] プレビュー生成ワーカー(ローカル実行まで) 🔒
+- 実装メモ: `services/preview/{index,worker,capture,dependencies,env}.ts` に実装。1実行1メッセージで、受信→検証→`dequeueCount`判定→`active`/`pending`確認→Blob取得→撮影→保存→`ready`更新+監査(同一transaction)→メッセージ削除の順に進め、失敗は一時障害だけ3回まで再試行し、上限byte数超過などの決定的失敗は1回目で`failed`にする(Q-042〜Q-044)。撮影は`playwright-core`の動的importで、JavaScript無効・`route`abort・`offline`・起動引数の4重で外部通信を止め、Chromium sandboxは有効のまま(`chromiumSandbox: true`+`assertSandboxArguments`のfail closed)、1280x720 JPEGを品質を下げながら1MB以下に収める(Q-045、Q-046)。処理上限30秒の`AbortSignal`を全依存へ伝播させ、期限切れ後の`failed`・監査・後始末だけは独立したfinalize signalで必ず書き切る(Q-050)。`updateDocumentPreviewStatus`は`failed`への更新を`preview_status = 'pending'`の資料に限定し、メッセージ削除失敗から再配信が続いても`ready`を`failed`へ上書きしない(Q-051)。撮影中に資料が削除された場合は保存済みプレビューを消す(Q-048)。監査の操作者は同じ資料のアップロード監査から引き継ぎ、`action`は`upload`にした(Q-040、Q-041)。非rootの専用image `Dockerfile.preview` を追加(browser binaryはPlaywright公式imageから、本番依存は増やしていない)
 - 設計: §7.5
 - 依存: T05, T12
 - 内容: 1実行1メッセージ、`dequeueCount` 最大3回、JavaScript無効・外部通信なし・Chromium sandbox有効のPlaywright撮影、1280x720 JPEG・1MB以下、失敗時 `failed` と監査。専用Dockerfileを作成する(Container Appsでのsecurity spikeは対象外)

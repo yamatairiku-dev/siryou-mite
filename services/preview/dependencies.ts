@@ -73,7 +73,7 @@ export type PreviewRuntimeOverrides = {
    * 撮影処理。省略時はPlaywright + Chromium。結合テストではChromiumを起動せずに
    * 前後の手順(Queue・DB・Blob)を検証するために差し替える。
    */
-  capturePreview?: (html: Buffer) => Promise<Buffer>;
+  capturePreview?: (html: Buffer, signal: AbortSignal) => Promise<Buffer>;
 };
 
 export function createPreviewRuntime(
@@ -115,15 +115,21 @@ export function createPreviewRuntime(
       return envelope ?? null;
     },
 
-    async deleteMessage(envelope) {
+    async deleteMessage(envelope, signal) {
       await deletePreviewGenerationMessage(
         queueClient,
         envelope.messageId,
         envelope.popReceipt,
-        { timeoutMs: PREVIEW_QUEUE_TIMEOUT_MS },
+        {
+          timeoutMs: PREVIEW_QUEUE_TIMEOUT_MS,
+          ...(signal ? { abortSignal: signal } : {}),
+        },
       );
     },
 
+    // DB呼び出しには`abortSignal`を渡さない。`pg`はsignalでの中止に対応しておらず、
+    // 打ち切りはpool設定の`statement_timeout`・`query_timeout`(設計 §14)で行う。
+    // 処理上限のsignalは`worker.ts`の`step`が呼び出し**前**に判定する。
     async findDocument(documentId) {
       const document = await findDocumentById(documentId, pool);
       if (!document) {
@@ -135,29 +141,34 @@ export function createPreviewRuntime(
       };
     },
 
-    async fetchHtml(documentId) {
+    async fetchHtml(documentId, signal) {
       return downloadDocumentHtml(containerClient, documentId, {
         timeoutMs: PREVIEW_BLOB_TIMEOUT_MS,
+        abortSignal: signal,
       });
     },
 
     capturePreview:
       overrides.capturePreview ??
-      ((html: Buffer) =>
+      ((html: Buffer, signal: AbortSignal) =>
         // HTMLはアップロード時にUTF-8として検証済み(設計 §6.1)。
         capturePreviewJpeg(html.toString("utf8"), {
           maxBytes: env.MAX_PREVIEW_IMAGE_BYTES,
+          // 処理上限を超えたらChromiumを閉じて撮影を打ち切る(設計 §7.5)。
+          signal,
         })),
 
-    async savePreview(documentId, jpeg) {
+    async savePreview(documentId, jpeg, signal) {
       await uploadDocumentPreview(containerClient, documentId, jpeg, {
         timeoutMs: PREVIEW_BLOB_TIMEOUT_MS,
+        abortSignal: signal,
       });
     },
 
-    async discardPreview(documentId) {
+    async discardPreview(documentId, signal) {
       await deleteDocumentPreview(containerClient, documentId, {
         timeoutMs: PREVIEW_BLOB_TIMEOUT_MS,
+        ...(signal ? { abortSignal: signal } : {}),
       });
     },
 
@@ -179,8 +190,11 @@ export function createPreviewRuntime(
 /**
  * プレビュー状態を更新し、同じトランザクションで監査を保存する(設計 §15.1)。
  *
- * 更新対象が無い場合(削除済み・未存在)は監査を残さずに`false`を返す。削除済み
- * 資料は`preview_status`がNULLへ消去済みで、プレビューの成否を記録する意味が無い。
+ * 更新対象が無い場合は監査を残さずに`false`を返す。削除済み資料は`preview_status`が
+ * NULLへ消去済みで、プレビューの成否を記録する意味が無い。`failed`は
+ * `preview_status = 'pending'`の資料にだけ書けるため(`updateDocumentPreviewStatus`)、
+ * 別の配信で既に`ready`・`failed`が確定している資料でも`false`になり、確定した状態と
+ * 監査を後続の配信が上書きしない(設計 §7.5の冪等性、§11.1)。
  */
 async function savePreviewStatusWithAudit(
   tx: Queryable,

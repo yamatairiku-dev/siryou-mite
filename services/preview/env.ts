@@ -4,11 +4,26 @@
  * 設計: docs/APPLICATION_DESIGN.md §6.1, §7.3, §7.5
  */
 import { z } from "zod";
+import { poolSettings } from "../shared/db/pool.js";
 import {
   commonEnvShape,
   formatZodError,
   validateStorageConfig,
 } from "../shared/env.js";
+import { PREVIEW_FINALIZE_TIMEOUT_MS } from "./worker.js";
+
+/**
+ * 処理上限を使い切った実行でも、恒久失敗(`failed`と監査)を書き切ってからJobを
+ * 終える必要がある(設計 §7.5)。その書き込みに見込む秒数。
+ *
+ * DBへの書き込みは`AbortSignal`では中断できないため、実際の上限はpoolの
+ * `query_timeout`(12秒)で、`PREVIEW_FINALIZE_TIMEOUT_MS`(10秒)が効くのはBlob・
+ * Queue操作の側になる。安全側に倒して大きい方を採用する。後続のメッセージ削除は
+ * 失敗しても再配信で冪等にやり直せるため、この見込みには含めない。
+ */
+export const PREVIEW_FINALIZE_BUDGET_SECONDS = Math.ceil(
+  Math.max(PREVIEW_FINALIZE_TIMEOUT_MS, poolSettings.queryTimeoutMillis) / 1_000,
+);
 
 const schema = z
   .object({
@@ -49,27 +64,27 @@ const schema = z
   .superRefine((value, context) => {
     validateStorageConfig(value, context);
 
-    if (
-      value.QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS >
-      value.QUEUE_VISIBILITY_TIMEOUT_SECONDS
-    ) {
+    // 処理上限そのものではなく、「処理上限 + 後始末」がvisibility timeoutと
+    // Job実行上限に収まることを検証する(設計 §7.5)。等号を許して
+    // 処理上限 = visibility timeout にすると、popReceiptが失効したあとに恒久失敗の
+    // 書き込みが走り、同じメッセージが別の実行へ再配信される窓が開く。
+    const requiredSeconds =
+      value.QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS +
+      PREVIEW_FINALIZE_BUDGET_SECONDS;
+
+    if (requiredSeconds > value.QUEUE_VISIBILITY_TIMEOUT_SECONDS) {
       context.addIssue({
         code: "custom",
         path: ["QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS"],
-        message:
-          "QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS は QUEUE_VISIBILITY_TIMEOUT_SECONDS 以下である必要があります",
+        message: `QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS + ${PREVIEW_FINALIZE_BUDGET_SECONDS}秒(恒久失敗の記録)は QUEUE_VISIBILITY_TIMEOUT_SECONDS 以下である必要があります`,
       });
     }
 
-    if (
-      value.PREVIEW_JOB_MAX_RUNTIME_SECONDS <
-      value.QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS
-    ) {
+    if (requiredSeconds > value.PREVIEW_JOB_MAX_RUNTIME_SECONDS) {
       context.addIssue({
         code: "custom",
         path: ["PREVIEW_JOB_MAX_RUNTIME_SECONDS"],
-        message:
-          "PREVIEW_JOB_MAX_RUNTIME_SECONDS は QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS 以上である必要があります",
+        message: `PREVIEW_JOB_MAX_RUNTIME_SECONDS は QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS + ${PREVIEW_FINALIZE_BUDGET_SECONDS}秒(恒久失敗の記録)以上である必要があります`,
       });
     }
   });

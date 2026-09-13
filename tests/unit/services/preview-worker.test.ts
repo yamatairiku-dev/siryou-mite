@@ -31,7 +31,56 @@ type Harness = {
   savedPreviews: string[];
   discarded: string[];
   captureCalls: number;
+  /** 依存が受け取ったsignal。処理上限の伝搬と、後始末用signalの独立を検証する。 */
+  signals: {
+    findDocument: AbortSignal[];
+    capturePreview: AbortSignal[];
+    discardPreview: Array<AbortSignal | undefined>;
+    recordPreviewResult: AbortSignal[];
+    deleteMessage: Array<AbortSignal | undefined>;
+  };
 };
+
+/**
+ * 依存はすべて、渡されたsignalが中断済みなら実際の外部呼び出しと同じように失敗する。
+ * これにより「期限切れのsignalを渡すと書き込めない」ことがテストでも再現される。
+ */
+function assertUsable(signal: AbortSignal | undefined): void {
+  signal?.throwIfAborted();
+}
+
+/**
+ * 処理上限(30秒)のsignalだけを「中断済み」に差し替える。後始末・恒久失敗の記録で
+ * 使う独立したsignal(`PREVIEW_FINALIZE_TIMEOUT_MS`)は本物のまま残し、
+ * 「期限切れ後でも`failed`と監査を書ける」ことを検証できるようにする。
+ */
+function abortProcessingDeadline() {
+  const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+  return vi
+    .spyOn(AbortSignal, "timeout")
+    .mockImplementation((delay: number) =>
+      delay === 30_000 ? AbortSignal.abort() : realTimeout(delay),
+    );
+}
+
+/**
+ * `updateDocumentPreviewStatus`(`services/shared/db/documents.ts`)のUPDATE条件と
+ * 同じ判定。削除済み資料は更新せず、`failed`は`pending`の資料にだけ書ける。
+ */
+function updatesDocument(
+  document: PreviewDocumentSnapshot | null | undefined,
+  previewStatus: "ready" | "failed",
+): boolean {
+  const snapshot =
+    document === undefined
+      ? ({ isActive: true, previewStatus: "pending" } as PreviewDocumentSnapshot)
+      : document;
+
+  if (!snapshot || !snapshot.isActive || snapshot.previewStatus === null) {
+    return false;
+  }
+  return previewStatus === "ready" || snapshot.previewStatus === "pending";
+}
 
 function envelope(
   overrides: Partial<ReceivedPreviewQueueEnvelope> = {},
@@ -61,6 +110,13 @@ function createHarness(options: {
     [];
   const savedPreviews: string[] = [];
   const discarded: string[] = [];
+  const signals: Harness["signals"] = {
+    findDocument: [],
+    capturePreview: [],
+    discardPreview: [],
+    recordPreviewResult: [],
+    deleteMessage: [],
+  };
   const harness: Harness = {
     logged,
     deleted,
@@ -68,6 +124,7 @@ function createHarness(options: {
     savedPreviews,
     discarded,
     captureCalls: 0,
+    signals,
     dependencies: {
       maxDequeueCount: options.maxDequeueCount ?? 3,
       processingTimeoutMs: 30_000,
@@ -78,39 +135,56 @@ function createHarness(options: {
       newCorrelationId: () => "00000000-0000-4000-8000-000000000000",
       receiveMessage: async () =>
         options.envelope === undefined ? envelope() : options.envelope,
-      deleteMessage: async (target) => {
+      deleteMessage: async (target, signal) => {
+        signals.deleteMessage.push(signal);
+        assertUsable(signal);
         if (options.deleteMessage) {
           await options.deleteMessage();
         }
         deleted.push({ messageId: target.messageId });
       },
-      findDocument: async () =>
-        options.document === undefined
+      findDocument: async (_documentId, signal) => {
+        signals.findDocument.push(signal);
+        assertUsable(signal);
+        return options.document === undefined
           ? { isActive: true, previewStatus: "pending" }
-          : options.document,
-      fetchHtml:
-        options.fetchHtml ?? (async () => Buffer.from("<p>資料</p>", "utf8")),
-      capturePreview: async () => {
+          : options.document;
+      },
+      fetchHtml: async (_documentId, signal) => {
+        assertUsable(signal);
+        return options.fetchHtml
+          ? options.fetchHtml()
+          : Buffer.from("<p>資料</p>", "utf8");
+      },
+      capturePreview: async (_html, signal) => {
+        signals.capturePreview.push(signal);
+        assertUsable(signal);
         harness.captureCalls += 1;
         return options.capture ? options.capture() : jpeg;
       },
-      savePreview: async (id) => {
+      savePreview: async (id, _jpeg, signal) => {
+        assertUsable(signal);
         if (options.savePreview) {
           await options.savePreview();
         }
         savedPreviews.push(id);
       },
-      discardPreview: async (id) => {
+      discardPreview: async (id, signal) => {
+        signals.discardPreview.push(signal);
+        assertUsable(signal);
         discarded.push(id);
       },
-      recordPreviewResult: async (input) => {
+      recordPreviewResult: async (input, signal) => {
+        signals.recordPreviewResult.push(signal);
+        assertUsable(signal);
         recorded.push({
           previewStatus: input.previewStatus,
           errorCategory: input.errorCategory,
         });
-        return options.recordPreviewResult
-          ? options.recordPreviewResult()
-          : true;
+        if (options.recordPreviewResult) {
+          return options.recordPreviewResult();
+        }
+        return updatesDocument(options.document, input.previewStatus);
       },
     },
   };
@@ -304,6 +378,49 @@ describe("dequeueCountによる再試行判定(設計 §7.5)", () => {
     expect(harness.deleted).toHaveLength(1);
   });
 
+  it("上限を超えた配信でも、既にreadyの資料はfailedにしない", async () => {
+    // `ready`確定後にメッセージ削除だけが失敗し続けた場合に起こり得る配信
+    // (設計 §7.5の冪等性、§11.1)。プレビューはBlobにあるため代替画像にしない。
+    const harness = createHarness({
+      envelope: envelope({ dequeueCount: 4 }),
+      document: { isActive: true, previewStatus: "ready" },
+    });
+
+    const result = await runPreviewWorkerOnce(harness.dependencies);
+
+    expect(result).toEqual({
+      outcome: "skipped",
+      documentId,
+      errorCategory: null,
+    });
+    expect(harness.captureCalls).toBe(0);
+    // メッセージだけを取り除き、状態も監査も変えない。
+    expect(harness.deleted).toEqual([{ messageId: "message-1" }]);
+    expect(harness.logged.map((event) => event.event)).not.toContain(
+      "preview_generation_failed",
+    );
+    expect(harness.logged.at(-1)).toMatchObject({
+      event: "preview_generation_skipped",
+      result: "success",
+      documentId,
+    });
+  });
+
+  it("上限を超えた配信で資料が削除済みなら監査を残さず削除する", async () => {
+    const harness = createHarness({
+      envelope: envelope({ dequeueCount: 4 }),
+      document: { isActive: false, previewStatus: null },
+    });
+
+    const result = await runPreviewWorkerOnce(harness.dependencies);
+
+    expect(result.outcome).toBe("skipped");
+    expect(harness.deleted).toHaveLength(1);
+    expect(harness.logged.map((event) => event.event)).not.toContain(
+      "preview_generation_failed",
+    );
+  });
+
   it("failed更新に失敗した場合はメッセージを削除しない", async () => {
     const harness = createHarness({
       envelope: envelope({ dequeueCount: 3 }),
@@ -434,15 +551,37 @@ describe("1メッセージの処理上限(設計 §7.5)", () => {
   });
 
   it("処理上限を超えた場合はPreviewProcessingTimeoutErrorになる", async () => {
-    const timeoutSpy = vi
-      .spyOn(AbortSignal, "timeout")
-      .mockReturnValue(AbortSignal.abort());
+    const timeoutSpy = abortProcessingDeadline();
 
     try {
       await expect(
-        withProcessingDeadline(30_000, () => new Promise(() => {})),
+        withProcessingDeadline(30_000, async (signal) => {
+          // 中断は`run`へ伝わる。`run`はそれを見て自分で終わる。
+          signal.throwIfAborted();
+          return "完了";
+        }),
       ).rejects.toThrow(PreviewProcessingTimeoutError);
       expect(timeoutSpy).toHaveBeenCalledWith(30_000);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("中断しても`run`の終了を待ってから結果を決める", async () => {
+    const timeoutSpy = abortProcessingDeadline();
+    let finished = false;
+
+    try {
+      await expect(
+        withProcessingDeadline(30_000, async (signal) => {
+          await Promise.resolve();
+          finished = true;
+          signal.throwIfAborted();
+          return "完了";
+        }),
+      ).rejects.toThrow(PreviewProcessingTimeoutError);
+      // 期限側だけを先に返すと、打ち切ったはずの処理が裏で走り続けてしまう。
+      expect(finished).toBe(true);
     } finally {
       timeoutSpy.mockRestore();
     }
@@ -454,11 +593,22 @@ describe("1メッセージの処理上限(設計 §7.5)", () => {
     ).resolves.toBe("完了");
   });
 
+  it("処理上限のsignalを各段階の依存へ渡す", async () => {
+    const harness = createHarness();
+
+    await runPreviewWorkerOnce(harness.dependencies);
+
+    const [findSignal] = harness.signals.findDocument;
+    const [captureSignal] = harness.signals.capturePreview;
+    expect(findSignal).toBeInstanceOf(AbortSignal);
+    // 同じ処理の各段階へ同じsignalが渡り、1メッセージ全体で期限を共有する。
+    expect(captureSignal).toBe(findSignal);
+    expect(harness.signals.recordPreviewResult[0]).toBe(findSignal);
+  });
+
   it("処理上限の超過はpreview_timeoutとして扱う", async () => {
     const harness = createHarness({ envelope: envelope({ dequeueCount: 3 }) });
-    const timeoutSpy = vi
-      .spyOn(AbortSignal, "timeout")
-      .mockReturnValue(AbortSignal.abort());
+    const timeoutSpy = abortProcessingDeadline();
 
     try {
       const result = await runPreviewWorkerOnce(harness.dependencies);
@@ -469,5 +619,44 @@ describe("1メッセージの処理上限(設計 §7.5)", () => {
     } finally {
       timeoutSpy.mockRestore();
     }
+  });
+
+  it("処理上限を超えても恒久失敗の記録には中断済みsignalを使わない", async () => {
+    // 期限切れのsignalをそのまま使うと`failed`も監査も書けず、資料が`pending`の
+    // まま取り残される(設計 §7.5, §10.2)。
+    const harness = createHarness({ envelope: envelope({ dequeueCount: 3 }) });
+    const timeoutSpy = abortProcessingDeadline();
+
+    try {
+      const result = await runPreviewWorkerOnce(harness.dependencies);
+
+      expect(result.outcome).toBe("permanently_failed");
+      expect(harness.recorded).toEqual([
+        { previewStatus: "failed", errorCategory: "preview_timeout" },
+      ]);
+      // 撮影は始めず(期限切れ)、記録と削除だけが中断していないsignalで行われる。
+      expect(harness.captureCalls).toBe(0);
+      expect(harness.signals.recordPreviewResult).toHaveLength(1);
+      expect(harness.signals.recordPreviewResult[0]?.aborted).toBe(false);
+      expect(harness.deleted).toEqual([{ messageId: "message-1" }]);
+      expect(harness.signals.deleteMessage[0]?.aborted).toBe(false);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("撮影済みプレビューの後始末とメッセージ削除は別のsignalで行う", async () => {
+    // 結果が確定したあとの後始末を処理上限で止めると、孤児Blobとメッセージの
+    // 再配信が残る(設計 §7.5, §10.4)。
+    const harness = createHarness({ recordPreviewResult: async () => false });
+
+    const result = await runPreviewWorkerOnce(harness.dependencies);
+
+    expect(result.outcome).toBe("skipped");
+    expect(harness.discarded).toEqual([documentId]);
+    const processingSignal = harness.signals.findDocument[0];
+    expect(harness.signals.discardPreview[0]).not.toBe(processingSignal);
+    expect(harness.signals.discardPreview[0]?.aborted).toBe(false);
+    expect(harness.signals.deleteMessage[0]).not.toBe(processingSignal);
   });
 });

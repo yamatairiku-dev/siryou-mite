@@ -221,22 +221,26 @@ export async function capturePreviewJpeg(
 ): Promise<Buffer> {
   const renderTimeoutMs = options.renderTimeoutMs ?? PREVIEW_RENDER_TIMEOUT_MS;
   const qualitySteps = options.qualitySteps ?? PREVIEW_JPEG_QUALITY_STEPS;
+  const signal = options.signal;
   // 中断済みならChromiumを起動しない(期限超過後に新しい処理を始めない)。
-  options.signal?.throwIfAborted();
+  signal?.throwIfAborted();
   const launcher = options.launcher ?? (await loadChromiumLauncher());
 
-  const browser: Browser = await launcher.launch(
-    createPreviewBrowserLaunchOptions(),
-  );
-
-  // 中断されたらbrowserを閉じ、進行中の描画・撮影を失敗させる。`finally`の
-  // `browser.close()`は冪等に呼べる。
+  // 中断されたらbrowserを閉じ、進行中の起動・描画・撮影を失敗させる。listenerは
+  // **`launch`の前**に登録する。起動には最大`PREVIEW_BROWSER_LAUNCH_TIMEOUT_MS`
+  // (15秒)かかり、あとから登録するとその間の中断が効かないため。
+  // 起動完了前の中断ではまだ閉じる相手がいないため、`launch`の直後にもう一度
+  // 中断を判定し、起動してしまったbrowserは`finally`で必ず閉じる。
+  let browser: Browser | null = null;
   const abortBrowser = (): void => {
-    void Promise.resolve(browser.close()).catch(() => undefined);
+    void Promise.resolve(browser?.close()).catch(() => undefined);
   };
-  options.signal?.addEventListener("abort", abortBrowser, { once: true });
+  signal?.addEventListener("abort", abortBrowser, { once: true });
 
   try {
+    browser = await launcher.launch(createPreviewBrowserLaunchOptions());
+    signal?.throwIfAborted();
+
     const context: BrowserContext = await browser.newContext(
       createPreviewContextOptions(),
     );
@@ -247,12 +251,12 @@ export async function capturePreviewJpeg(
       await blockAllRequests(context);
 
       const page: Page = await context.newPage();
-      options.signal?.throwIfAborted();
+      signal?.throwIfAborted();
       await page.setContent(html, {
         waitUntil: "load",
         timeout: renderTimeoutMs,
       });
-      options.signal?.throwIfAborted();
+      signal?.throwIfAborted();
 
       return await screenshotWithinLimit(page, {
         maxBytes: options.maxBytes,
@@ -263,8 +267,10 @@ export async function capturePreviewJpeg(
       await context.close().catch(() => undefined);
     }
   } finally {
-    options.signal?.removeEventListener("abort", abortBrowser);
-    await browser.close();
+    signal?.removeEventListener("abort", abortBrowser);
+    // `launch`自体が失敗した場合は閉じる相手がいない。中断で既に閉じた場合も
+    // `close`は冪等に呼べる。
+    await browser?.close();
   }
 }
 

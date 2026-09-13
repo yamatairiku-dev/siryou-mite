@@ -390,6 +390,14 @@ export async function deleteDocumentAsAdmin(
  * 削除済み資料(`preview_status`はNULLへ消去済み)は対象外とし、更新できた場合だけ
  * `true`を返す。
  *
+ * `failed`へ更新できるのは`preview_status = 'pending'`の資料だけにする。
+ * プレビュー生成メッセージは重複配信・再配信されるため(設計 §7.5)、撮影に成功して
+ * `ready`が確定したあとの配信が`failed`で上書きするとBlobにプレビューがあるのに
+ * 代替画像を表示することになり、監査もsuccess/failedで矛盾する(設計 §11.1, §15.1)。
+ * この判定は行ロックのかかる同じUPDATE内で行い、読み取りと更新の間に状態が変わっても
+ * 上書きが起きないようにする。`ready`への更新はこの条件を付けない(撮影し直した
+ * 結果で上書きしてよい)。
+ *
  * `executor`に既定値を持たせない。プレビュー状態の変更は失敗・成功の監査
  * (`insertAuditEvent`)と同じトランザクションで保存する必要があり(設計 §15.1)、
  * 既定値があると呼び出し側が`tx`を渡し忘れても`getPool()`で動いてしまうため、
@@ -409,6 +417,7 @@ export async function updateDocumentPreviewStatus(
       WHERE id = $1
         AND status = 'active'
         AND preview_status IS NOT NULL
+        AND ($2 <> 'failed' OR preview_status = 'pending')
      RETURNING id`,
     [params.documentId, params.previewStatus],
   );

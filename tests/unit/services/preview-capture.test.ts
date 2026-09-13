@@ -29,6 +29,8 @@ type FakeBrowser = {
   browser: Browser;
   context: FakeContext;
   closed: () => boolean;
+  /** `newContext`が呼ばれた回数(中断後に処理を進めていないことの確認に使う)。 */
+  newContextCalls: () => number;
 };
 
 type FakeContext = {
@@ -47,9 +49,12 @@ type FakeContext = {
 function createFakeBrowser(options: {
   screenshotSizes: number[];
   screenshotError?: Error;
+  /** `page.screenshot`の先頭で実行する(撮影中の中断を再現する)。 */
+  onScreenshot?: () => void;
 }): FakeBrowser {
   let browserClosed = false;
   let contextClosed = false;
+  let newContextCalls = 0;
   const routePatterns: string[] = [];
   const routeHandlers: Array<(route: Route) => unknown> = [];
   const setContentCalls: Array<{ html: string; options: unknown }> = [];
@@ -63,6 +68,7 @@ function createFakeBrowser(options: {
     },
     async screenshot(screenshotOptions: unknown) {
       screenshotCalls.push(screenshotOptions);
+      options.onScreenshot?.();
       if (options.screenshotError) {
         throw options.screenshotError;
       }
@@ -96,6 +102,7 @@ function createFakeBrowser(options: {
 
   const browser = {
     async newContext() {
+      newContextCalls += 1;
       return context;
     },
     async close() {
@@ -114,6 +121,7 @@ function createFakeBrowser(options: {
       closed: () => contextClosed,
     },
     closed: () => browserClosed,
+    newContextCalls: () => newContextCalls,
   };
 }
 
@@ -303,6 +311,107 @@ describe("capturePreviewJpeg", () => {
 
     expect(fake.context.closed()).toBe(true);
     expect(fake.closed()).toBe(true);
+  });
+});
+
+describe("撮影の中断(設計 §7.5「1メッセージの処理上限は30秒」)", () => {
+  /** rejectされたエラーをそのまま受け取る(DOMExceptionの`name`を確認するため)。 */
+  async function captureError(run: Promise<unknown>): Promise<Error> {
+    return (await run.then(
+      () => new Error("中断されませんでした"),
+      (error: unknown) => error as Error,
+    )) as Error;
+  }
+
+  it("中断済みsignalではbrowserを起動しない", async () => {
+    const fake = createFakeBrowser({ screenshotSizes: [100] });
+    const { launcher, launchOptions } = createLauncher(fake);
+
+    const error = await captureError(
+      capturePreviewJpeg("<p>資料</p>", {
+        maxBytes: 1024 * 1024,
+        launcher,
+        signal: AbortSignal.abort(),
+      }),
+    );
+
+    // 期限を過ぎてからChromiumを起動しない(設計 §7.5)。
+    expect(error.name).toBe("AbortError");
+    expect(launchOptions).toHaveLength(0);
+    expect(fake.newContextCalls()).toBe(0);
+  });
+
+  it("browser起動中に中断された場合は起動したbrowserを閉じて撮影を始めない", async () => {
+    const fake = createFakeBrowser({ screenshotSizes: [100] });
+    const controller = new AbortController();
+    const launcher: PreviewBrowserLauncher = {
+      // 起動には最大15秒かかる。その途中で処理上限が切れた状況を再現する。
+      async launch() {
+        controller.abort();
+        await Promise.resolve();
+        return fake.browser;
+      },
+    };
+
+    const error = await captureError(
+      capturePreviewJpeg("<p>資料</p>", {
+        maxBytes: 1024 * 1024,
+        launcher,
+        signal: controller.signal,
+      }),
+    );
+
+    expect(error.name).toBe("AbortError");
+    // 起動してしまったbrowserは必ず閉じ、contextも作らない。
+    expect(fake.closed()).toBe(true);
+    expect(fake.newContextCalls()).toBe(0);
+    expect(fake.context.setContentCalls).toEqual([]);
+  });
+
+  it("撮影中の中断でbrowserを閉じて撮影を打ち切る", async () => {
+    const controller = new AbortController();
+    let closedDuringScreenshot = false;
+    const fake: FakeBrowser = createFakeBrowser({
+      screenshotSizes: [100],
+      onScreenshot: () => {
+        controller.abort();
+        // 中断と同時にbrowserが閉じられる(実際のChromiumでは撮影が失敗する)。
+        closedDuringScreenshot = fake.closed();
+        throw new Error("Target page, context or browser has been closed");
+      },
+    });
+    const { launcher } = createLauncher(fake);
+
+    const error = await captureError(
+      capturePreviewJpeg("<p>資料</p>", {
+        maxBytes: 1024 * 1024,
+        launcher,
+        signal: controller.signal,
+      }),
+    );
+
+    expect(closedDuringScreenshot).toBe(true);
+    expect(error.message).toContain("closed");
+    // 中断経路でもcontext・browserを必ず閉じる(Chromiumのプロセスを残さない)。
+    expect(fake.context.closed()).toBe(true);
+    expect(fake.closed()).toBe(true);
+  });
+
+  it("中断されなければsignal付きでも通常どおり撮影する", async () => {
+    const fake = createFakeBrowser({ screenshotSizes: [100] });
+    const { launcher } = createLauncher(fake);
+    const controller = new AbortController();
+
+    const jpeg = await capturePreviewJpeg("<p>資料</p>", {
+      maxBytes: 1024 * 1024,
+      launcher,
+      signal: controller.signal,
+    });
+
+    expect(jpeg.byteLength).toBe(100);
+    expect(fake.closed()).toBe(true);
+    // 撮影後にlistenerを外すため、あとから中断されても何も起きない。
+    controller.abort();
   });
 });
 

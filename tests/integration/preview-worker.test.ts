@@ -314,6 +314,45 @@ describe("重複配信(設計 §7.5「同じメッセージを複数回受け取
     expect(downloaded.equals(fakeJpeg)).toBe(true);
   });
 
+  it("上限を超えた配信が`ready`を`failed`で上書きしない(設計 §11.1)", async () => {
+    // `ready`確定後にメッセージ削除だけが失敗し続けると、`dequeueCount`が上限を
+    // 超えた配信が届く。撮影済みのプレビューを代替画像へ落とさないことを確認する。
+    await sendPreviewGenerationMessage(queueClient, documentId);
+    const worker = createWorker();
+
+    try {
+      const first = await runPreviewWorkerOnce(worker.dependencies);
+      expect(first.outcome).toBe("completed");
+      expect(await previewStatusOf(documentId)).toBe("ready");
+
+      // 4回目の配信(上限超過)を、実際に受信した封筒の`dequeueCount`だけ変えて作る。
+      await sendPreviewGenerationMessage(queueClient, documentId);
+      const envelope = await worker.dependencies.receiveMessage();
+      expect(envelope).not.toBeNull();
+
+      const result = await runPreviewWorkerOnce({
+        ...worker.dependencies,
+        receiveMessage: async () =>
+          envelope ? { ...envelope, dequeueCount: 4 } : null,
+      });
+
+      expect(result).toEqual({
+        outcome: "skipped",
+        documentId,
+        errorCategory: null,
+      });
+    } finally {
+      await worker.close();
+    }
+
+    // 状態も監査もアップロード+プレビュー成功のままで、メッセージだけが消える。
+    expect(await previewStatusOf(documentId)).toBe("ready");
+    expect(await queueMessageCount()).toBe(0);
+    const audits = await auditRows();
+    expect(audits).toHaveLength(2);
+    expect(audits.every((row) => row.result === "success")).toBe(true);
+  });
+
   it("削除済み資料のメッセージは撮影せずに削除する", async () => {
     await sendPreviewGenerationMessage(queueClient, documentId);
     const pool = createDatabasePool({

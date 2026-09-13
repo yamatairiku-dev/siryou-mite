@@ -457,8 +457,31 @@ frameworkは追加しません。
   `failed`へ書き換えてしまいます。削除失敗は分類だけを運用ログへ残し、再配信されたときに
   `pending`以外の資料として撮影せず削除します。
 - 多重timeout: 描画10秒(`capture.ts`) < 1メッセージの処理上限30秒(`withProcessingDeadline`)
-  < Job実行上限45秒(`index.ts`) < visibility timeout 60秒。環境変数schemaがこの大小関係を
-  検証し、満たさない設定ではJobが起動しません(fail closed)。
+  < Job実行上限45秒(`index.ts`) < visibility timeout 60秒。環境変数schema(`env.ts`)が
+  検証するのは**処理上限 + 後始末の見込み(`PREVIEW_FINALIZE_BUDGET_SECONDS`)が
+  Job実行上限とvisibility timeoutの両方に収まること**で、満たさない設定ではJobが
+  起動しません(fail closed)。恒久失敗の記録は処理上限を使い切ったあとに走るため、
+  処理上限 = visibility timeout のような等号の設定は許しません(popReceipt失効後に
+  書き込みが走り、同じメッセージが別の実行へ再配信される窓が開くため)。描画timeoutと
+  起動timeout(15秒)はschemaの対象外で、`capture.ts`の定数です。
+- 処理上限の`AbortSignal`は`processMessage`から各段階(`step`)と各依存呼び出し
+  (DB検索・HTML取得・撮影・プレビュー保存・状態更新)へそのまま渡します。Blob/Queue操作は
+  `StorageOperationOptions.abortSignal`で操作単位のtimeoutと併用し、撮影は中断時に
+  Chromiumを閉じます。DB呼び出しはsignalでは中止できないため、poolの
+  `statement_timeout`・`query_timeout`で打ち切ります。
+- **結果が確定したあとの書き込みには処理上限のsignalを使いません**。恒久失敗の記録
+  (`failed`と監査)、メッセージ削除、孤児プレビューの削除は、期限切れ後でも実行しないと
+  資料が`pending`のまま残る・メッセージが再配信され続ける・孤児Blobが残るため、
+  `PREVIEW_FINALIZE_TIMEOUT_MS`(10秒)の独立したsignalで行います。処理上限の意味は
+  「期限を過ぎてから**新しい撮影・業務処理**を始めない」ことです。DB書き込みは
+  `AbortSignal`で中断できないため、実際に効くのはpoolの`query_timeout`(12秒)です
+  (`PREVIEW_FINALIZE_BUDGET_SECONDS`はこの大きい方を採ります)。
+- **確定した`ready`を後続の配信が`failed`で上書きしません**。`updateDocumentPreviewStatus`の
+  UPDATEは`failed`を`preview_status = 'pending'`の資料にだけ書き、更新0行なら
+  `recordPreviewResult`が`false`を返して`failPermanently`は状態も監査も変えずに
+  メッセージだけ削除します(`skipped`)。`ready`確定後に削除だけ失敗し続けて
+  `dequeueCount`が上限を超えた配信が届いても、Blobにあるプレビューが代替画像へ
+  落ちません(設計 §11.1、§15.1)。
 - 監査は`action = upload`(アップロード処理の続き)として、`preview_status`の更新と
   **同じトランザクション**で保存します(設計 §15.1)。`audit_events`の
   `actor_subject_id`・`actor_tenant_id`はNOT NULLでワーカーには操作者がいないため、

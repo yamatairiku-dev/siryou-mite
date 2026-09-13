@@ -308,3 +308,16 @@
 - 置いた仮定: ワーカーが残したメッセージを、テスト側から`queueClient.updateMessage(..., visibilityTimeout: 0)`で即座に再表示してから次の実行を行う。`dequeueCount`の増加は実際の受信で起きるため、判定そのものは本番と同じ経路を通る。処理上限(30秒)の検証はQ-006と同じ`AbortSignal.timeout`のspy差し替え方式で、(a)指定した30秒がsignal生成へ渡ること (b)中断が`preview_timeout`として扱われDBもqueueも変わらないこと (c)差し替えを戻すと同じメッセージの処理が成功すること、を確認している
 - 影響範囲: `tests/integration/preview-worker.test.ts`
 - 回答:
+
+### Q-050 [未回答] T18: 処理上限を超えたあとの後始末・恒久失敗の記録は別timeoutで行う
+- 状況: 設計§7.5は「1メッセージの処理上限は30秒」と「3回目の失敗でDBを`failed`へ更新して監査を保存した後、メッセージを削除する」の両方を定めるが、**処理上限を超えた試行**での`failed`更新・監査・メッセージ削除の扱いを定めていない。処理上限の`AbortSignal`をそのまま使うと、これらの書き込みも中断されて何も残らない
+- 置いた仮定: 処理上限のsignalは`processMessage`(資料の確認・HTML取得・撮影・プレビュー保存・`ready`更新)にだけ適用し、「期限を過ぎてから新しい撮影・業務処理を始めない」という意味に限定した。結果が確定したあとの書き込み(恒久失敗の`failed`更新と監査、メッセージ削除、`ready`更新が0行だった場合の孤児プレビュー削除)は、期限切れのsignalを流用せず`PREVIEW_FINALIZE_TIMEOUT_MS`(10秒)の独立したsignalで実行する。そのまま中断すると、資料が`pending`のまま残って表示が代替画像へ切り替わらない(設計§10.2)、メッセージが最大7日間再配信され続ける、回収経路の無い孤児Blobが残る、のいずれかになるため。10秒はBlob/Queue操作とDBの`statement_timeout`と同じ値で、visibility timeout(60秒)の残り時間に収まる
+- 補足(実体との対応): DB書き込み(`recordPreviewResult`)は`pg`が`AbortSignal`での中断に対応していないため、`PREVIEW_FINALIZE_TIMEOUT_MS`(10秒)は効かず、実際の上限はpoolの`query_timeout`(12秒、`services/shared/db/pool.ts`)。10秒のsignalが効くのはBlob・Queue操作(メッセージ削除・孤児プレビュー削除)。環境変数schemaの不変条件には安全側として大きい方(`PREVIEW_FINALIZE_BUDGET_SECONDS` = 12秒)を使い、`処理上限 + 12秒 ≤ Job実行上限` かつ `処理上限 + 12秒 ≤ visibility timeout`を検証する(既定30/45/60で成立)。後続のメッセージ削除(最大10秒)はこの見込みに含めない。削除に失敗しても再配信で冪等にやり直せるため
+- 影響範囲: `services/preview/worker.ts`(`PREVIEW_FINALIZE_TIMEOUT_MS`)、`services/preview/env.ts`(`PREVIEW_FINALIZE_BUDGET_SECONDS`)、`tests/unit/services/preview-worker.test.ts`、`tests/unit/services/preview-env.test.ts`
+- 回答:
+
+### Q-051 [未回答] T18: 確定した`ready`を後続の配信が`failed`で上書きしないようにした
+- 状況: 設計§7.5は「3回失敗したら`failed`」と「同じメッセージを複数回受け取っても結果が壊れない」を両方求めるが、**`ready`が確定したあとに`dequeueCount`が上限を超えた配信が届いた場合**の扱いを定めていない。メッセージ削除の失敗は握りつぶす仕様(結果を巻き戻さないため)なので、削除が続けて失敗すると4回目の配信が届き得る
+- 置いた仮定: `updateDocumentPreviewStatus`のUPDATE条件に「`failed`を書けるのは`preview_status = 'pending'`の資料だけ」を追加し(`ready`への更新は現状維持)、更新0行のときは`failPermanently`が状態も監査も変えずにメッセージだけ削除して`skipped`を返すようにした。読み取りで判定せずUPDATEの条件で判定するのは、Preview Jobが最大2件並列(設計§7.6)で動くため読み取りと更新の間に状態が変わり得るため。アップロード時のQueue送信失敗で`failed`を書く経路(`app/lib/upload/upload.server.ts`)は直前に`pending`で作成した資料が対象のため影響しない
+- 影響範囲: `services/shared/db/documents.ts`(共有モジュール。Web・Preview両方が使う)、`services/preview/worker.ts`、`tests/unit/db/documents.server.test.ts`、`tests/unit/services/preview-worker.test.ts`、`tests/integration/preview-worker.test.ts`
+- 回答:

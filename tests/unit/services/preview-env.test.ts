@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { parsePreviewEnvironment } from "../../../services/preview/env";
+import {
+  parsePreviewEnvironment,
+  PREVIEW_FINALIZE_BUDGET_SECONDS,
+} from "../../../services/preview/env";
 
 const validLogHmacKey = Buffer.alloc(32, 3).toString("base64");
 
@@ -23,6 +26,12 @@ describe("parsePreviewEnvironment", () => {
     expect(result.MAX_PREVIEW_IMAGE_BYTES).toBe(1024 * 1024);
   });
 
+  it("設計どおりの既定値(30/45/60秒)は後始末の見込みを足しても成立する", () => {
+    // 処理上限30秒 + 恒久失敗の記録 <= Job実行上限45秒 <= visibility timeout 60秒。
+    expect(PREVIEW_FINALIZE_BUDGET_SECONDS).toBeGreaterThan(0);
+    expect(30 + PREVIEW_FINALIZE_BUDGET_SECONDS).toBeLessThanOrEqual(45);
+  });
+
   it("メッセージ処理上限がvisibility timeoutを超える場合は拒否する", () => {
     expect(() =>
       parsePreviewEnvironment({
@@ -33,12 +42,37 @@ describe("parsePreviewEnvironment", () => {
     ).toThrow("QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS");
   });
 
+  it("処理上限とvisibility timeoutが同値の設定を拒否する(後始末の余裕が無い)", () => {
+    // 処理上限を使い切ったあとに恒久失敗を書くため、popReceiptの失効前に
+    // 終われない設定はfail closedで止める(設計 §7.5)。
+    expect(() =>
+      parsePreviewEnvironment({
+        ...baseEnvironment,
+        QUEUE_VISIBILITY_TIMEOUT_SECONDS: "60",
+        QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS: "60",
+        PREVIEW_JOB_MAX_RUNTIME_SECONDS: "90",
+      }),
+    ).toThrow("QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS");
+  });
+
   it("Job実行上限がメッセージ処理上限未満の場合は拒否する", () => {
     expect(() =>
       parsePreviewEnvironment({
         ...baseEnvironment,
         QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS: "30",
         PREVIEW_JOB_MAX_RUNTIME_SECONDS: "10",
+      }),
+    ).toThrow("PREVIEW_JOB_MAX_RUNTIME_SECONDS");
+  });
+
+  it("Job実行上限に後始末の余裕が無い設定を拒否する", () => {
+    // 処理上限とJob実行上限が同値だと、恒久失敗を書く前にJobが強制終了される。
+    expect(() =>
+      parsePreviewEnvironment({
+        ...baseEnvironment,
+        QUEUE_VISIBILITY_TIMEOUT_SECONDS: "60",
+        QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS: "40",
+        PREVIEW_JOB_MAX_RUNTIME_SECONDS: "40",
       }),
     ).toThrow("PREVIEW_JOB_MAX_RUNTIME_SECONDS");
   });

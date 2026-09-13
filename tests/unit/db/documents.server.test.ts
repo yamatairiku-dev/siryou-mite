@@ -387,6 +387,34 @@ describe("updateDocumentPreviewStatus(設計 §10.1(9))", () => {
     ).toBe(false);
   });
 
+  it("`failed`は`pending`の資料にだけ書く(設計 §7.5, §11.1)", async () => {
+    // プレビュー生成メッセージは再配信されるため、`ready`確定後の配信が
+    // `failed`で上書きしないようUPDATEの条件で防ぐ。
+    const { executor, calls } = createStubExecutor([[]]);
+
+    expect(
+      await updateDocumentPreviewStatus(
+        { documentId, previewStatus: "failed" },
+        executor,
+      ),
+    ).toBe(false);
+    expect(lastCall(calls).text).toContain(
+      "($2 <> 'failed' OR preview_status = 'pending')",
+    );
+  });
+
+  it("`ready`への更新には`pending`条件を付けない(撮り直しは上書きしてよい)", async () => {
+    const { executor, calls } = createStubExecutor([[{ id: documentId }]]);
+
+    expect(
+      await updateDocumentPreviewStatus(
+        { documentId, previewStatus: "ready" },
+        executor,
+      ),
+    ).toBe(true);
+    expect(lastCall(calls).values).toEqual([documentId, "ready"]);
+  });
+
   it("UUIDでない資料IDではSQLを実行しない", async () => {
     const { executor, calls } = createStubExecutor([[{ id: documentId }]]);
 

@@ -22,6 +22,15 @@
  *   - DB更新は`active`かつ`preview_status`が残っている資料だけを対象にする
  *   - メッセージ削除は既に削除済みでも成功する
  *
+ * 処理上限(`processingTimeoutMs`、設計 §7.5)の扱い:
+ *   - `withProcessingDeadline`が作る`AbortSignal`は`processMessage`の各段階と各依存
+ *     呼び出しへ渡す。意味は「期限を過ぎてから**新しい撮影・業務処理を始めない**」。
+ *   - 結果が確定したあとの書き込み(恒久失敗の`failed`更新と監査、メッセージ削除、
+ *     孤児プレビューの削除)は、期限切れのsignalを使わず`PREVIEW_FINALIZE_TIMEOUT_MS`の
+ *     独立したsignalで行う。ここまで中断すると資料が`pending`のまま残り、メッセージが
+ *     再配信され続ける(設計 §7.5「3回目の失敗でDBを`failed`へ更新して監査を保存した後、
+ *     メッセージを削除する」を満たせない)。
+ *
  * ログには固定の`event`名・結果・エラー分類・相関ID・資料IDだけを出す。HTML本文、
  * ファイル名、プレビュー画像、Blobキー、メールアドレスは出さない(設計 §15.2)。
  */
@@ -97,7 +106,9 @@ export type PreviewWorkerDependencies = {
   discardPreview(documentId: string, signal?: AbortSignal): Promise<void>;
   /**
    * プレビュー状態の更新と監査を同じトランザクションで保存する(設計 §15.1)。
-   * 更新対象が無かった場合(削除済みなど)は`false`を返す。
+   * 更新対象が無かった場合は`false`を返し、監査も残さない。資料が削除済みの場合と、
+   * `failed`を書こうとしたが資料が既に`pending`でない(別の配信で`ready`・`failed`が
+   * 確定済み)場合がある。
    */
   recordPreviewResult(
     input: RecordPreviewResultInput,
@@ -166,12 +177,25 @@ export function isDeterministicFailure(error: unknown): boolean {
 }
 
 /**
+ * 恒久失敗の記録と後始末に使う、処理上限とは別枠の上限(ms)。
+ *
+ * 処理上限(`processingTimeoutMs`)を使い切ったあとでも`failed`と監査を書き切る
+ * 必要があるため、期限切れのsignalを流用せずこの値で新しいsignalを作る。
+ * visibility timeout(既定60秒)の残り時間に収まる短い値にする。
+ */
+export const PREVIEW_FINALIZE_TIMEOUT_MS = 10_000;
+
+/**
  * メッセージ削除の失敗で業務結果を巻き戻さない。
  *
  * 例えば`ready`への更新後に削除だけ失敗した場合、その失敗を処理全体の失敗として
  * 扱うと、試行上限に達していれば成功済みのプレビューを`failed`へ書き換えてしまう。
  * 削除に失敗したメッセージはvisibility timeout経過後に再配信され、`pending`以外の
  * 資料として撮影せずに削除される(冪等)。分類だけを運用ログへ残す。
+ *
+ * 処理上限のsignalは渡さない。削除は「新しい業務処理」ではなく、確定した結果に
+ * 対する後始末であり、期限切れを理由に省くとメッセージが最大7日間再配信され続ける。
+ * 待ち続けないよう`PREVIEW_FINALIZE_TIMEOUT_MS`の独立したsignalを使う。
  */
 async function deleteMessageQuietly(
   dependencies: PreviewWorkerDependencies,
@@ -180,7 +204,10 @@ async function deleteMessageQuietly(
   documentId: string | null,
 ): Promise<void> {
   try {
-    await dependencies.deleteMessage(envelope);
+    await dependencies.deleteMessage(
+      envelope,
+      AbortSignal.timeout(PREVIEW_FINALIZE_TIMEOUT_MS),
+    );
   } catch (error) {
     dependencies.logger.logOperationEvent({
       event: "preview_message_delete_failed",
@@ -280,6 +307,8 @@ export async function runPreviewWorkerOnce(
   const documentId = envelope.message.documentId;
 
   // 前回の試行が`failed`更新の前に落ちた場合など、上限を超えた配信では撮影しない。
+  // 既に`ready`・`failed`が確定している資料はここでも書き換えない(`failPermanently`が
+  // 更新結果で判定する)。
   if (envelope.dequeueCount > dependencies.maxDequeueCount) {
     return failPermanently(dependencies, {
       envelope,
@@ -292,8 +321,12 @@ export async function runPreviewWorkerOnce(
   try {
     return await withProcessingDeadline(
       dependencies.processingTimeoutMs,
-      () =>
-        processMessage(dependencies, { envelope, documentId, correlationId }),
+      (signal) =>
+        processMessage(
+          dependencies,
+          { envelope, documentId, correlationId },
+          signal,
+        ),
     );
   } catch (error) {
     const errorCategory =
@@ -325,6 +358,14 @@ export async function runPreviewWorkerOnce(
   }
 }
 
+/**
+ * 1メッセージ分の処理本体。
+ *
+ * `signal`は処理上限(設計 §7.5)のsignalで、各段階の開始前(`step`)と各依存呼び出しへ
+ * そのまま渡す。期限を過ぎたら新しい外部呼び出しを始めず、進行中の撮影・Blob操作も
+ * 中止する。期限切れ後でも必要な後始末(メッセージ削除・恒久失敗の記録)は、
+ * このsignalを使わない経路(`deleteMessageQuietly`・`failPermanently`)で行う。
+ */
 async function processMessage(
   dependencies: PreviewWorkerDependencies,
   context: {
@@ -332,11 +373,12 @@ async function processMessage(
     documentId: string;
     correlationId: string;
   },
+  signal: AbortSignal,
 ): Promise<PreviewWorkerResult> {
   const { envelope, documentId, correlationId } = context;
 
-  const document = await step("database_failed", () =>
-    dependencies.findDocument(documentId),
+  const document = await step("database_failed", signal, () =>
+    dependencies.findDocument(documentId, signal),
   );
 
   // 削除済み・未存在の資料のHTMLは取得しない(設計 §10.4)。再配信されても
@@ -365,29 +407,37 @@ async function processMessage(
     return { outcome: "skipped", documentId, errorCategory: null };
   }
 
-  const html = await step("storage_failed", () =>
-    dependencies.fetchHtml(documentId),
+  const html = await step("storage_failed", signal, () =>
+    dependencies.fetchHtml(documentId, signal),
   );
-  const jpeg = await step("preview_failed", () =>
-    dependencies.capturePreview(html),
+  const jpeg = await step("preview_failed", signal, () =>
+    dependencies.capturePreview(html, signal),
   );
-  await step("storage_failed", () =>
-    dependencies.savePreview(documentId, jpeg),
+  await step("storage_failed", signal, () =>
+    dependencies.savePreview(documentId, jpeg, signal),
   );
 
-  const stored = await step("database_failed", () =>
-    dependencies.recordPreviewResult({
-      documentId,
-      previewStatus: "ready",
-      errorCategory: null,
-      correlationId,
-    }),
+  const stored = await step("database_failed", signal, () =>
+    dependencies.recordPreviewResult(
+      {
+        documentId,
+        previewStatus: "ready",
+        errorCategory: null,
+        correlationId,
+      },
+      signal,
+    ),
   );
 
   if (!stored) {
     // 撮影中に資料が削除された。保存したプレビューは参照されないため後始末する
     // (削除処理のBlob削除は既に走った後の可能性がある。設計 §10.4)。
-    await step("storage_failed", () => dependencies.discardPreview(documentId));
+    // 結果が確定したあとの後始末のため、処理上限のsignalではなく独立した上限を使う。
+    // 期限切れを理由に省くと、回収経路の無い孤児Blobがそのまま残る。
+    const finalizeSignal = AbortSignal.timeout(PREVIEW_FINALIZE_TIMEOUT_MS);
+    await step("storage_failed", finalizeSignal, () =>
+      dependencies.discardPreview(documentId, finalizeSignal),
+    );
     await deleteMessageQuietly(dependencies, envelope, correlationId, documentId);
     dependencies.logger.logOperationEvent({
       event: "preview_generation_skipped",
@@ -411,6 +461,13 @@ async function processMessage(
 /**
  * 恒久失敗。`failed`と監査を保存してからメッセージを削除する(設計 §7.5)。
  * 専用の失敗キューは設けない。
+ *
+ * ここでは**処理上限のsignalを使わない**。処理上限(`processingTimeoutMs`)は
+ * 「期限を過ぎてから新しい外部書き込みを始めない」ための仕組み(`processMessage`)
+ * だが、恒久失敗の記録だけはその例外にする。期限切れのsignalを渡すと`failed`も
+ * 監査も書けず、資料が`pending`のまま取り残されて表示が代替画像へ切り替わらない
+ * (設計 §10.2)。代わりに`PREVIEW_FINALIZE_TIMEOUT_MS`の独立したsignalを張り、
+ * 書き込みが visibility timeout を超えて滞留しないようにする。
  */
 async function failPermanently(
   dependencies: PreviewWorkerDependencies,
@@ -422,14 +479,18 @@ async function failPermanently(
   },
 ): Promise<PreviewWorkerResult> {
   const { envelope, documentId, correlationId, errorCategory } = context;
+  let recorded: boolean;
 
   try {
-    await dependencies.recordPreviewResult({
-      documentId,
-      previewStatus: "failed",
-      errorCategory,
-      correlationId,
-    });
+    recorded = await dependencies.recordPreviewResult(
+      {
+        documentId,
+        previewStatus: "failed",
+        errorCategory,
+        correlationId,
+      },
+      AbortSignal.timeout(PREVIEW_FINALIZE_TIMEOUT_MS),
+    );
   } catch (error) {
     // 監査・DB更新に失敗した場合はメッセージを削除しない。再配信時は
     // `dequeueCount > maxDequeueCount`の経路で撮影せずに再度`failed`を試みる。
@@ -449,6 +510,21 @@ async function failPermanently(
   }
 
   await deleteMessageQuietly(dependencies, envelope, correlationId, documentId);
+
+  if (!recorded) {
+    // 更新対象が無かった。資料が削除済みか、別の配信で既に`ready`・`failed`が
+    // 確定している(`updateDocumentPreviewStatus`は`failed`を`pending`の資料にだけ
+    // 書く)。撮影済みのプレビューを`failed`で塗り潰さないよう、状態も監査も
+    // 変えずにメッセージだけ削除する(設計 §7.5の冪等性、§11.1)。
+    dependencies.logger.logOperationEvent({
+      event: "preview_generation_skipped",
+      correlationId,
+      result: "success",
+      documentId,
+    });
+    return { outcome: "skipped", documentId, errorCategory: null };
+  }
+
   dependencies.logger.logOperationEvent({
     event: "preview_generation_failed",
     correlationId,

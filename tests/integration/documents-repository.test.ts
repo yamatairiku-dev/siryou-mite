@@ -12,6 +12,7 @@ import {
   InvalidCursorError,
   listDocumentsByOwner,
   markBlobCleanupCompleted,
+  searchDocumentsForAdmin,
 } from "~/lib/db/documents.server";
 import { insertAuditEvent } from "~/lib/db/audit-events.server";
 import { closePool, withTransaction } from "~/lib/db/pool.server";
@@ -155,6 +156,48 @@ describe("listDocumentsByOwner(cursor pagination)", () => {
     expect(collected).toEqual(expectedOrder);
   });
 
+  it("同一ミリ秒(マイクロ秒だけ異なる)の資料でも重複・欠落なくページングできる(T22, Q-038)", async () => {
+    // `pg`が返す`Date`はミリ秒までしか持てないため、`created_at`をミリ秒精度で
+    // cursor化すると同じミリ秒に複数件ある場合に取りこぼす(T22)。時刻に依存
+    // せず確実に再現させるため、`created_at`をマイクロ秒精度まで明示指定する。
+    const sameMillisecond = [
+      await addDocument({
+        ownerSubjectId: owner,
+        createdAt: "2026-03-01T00:00:00.100100Z",
+      }),
+      await addDocument({
+        ownerSubjectId: owner,
+        createdAt: "2026-03-01T00:00:00.100200Z",
+      }),
+      await addDocument({
+        ownerSubjectId: owner,
+        createdAt: "2026-03-01T00:00:00.100300Z",
+      }),
+    ];
+    // 挿入順が古い順(`.100100Z` < `.100200Z` < `.100300Z`)なので、新しい順の
+    // 期待値は挿入順を逆にしたものになる。`created_at`は`pg`の`Date`(ミリ秒精度)
+    // に丸められて全件同値になり得るため、期待順の算出にDate比較は使わない。
+    const expectedOrder = [...sameMillisecond].reverse().map((document) => document.id);
+
+    const collected: string[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < sameMillisecond.length; page += 1) {
+      const result: Awaited<ReturnType<typeof listDocumentsByOwner>> =
+        await listDocumentsByOwner(
+          { ownerSubjectId: owner, limit: 1, cursor },
+          client,
+        );
+      collected.push(...result.documents.map((document) => document.id));
+      cursor = result.nextCursor;
+      if (!cursor) {
+        break;
+      }
+    }
+
+    expect(cursor).toBeNull();
+    expect(collected).toEqual(expectedOrder);
+  });
+
   it("他人の資料のcursorを渡しても、自分の資料だけを返す", async () => {
     const theirs = await addDocument({
       ownerSubjectId: otherOwner,
@@ -219,6 +262,72 @@ describe("listDocumentsByOwner(cursor pagination)", () => {
     expect(decodeDocumentCursor(first.nextCursor ?? "").id).toBe(
       first.documents[0]?.id,
     );
+  });
+});
+
+describe("searchDocumentsForAdmin(cursor pagination, 設計 §5.6)", () => {
+  it("所有者を跨いでも新しい順に返し、cursorで重複・欠落なくページングできる", async () => {
+    const mine = await addDocument({
+      ownerSubjectId: owner,
+      createdAt: "2026-02-02T00:00:00Z",
+    });
+    const theirs = await addDocument({
+      ownerSubjectId: otherOwner,
+      createdAt: "2026-02-03T00:00:00Z",
+    });
+
+    const collected: string[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 2; page += 1) {
+      const result: Awaited<ReturnType<typeof searchDocumentsForAdmin>> =
+        await searchDocumentsForAdmin({ limit: 1, cursor }, client);
+      collected.push(...result.documents.map((document) => document.id));
+      cursor = result.nextCursor;
+      if (!cursor) {
+        break;
+      }
+    }
+
+    expect(cursor).toBeNull();
+    expect(collected).toEqual([theirs.id, mine.id]);
+  });
+
+  it("同一ミリ秒(マイクロ秒だけ異なる)の資料でも重複・欠落なくページングできる(T22, Q-038)", async () => {
+    // `listDocumentsByOwner`と同じ理由(T22)で、`created_at`をマイクロ秒精度まで
+    // 明示指定して確実に再現させる。所有者を跨いで検索する点だけが異なる。
+    const sameMillisecond = [
+      await addDocument({
+        ownerSubjectId: owner,
+        createdAt: "2026-03-02T00:00:00.200100Z",
+      }),
+      await addDocument({
+        ownerSubjectId: otherOwner,
+        createdAt: "2026-03-02T00:00:00.200200Z",
+      }),
+      await addDocument({
+        ownerSubjectId: owner,
+        createdAt: "2026-03-02T00:00:00.200300Z",
+      }),
+    ];
+    // 挿入順が古い順なので、新しい順の期待値は挿入順を逆にしたものになる
+    // (`created_at`は`pg`の`Date`(ミリ秒精度)に丸められて全件同値になり得るため、
+    // 期待順の算出にDate比較は使わない)。
+    const expectedOrder = [...sameMillisecond].reverse().map((document) => document.id);
+
+    const collected: string[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < sameMillisecond.length; page += 1) {
+      const result: Awaited<ReturnType<typeof searchDocumentsForAdmin>> =
+        await searchDocumentsForAdmin({ limit: 1, cursor }, client);
+      collected.push(...result.documents.map((document) => document.id));
+      cursor = result.nextCursor;
+      if (!cursor) {
+        break;
+      }
+    }
+
+    expect(cursor).toBeNull();
+    expect(collected).toEqual(expectedOrder);
   });
 });
 

@@ -162,7 +162,8 @@
 - 内容: Easy Authのprincipal headerをfixtureで再現する。本番で有効になり得る認証bypassは作らない
 - 完了条件: `npm run test:e2e` 成功
 
-### T22 [ ] 資料一覧cursorのミリ秒精度による取りこぼしの修正
+### T22 [x] 資料一覧cursorのミリ秒精度による取りこぼしの修正
+- 実装メモ: `documentColumns` に `to_char(created_at AT TIME ZONE 'UTC', ...US"Z"')` のcursor専用列 `created_at_iso` を足し、`listDocumentsByOwner`・`searchDocumentsForAdmin` の `nextCursor` をこの値から作る(T17のaudit側と同じ式・命名・Zod検証)。cursor比較は `(created_at, id) < ($n::timestamptz, $m::uuid)` でマイクロ秒精度を保ち、`owner_subject_id` での絞り込みと `requireAdmin` より前にSQLを実行しない性質は不変。修正前コードでは新しい結合テスト2本が実際に落ちることをレビューで確認済み。旧ミリ秒精度cursorは丸めが切り捨て方向で重複・無限ループを起こさないため明示的拒否は入れていない(Q-062)
 - 設計: §5.2, §5.6
 - 依存: T17
 - 内容: `services/shared/db/documents.ts` の `encodeDocumentCursor` は `pg` が返す `Date`(ミリ秒精度)由来のため、`created_at` の小数秒が切り捨てられ、同一ミリ秒の資料がページ境界にあると次ページで取りこぼされる(T17のレビューで実在を確認。丸めは切り捨て方向のため重複は起きず欠落のみ)。T17でaudit側に入れた対策と同じく、`documentColumns` に `to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')` のcursor専用列を足してマイクロ秒精度で往復させる。影響は `/app` の一覧(T10)と `/admin/documents` の検索(T16)

@@ -33,6 +33,9 @@ function documentRow(overrides: Record<string, unknown> = {}) {
     warning_codes: ["script_disabled"],
     status: "active",
     created_at: new Date("2026-01-02T03:04:05.000Z"),
+    // cursorはDBが返すマイクロ秒精度の値を使う(`Date`はミリ秒までしか持てず、
+    // 同じミリ秒の資料を取りこぼすため。Q-038)。
+    created_at_iso: "2026-01-02T03:04:05.123456Z",
     deleted_at: null,
     deleted_by_subject_id: null,
     blob_cleanup_pending: false,
@@ -89,6 +92,8 @@ describe("listDocumentsByOwner", () => {
     expect(call.text).toContain("owner_subject_id = $1");
     expect(call.text).toContain("status = 'active'");
     expect(call.text).toContain("ORDER BY created_at DESC, id DESC");
+    // cursor専用のマイクロ秒精度列(設計 §5.2, §5.6。Q-038)。
+    expect(call.text).toContain("AS created_at_iso");
     expect(call.values).toEqual([ownerSubjectId, 21]);
     // 利用者入力をSQL文字列へ連結していないこと。
     expect(call.text).not.toContain(ownerSubjectId);
@@ -123,12 +128,16 @@ describe("listDocumentsByOwner", () => {
     ]);
   });
 
-  it("次ページがある場合だけ最後の行からcursorを作る", async () => {
+  it("次ページがある場合だけ最後の行からcursorを作る(ミリ秒へ丸めた値ではなくマイクロ秒精度の値を使う)", async () => {
     const rows = [
-      documentRow({ created_at: new Date("2026-01-03T00:00:00.000Z") }),
+      documentRow({
+        created_at: new Date("2026-01-03T00:00:00.000Z"),
+        created_at_iso: "2026-01-03T00:00:00.123456Z",
+      }),
       documentRow({
         id: otherDocumentId,
         created_at: new Date("2026-01-02T00:00:00.000Z"),
+        created_at_iso: "2026-01-02T00:00:00.654321Z",
       }),
     ];
     const { executor } = createStubExecutor([rows]);
@@ -141,7 +150,7 @@ describe("listDocumentsByOwner", () => {
     expect(page.documents).toHaveLength(1);
     expect(page.nextCursor).not.toBeNull();
     expect(decodeDocumentCursor(page.nextCursor ?? "")).toEqual({
-      createdAt: "2026-01-03T00:00:00.000Z",
+      createdAt: "2026-01-03T00:00:00.123456Z",
       id: documentId,
     });
   });
@@ -651,8 +660,9 @@ describe("searchDocumentsForAdmin", () => {
     const call = lastCall(second.calls);
     expect(call.text).toContain("(created_at, id) < ($1::timestamptz, $2::uuid)");
     expect(call.text).not.toContain("OFFSET");
+    // ミリ秒へ丸めた値ではなく、DBのマイクロ秒精度の値(`created_at_iso`)で続きを取得する。
     expect(call.values).toEqual([
-      "2026-01-02T03:04:05.000Z",
+      "2026-01-02T03:04:05.123456Z",
       "11111111-1111-4111-8111-111111111111",
       3,
     ]);

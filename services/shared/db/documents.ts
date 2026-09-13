@@ -99,13 +99,24 @@ const cursorPayloadSchema = z
  * keyset paginationのcursor。`(created_at, id)`だけを持ち、署名しない。
  * cursorを改ざんしても、一覧SQLが常に`owner_subject_id`で絞り込むため
  * 他人の資料は返らない(位置の指定だけに使う値)。
+ *
+ * `createdAt`には文字列も渡せる。`timestamptz`はマイクロ秒まで保持するのに対し
+ * JavaScriptの`Date`はミリ秒までしか持てず、`Date`から作ったcursorでは同じ
+ * ミリ秒に登録された資料を取りこぼす(丸めが切り捨て方向のため、後続の行が
+ * cursorの位置より前にあると誤判定されて欠落する)。そのため一覧・検索の内部では
+ * DBが返すマイクロ秒精度の文字列(`created_at_iso`)をそのまま使う
+ * (T17で監査履歴に入れた対策と同じ。Q-038)。呼び出し側が`Date`を渡す経路
+ * (テストなど)は従来どおりミリ秒精度になる。
  */
 export function encodeDocumentCursor(document: {
-  createdAt: Date;
+  createdAt: Date | string;
   id: string;
 }): string {
   const payload = JSON.stringify({
-    createdAt: document.createdAt.toISOString(),
+    createdAt:
+      document.createdAt instanceof Date
+        ? document.createdAt.toISOString()
+        : document.createdAt,
     id: document.id,
   });
   return Buffer.from(payload, "utf8").toString("base64url");
@@ -131,6 +142,11 @@ export function decodeDocumentCursor(value: string): {
 
 /**
  * SELECTで取得するカラム。固定文字列だけを組み立て、利用者入力は含めない。
+ *
+ * `created_at_iso`はcursor専用のマイクロ秒精度の値(`pg`が返す`Date`はミリ秒
+ * までしか保持できず、同じミリ秒の資料を取りこぼすため。Q-038)。`INSERT`・
+ * `UPDATE`の`RETURNING`もこの列リストを共有するが、`toDocumentRecord`は
+ * この値を使わない(表示・戻り値には引き続き`created_at`の`Date`を使う)。
  */
 const documentColumns = `id,
        owner_subject_id,
@@ -142,6 +158,8 @@ const documentColumns = `id,
        warning_codes,
        status,
        created_at,
+       to_char(created_at AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_iso,
        deleted_at,
        deleted_by_subject_id,
        blob_cleanup_pending`;
@@ -158,6 +176,8 @@ type DocumentRow = {
   warning_codes: string[] | null;
   status: string;
   created_at: Date;
+  /** cursor用のマイクロ秒精度のUTC ISO日時。表示・戻り値には`created_at`を使う。 */
+  created_at_iso: string;
   deleted_at: Date | null;
   deleted_by_subject_id: string | null;
   blob_cleanup_pending: boolean;
@@ -260,11 +280,17 @@ export async function listDocumentsByOwner(
   const rows = result.rows.slice(0, limit);
   const documents = rows.map(toDocumentRecord);
   const hasNext = result.rows.length > limit;
-  const last = documents[documents.length - 1];
+  const lastRow = rows[rows.length - 1];
 
   return {
     documents,
-    nextCursor: hasNext && last ? encodeDocumentCursor(last) : null,
+    nextCursor:
+      hasNext && lastRow
+        ? encodeDocumentCursor({
+            createdAt: lastRow.created_at_iso,
+            id: lastRow.id,
+          })
+        : null,
   };
 }
 
@@ -618,12 +644,19 @@ export async function searchDocumentsForAdmin(
     values,
   );
 
-  const documents = result.rows.slice(0, criteria.limit).map(toDocumentRecord);
+  const rows = result.rows.slice(0, criteria.limit);
+  const documents = rows.map(toDocumentRecord);
   const hasNext = result.rows.length > criteria.limit;
-  const last = documents[documents.length - 1];
+  const lastRow = rows[rows.length - 1];
 
   return {
     documents,
-    nextCursor: hasNext && last ? encodeDocumentCursor(last) : null,
+    nextCursor:
+      hasNext && lastRow
+        ? encodeDocumentCursor({
+            createdAt: lastRow.created_at_iso,
+            id: lastRow.id,
+          })
+        : null,
   };
 }

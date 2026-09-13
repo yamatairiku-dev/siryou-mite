@@ -409,3 +409,9 @@
 - 置いた仮定: E2Eは削除的なDBクリーンアップを行わず、principalの`oid`(ひいてはメールアドレス・表示名)をテストごとにランダムなUUIDから生成することでテスト間の分離だけを担保する(`tests/e2e/helpers/principal.ts`の`createPersona`)。devcontainerの共有PostgreSQL・Azuriteには実行のたびに資料・監査行とBlob(`documents-e2e`container)が残り続けるが、devcontainer専用の使い捨てデータであり本番へは影響しない
 - 影響範囲: `tests/e2e/`全体。長期間の反復実行でローカルDB・Azuriteのデータ量が増え続けるため、必要であれば`docker compose down -v`等でdevcontainerのvolumeを作り直す運用を`docs/OPERATIONS.md`側で案内する運用作業が別途必要(このタスクの範囲外)
 - 回答:
+
+### Q-062 [未回答] T22: 旧形式(ミリ秒精度)の`documents`一覧cursorをそのまま受け付ける
+- 状況: T22で`encodeDocumentCursor`/`documentColumns`をT17(Q-038)と同じ`to_char`方式のマイクロ秒精度に変更したが、cursorのJSON形状(`{createdAt: <ISO日時文字列>, id: <uuid>}`)自体は変えていない。`cursorPayloadSchema`は`z.iso.datetime({ offset: true })`で精度を問わず検証するため、修正前にブラウザ側(`/app`のfetcherの`nextCursor`state、`/admin/documents`のクエリ文字列)が保持していたミリ秒精度のcursorも、修正後のコードでSQL文法エラーにはならずそのまま`decodeDocumentCursor`を通り、行値比較に使われる
+- 置いた仮定: 明示的な形式バージョニングやfail closedの拒否は追加していない。理由は次の2点。(1) 影響が起きるのは「デプロイをまたいで保持され続けたcursor」だけで、`/app`のcursorはReactのuseStateで保持されコンポーネントのマウント中しか生きず、`/admin/documents`のcursorもそのURLのクエリ文字列でページ内リンクをたどる間だけ使われるため、デプロイの瞬間にちょうどそのページを開いていた場合の1回の「もっと見る」操作に限られる。(2) 旧cursorを拒否して`InvalidCursorError`にしても、利用者にはエラー画面が出るだけで、精度が足りないことによる軽微な取りこぼし(次ページ内で同一ミリ秒の行を1件だけ欠落させる可能性)より体験が悪化する。以上からfail closedにはせず、経過措置として黙って受理する
+- 影響範囲: `services/shared/db/documents.ts`(`encodeDocumentCursor`/`decodeDocumentCursor`/`cursorPayloadSchema`は変更していない)。人が拒否すべきと判断する場合は`cursorPayloadSchema`の`createdAt`にマイクロ秒6桁の正規表現(例: `/\.\d{6}Z$/`)を足せばfail closedにできる
+- 回答:

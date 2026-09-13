@@ -18,7 +18,7 @@
 ### Q-001 [未回答] T01: CIワークフローが `npm run verify` を呼んでいない(エージェント対象外の提案)
 - 状況: `.github/workflows/ci.yml` は `typecheck` / `test:coverage` / `build` を個別に実行しており、T01で追加した `typecheck:services` / `build:services` がCIでゲートされない(設計§19.1「`npm run verify`にservice typecheck/buildを含める」)。`.github/` はエージェントの対象外
 - 置いた仮定: ローカルの `npm run verify` には含めた。CI側は変更していない
-- 影響範囲: 提案する差分は `ci.yml` の3ステップを `npm run verify` 1本に置き換えるだけ(後続タスクでPostgreSQL・Azuriteのservice containerが必要になった際に合わせて対応するのが効率的)
+- 影響範囲: 提案する差分は `ci.yml` の3ステップを `npm run verify` 1本に置き換えるだけ(後続タスクでPostgreSQL・Azuriteのservice containerが必要になった際に合わせて対応するのが効率的)。T20でPostgreSQL・Azuriteのservice containerが実際に必要になったため、確定差分は **Q-061** に記録した
 - 回答:
 
 ### Q-002 [未回答] T01: 共有Node.js imageに `build/services` が含まれていない
@@ -358,4 +358,54 @@
 - 置いた仮定: (1)`MAINTENANCE_JOB_MAX_RUNTIME_SECONDS`(既定900秒)の`AbortSignal`を「新しいバッチ・新しい対象を始めない」意味で使い、実行中の1件は中断しない。すべて冪等なので残りは翌日の実行が続きから処理する。応答しないI/Oに備え、上限+60秒で強制終了する (2)DB操作は`MAINTENANCE_BATCH_SIZE`(既定500)のバッチに区切り、削除件数がバッチ未満になるまで繰り返す (3)Blob削除の再試行対象は`(deleted_at, id)`のkeyset cursorで進める。削除に失敗した資料はフラグが残るため、先頭から取り直す方式だと同じ資料を掴み続けて後続が進まない。cursorの`deleted_at`は`Date`ではなく**DBが返した文字列のまま**渡す(`timestamptz`はmicrosecond精度、JavaScriptの`Date`はmillisecond精度で、変換すると同じmillisecond内の行が次のバッチにも現れて無限ループになり得る) (4)1つの処理が例外で落ちても残り4つは実行し、失敗が1件でもあれば終了コード1にする
 - 補足(レビュー指摘の反映): 各処理は件数カウンタを**引数で受け取って加算する**形にした(戻り値で返す形だと、例外が出た時点までに完了していた件数が`maintenance_task_finished`から消え、設計§17の監視値が実際より少なく見える)。また、Blob削除後の`completeBlobCleanup`が更新0行だった場合は`maintenance_blob_cleanup_flag_unchanged`(`database_failed`)として別eventで記録する。Blob削除自体は完了しているため件数は成功として数えるが、その資料は翌日以降も再試行対象として残り続けるため観測できるようにした
 - 影響範囲: `services/maintenance/job.ts`、`services/maintenance/env.ts`、`services/maintenance/index.ts`、`services/shared/db/maintenance.ts`、`tests/unit/services/maintenance-job.test.ts`
+- 回答:
+
+### Q-058 [未回答] T20: プレビュー生成(timeout・再試行・失敗時の代替画像)をE2E対象外にした
+- 状況: 設計§18.3は「プレビューtimeout、再試行、失敗時の代替画像」をE2Eシナリオに含むが、Preview JobはPlaywright(Chromium)を使う別コンテナ実行(設計§7.5, §7.6)で、Web・Displayの`webServer`だけを起動するE2E構成には含めていない(タスク司令塔の指示どおり)。timeout・再試行・恒久失敗時`failed`更新は`tests/integration/preview-worker.test.ts`・`tests/integration/preview-capture.test.ts`(T18)で結合テスト済み
+- 置いた仮定: E2Eではアップロード後の`previewStatus`が`pending`のまま(Preview Jobを起動しないため)であることを前提にテストを組み、プレビュー画像そのものの検証(処理中画像・代替画像の切り替え)は行わない
+- 影響範囲: `tests/e2e/upload-and-display.spec.ts`ほか。Preview JobをE2Eに含める場合はChromiumを含む`Dockerfile.preview`ベースのworkerプロセスをPlaywrightの`webServer`(または別の起動ステップ)として追加し、Queueを実際に消費させる構成が必要(範囲外)
+- 回答:
+
+### Q-059 [未回答] T20: `/.auth/me`と実Entra IDログインはE2E対象外にした
+- 状況: 設計§18.3は「`/.auth/me`とアプリで複数所属コード、`User`・`Admin`が一致すること」を挙げるが、`/.auth/me`はApp Service Easy Authのplatform機能であり、アプリ自身が実装するrouteではない。E2Eはアプリ本体だけを起動し、Easy Auth platform自体は稼働させない(設計§18.3「実Entra IDログインはrelease確認時に担当者がstagingで確認する」)
+- 置いた仮定: 同じ検証意図を、principal fixtureに複数`groups`を含めてアップロードし、`/admin/audit`の監査履歴に同じ所属コードがそのまま記録されることを確認する形で代替した(`tests/e2e/admin.spec.ts`)。`/.auth/me`と実IDトークンでの検証はできていない
+- 影響範囲: `tests/e2e/admin.spec.ts`、`tests/e2e/auth.spec.ts`。実Entra IDでの`/.auth/me`一致確認はstaging環境での手動確認に委ねる
+- 回答:
+
+### Q-061 [未回答] T20: CIワークフローがE2Eを実行できる状態になっていない(エージェント対象外の確定差分)
+- 状況: T20で`npm run test:e2e`はPostgreSQL・Azurite・Chromiumと`AUTH_MODE=easyauth`(Web)・grant検証鍵(Display)を前提にするようになったが、`.github/workflows/ci.yml`(51-57行目付近の`E2E tests`ステップとjob全体)は次の3点でこの前提を満たせず、CI上では`globalSetup`のmigration段階(`tests/e2e/global-setup.ts`が`DATABASE_URL`のhostへ接続しようとする箇所)で必ず失敗する。`.github/`はエージェントの対象外のため、ここに確定差分として記録するだけでファイルは変更していない
+  1. **service containerが無い**: `jobs.verify`に`postgres`・`azurite`のservice containerが定義されていない(`tests/integration`も同様に必要とするため、本来はT01〜T03の時点で必要だったはずだが、結合テストがCIで実行されていない=Q-001の状態のまま放置されている)。追加する場合は例:
+     ```yaml
+     services:
+       postgres:
+         image: postgres:18.4-alpine
+         env:
+           POSTGRES_USER: siryou_mite
+           POSTGRES_PASSWORD: local-development-password
+           POSTGRES_DB: siryou_mite
+         ports: ["5432:5432"]
+         options: >-
+           --health-cmd "pg_isready -U siryou_mite -d siryou_mite"
+           --health-interval 5s --health-timeout 5s --health-retries 10
+       azurite:
+         image: mcr.microsoft.com/azure-storage/azurite:3.36.0
+         ports: ["10000:10000", "10001:10001"]
+     ```
+  2. **`DATABASE_URL`・`AZURE_STORAGE_CONNECTION_STRING`がjobへ渡っていない**: `tests/e2e/helpers/constants.ts`の既定値はdevcontainerのDocker network名(`postgres`・`azurite`)を前提にしており、GitHub Actionsのservice containerはホストネットワーク上の`localhost`で公開される。job(またはE2Eステップ)へ次を追加する必要がある。
+     ```yaml
+     env:
+       DATABASE_URL: postgresql://siryou_mite:local-development-password@localhost:5432/siryou_mite
+       AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;QueueEndpoint=http://localhost:10001/devstoreaccount1;"
+     ```
+     (`tests/e2e/global-setup.ts`・`tests/integration/helpers/schema.ts`・`storage.ts`の許可host一覧に`localhost`は既に含まれているため、値さえ渡せばコード変更は不要)
+  3. **`E2E tests`ステップの`env: NODE_ENV: development / AUTH_MODE: dev`が古い**: これはT20より前(dev-mode専用ログインを使っていた頃)の設定の残骸で、現在の`playwright.config.ts`は`webServer.env`で`NODE_ENV`・`AUTH_MODE=easyauth`を明示的に指定するため実害はない(`pg`のspawn実装は`{...process.env, ...options.env}`で`options.env`が勝つ)が、紛らわしいため削除するのが望ましい
+  - なお`jobs.verify`のjob共通envは`AUTH_MODE: entra`・`ENTRA_CLIENT_ID`・`ENTRA_CLIENT_SECRET`・`ENTRA_REDIRECT_URI`など、現在の`app/lib/env.server.ts`のスキーマ(`AUTH_MODE`は`dev`|`easyauth`のみ、`ENTRA_CLIENT_ID`等は存在しない)と一致しない古い値のままになっている。これはT20固有の問題ではなく、CIが`npm run typecheck`/`test:coverage`/`build`を通せている(=これらのstepはこのjob共通envを直接読まない)ことから見えていなかった既存の乖離で、Q-001とあわせて解消が必要
+- 置いた仮定: ローカル(devcontainer)の`npm run test:e2e`・`npm run verify`はどちらも成功することを確認済み(本報告のTESTS参照)。CI側の修正は上記のとおり`.github/workflows/ci.yml`の変更が必要なため、エージェントでは実施していない
+- 影響範囲: `.github/workflows/ci.yml`(変更していない)。人がこのQを確認してから対応する
+- 回答:
+
+### Q-060 [未回答] T20: E2Eが作成する`documents`・`audit_events`行をテスト後に削除していない
+- 状況: `audit_events`は追記専用trigger(T19, Q-052)で、`retain_until`(記録から1年)経過前はテーブル所有者でもDELETEできない。`documents.id`は`audit_events.document_id`のFK(ON DELETE指定なし)で参照されるため、アップロード監査が1件でも存在する資料行はDELETEしようとすると外部キー制約違反になり、`documents`側も物理削除できない
+- 置いた仮定: E2Eは削除的なDBクリーンアップを行わず、principalの`oid`(ひいてはメールアドレス・表示名)をテストごとにランダムなUUIDから生成することでテスト間の分離だけを担保する(`tests/e2e/helpers/principal.ts`の`createPersona`)。devcontainerの共有PostgreSQL・Azuriteには実行のたびに資料・監査行とBlob(`documents-e2e`container)が残り続けるが、devcontainer専用の使い捨てデータであり本番へは影響しない
+- 影響範囲: `tests/e2e/`全体。長期間の反復実行でローカルDB・Azuriteのデータ量が増え続けるため、必要であれば`docker compose down -v`等でdevcontainerのvolumeを作り直す運用を`docs/OPERATIONS.md`側で案内する運用作業が別途必要(このタスクの範囲外)
 - 回答:

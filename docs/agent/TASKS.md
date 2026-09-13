@@ -155,7 +155,8 @@
 
 ## Phase 4: 仕上げ
 
-### T20 [~] E2Eテスト
+### T20 [x] E2Eテスト
+- 実装メモ: `playwright.config.ts`の`webServer`をWeb・Displayの配列にし、`AUTH_MODE=easyauth`・Ed25519鍵(config評価時に1回だけ生成しWeb=秘密鍵/Display=公開鍵として渡す)・Azurite接続文字列・DB接続文字列等をdevcontainerの値から引き継いで渡す。`globalSetup`(`tests/e2e/global-setup.ts`)で`db:migrate`とE2E専用container/queue(`documents-e2e`/`preview-generation-e2e`)の`createIfNotExists`を行う。認証は`tests/e2e/helpers/principal.ts`が組み立てる`X-MS-CLIENT-PRINCIPAL`のbase64 JSONをPlaywrightの`extraHTTPHeaders`で送るだけで、アプリ・serviceのコードは一切変更していない。テスト間の分離は`oid`をテストごとにランダムなUUIDにする方式(所有者・監査行が自然に分かれる)で行い、DBの破壊的クリーンアップは行っていない(監査の追記専用trigger・`documents`とのFKにより、アップロード監査のある資料行は物理削除できないため。Q-060)。プレビュー生成(timeout・再試行・代替画像)はPreview Job(別コンテナ・Chromium)が必要なためE2E対象外(Q-058)、`/.auth/me`と実Entra IDログインもEasy Auth platform機能のため対象外とし、複数所属コードの一致は監査履歴画面での確認で代替した(Q-059)。E2E専用ポートは3900/3910(開発サーバーと`.env.example`の`DISPLAY_ORIGIN`に衝突させない)。CSPは設計§9.2の12ディレクティブを実装からimportせず literal で完全一致検証し、target省略の絶対リンクが確認画面を経由せずiframe内で遷移することも検証する。CIは`.github/`がエージェント対象外のため未変更で、必要な確定差分(service container・接続文字列・`AUTH_MODE`上書き削除)はQ-061に記録した
 - 設計: §18.3
 - 依存: T10, T13, T14, T16, T17
 - 内容: Easy Authのprincipal headerをfixtureで再現する。本番で有効になり得る認証bypassは作らない

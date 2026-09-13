@@ -97,7 +97,12 @@ claim typeで検出して403で拒否し、Graphへ自動fallbackせずEntra側�
 grantはアプリJavaScriptがhidden formのPOST bodyでiframeへ送り、URL、Cookie、ログへ
 含めません。JavaScript無効時の表示fallbackは設けません。
 
-- HTMLは改変せず、`html/{documentId}/document.html`のprivate Blobとして保存する
+- HTMLは改変せず、`html/{documentId}/document.html`のprivate Blobとして保存する。
+  静止画プレビューは`preview/{documentId}/preview.jpg`に保存する。どちらも資料IDから
+  決定的に導出し(`services/shared/storage.ts`の`documentHtmlBlobKey`/
+  `documentPreviewBlobKey`)、キーそのものをDBへ保持しない
+- プレビュー生成のQueueメッセージは`schemaVersion`と`documentId`だけを持つJSONで、
+  HTML本文・ファイル名・利用者情報は含めない(設計 §7.5)
 - 表示サービスはNode.js標準HTTPサーバーとし、`GET /health`と`POST /display`だけを持つ
 - 表示サービスはBlob取得後に閲覧監査を書き、成功してからHTMLを返す
 - CSPとsandboxでJavaScript、外部resource、フォーム、ダウンロード、状態保存を無効化する

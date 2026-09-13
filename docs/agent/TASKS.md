@@ -169,7 +169,8 @@
 - 内容: `services/shared/db/documents.ts` の `encodeDocumentCursor` は `pg` が返す `Date`(ミリ秒精度)由来のため、`created_at` の小数秒が切り捨てられ、同一ミリ秒の資料がページ境界にあると次ページで取りこぼされる(T17のレビューで実在を確認。丸めは切り捨て方向のため重複は起きず欠落のみ)。T17でaudit側に入れた対策と同じく、`documentColumns` に `to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')` のcursor専用列を足してマイクロ秒精度で往復させる。影響は `/app` の一覧(T10)と `/admin/documents` の検索(T16)
 - 完了条件: 同一ミリ秒に複数件ある場合でも重複・欠落なくページングできることを結合テストで確認(Q-038)
 
-### T21 [ ] ドキュメント整合と引き継ぎ
+### T21 [x] ドキュメント整合と引き継ぎ
+- 実装メモ: `README.md` をテンプレート汎用文面から「資料みて！」固有の説明(概要・4コンポーネント構成・セットアップ・Display/Preview/Maintenanceの起動方法・テスト実行方法)へ書き換えた。`docs/ARCHITECTURE.md`・`docs/OPERATIONS.md` は各タスクの実装時点で既に実装へ合わせて更新済みだったため、Blobキー(`preview/{id}/preview.jpg`)とQueueメッセージ形の追記、`.env.example`の基本変数(`NODE_ENV`・`PORT`・`APP_NAME`・`APP_ORIGIN`・`AUTH_MODE`・`SESSION_SECRET`・`SESSION_MAX_AGE_SECONDS`・`ENTRA_TENANT_ID`)をWeb環境変数表へ追加する差分に留めた。`docs/agent/QUESTIONS.md`(Q-001〜Q-062、Q-002以外未回答)を分類・要約し、production依存の追加理由(`docs/agent/DEPENDENCIES.md`要約)、動作確認結果、エージェント対象外の残作業とあわせて `docs/agent/HANDOFF.md` を新規作成した。`app/root.tsx`の`<title>`が`APP_NAME`環境変数を反映していない(静的文字列のまま)食い違いを見つけたが、コードは変更せずHANDOFF.mdの「既知の制約」に記録した
 - 依存: T20
 - 内容: `README.md`、`docs/ARCHITECTURE.md`、`docs/OPERATIONS.md` を実装に合わせて更新し、PR本文の下書きを `docs/agent/HANDOFF.md` にまとめる
 - 完了条件: `npm run verify` と `npm run test:e2e` 成功

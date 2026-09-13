@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 describe("サービスのエントリーポイント", () => {
-  it.each([
-    ["../../../services/preview/index", "preview", "T18"],
-    ["../../../services/maintenance/index", "maintenance", "T19"],
-  ] as const)(
+  it.each([["../../../services/maintenance/index", "maintenance", "T19"]] as const)(
     "%s は自身の名称と担当タスクを説明する",
     async (modulePath, serviceName, taskId) => {
       const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -21,6 +18,22 @@ describe("サービスのエントリーポイント", () => {
       logSpy.mockRestore();
     },
   );
+
+  it("preview は1実行1メッセージであることを説明し、importだけでは起動しない(T18で実装済み)", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const service = await import("../../../services/preview/index");
+
+    expect(service.SERVICE_NAME).toBe("preview");
+    expect(service.describeService()).toContain("preview");
+    // 設計 §7.5「1実行で1メッセージだけを処理する」。
+    expect(service.describeService()).toContain("one preview generation message per run");
+
+    // 環境変数の検証もQueue受信もimport時には行わない。
+    expect(logSpy).not.toHaveBeenCalled();
+
+    logSpy.mockRestore();
+  });
 
   it("display は公開する経路を説明し、importだけでは起動しない(T12で実装済み)", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});

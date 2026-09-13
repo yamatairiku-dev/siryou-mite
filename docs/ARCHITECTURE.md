@@ -295,16 +295,23 @@ services/
   display/headers.ts      表示レスポンスのCSP・sandbox(設計 §9.2)
   display/dependencies.ts DisplayのDB・Blobクライアント組み立て
   display/env.ts          Display用環境変数schema
-  preview/index.ts        Preview Job（プレビュー生成ワーカー）のエントリーポイント
+  preview/index.ts        Preview Job（プレビュー生成ワーカー）のエントリーポイント(環境変数検証・Job実行上限・終了コード)
+  preview/worker.ts       1実行1メッセージの処理手順(dequeueCount判定・冪等性・失敗分類)
+  preview/capture.ts      Playwright(Chromium)での撮影と安全設定(sandbox有効・JS無効・通信遮断)
+  preview/dependencies.ts PreviewのQueue・DB・Blob・撮影の組み立て
   preview/env.ts          Preview Job用環境変数schema
   maintenance/index.ts     Maintenance Job（定期保守）のエントリーポイント
   maintenance/env.ts      Maintenance Job用環境変数schema
 tsconfig.services.json    services/専用のTypeScript設定。build/services/へ出力
+Dockerfile                Web・Display・Migration・Maintenance共通のNode.js image
+Dockerfile.preview        Preview Job専用image（Playwright公式Ubuntu image + Chromium）
 ```
 
 - `services/<name>/index.ts`をコンテナのentrypointとし、Web・Migration・Maintenanceと
   同じNode.js用Docker imageから`node build/services/<name>/index.js`を異なるcommandで
-  起動する想定にする（設計 §7.6）。Preview Jobだけは別途Chromiumを含む専用imageを使う。
+  起動する想定にする（設計 §7.6）。Preview Jobだけは別途Chromiumを含む専用image
+  (`Dockerfile.preview`、Playwright公式Ubuntu imageを`@playwright/test`と同じversionで固定)を
+  使う。imageは合計2種類。
 - `tsconfig.services.json`は`app/`を含めず、Node.js 24のESM(`module`/`moduleResolution`:
   `NodeNext`)、`strict`、`outDir: build/services`で完結する。ルートの`tsconfig.json`は
   `services`と`build`を`exclude`し、Web側のtypecheckと設定が混ざらないようにする。
@@ -317,8 +324,9 @@ tsconfig.services.json    services/専用のTypeScript設定。build/services/�
   `rootDir: services`制約により`app/`をimportできないための意図した重複とする。
 - サービス間で共有したいコード（DB接続、Blob/Queueクライアント、運用ログなど）が
   増えた場合も同様に`services/shared/`へ追加する。Display(`services/display/`)は実装済みで、
-  Preview・Maintenanceの`index.ts`は引き続き起動確認用の最小実装（担当タスクを示す
-  コメント付き）であり、業務ロジックはT18(Preview)、T19(Maintenance)で追加する。
+  Display(`services/display/`)とPreview(`services/preview/`)は実装済みで、
+  Maintenanceの`index.ts`は引き続き起動確認用の最小実装（担当タスクを示すコメント付き）
+  であり、業務ロジックはT19で追加する。
 - Dockerfileのbuild stageは`npm run build`（Web）に続けて`npm run build:services`を
   実行し、`build/client`・`build/server`・`build/services`を同じimageへ入れる（設計 §7.6:
   Web・Display・Migration・MaintenanceでNode.js imageは1種類）。実行単位の切り替えは
@@ -407,6 +415,58 @@ frameworkは追加しません。
   偽のDB・Blobで実サーバーを立てて経路・ヘッダー・上限を検証し、結合テスト
   (`tests/integration/display-service.test.ts`)では本番と同じ組み立て
   (`createDisplayRuntime`)で実PostgreSQL・Azuriteへ接続して検証します。
+
+## プレビュー生成ワーカー(`services/preview/`)
+
+プレビュー画像は、Storage Queueのメッセージを1実行1件だけ処理するContainer Apps Jobで
+生成します(設計 §7.5, §10.2)。Chromiumを含む専用image(`Dockerfile.preview`)で動く
+唯一の実行単位です。
+
+- 責務を3つに分けています。`index.ts`が環境変数検証・Job実行上限(45秒)・終了コード、
+  `worker.ts`が処理手順と判定(外部I/Oはすべて注入)、`capture.ts`がPlaywright(Chromium)
+  での撮影、`dependencies.ts`がQueue・DB・Blob・撮影の組み立てです。Displayと同じ構成で、
+  結合テストは本番と同じ`createPreviewRuntime`を通ります。
+- 受信は1件だけ(`numberOfMessages: 1`、visibility timeout 60秒)。メッセージは
+  `schemaVersion`と`documentId`だけをstrictに検証します。**検証できない本文でも
+  `messageId`・`popReceipt`は返す**`receivePreviewGenerationEnvelopes`を
+  `services/shared/storage.ts`へ追加し、資料IDの分からないメッセージをqueueから
+  取り除けるようにしています(削除しないと最大7日間再配信され続けるため)。
+- `dequeueCount`で試行回数を判定します。1・2回目の失敗は**メッセージを削除せず**
+  再配信に任せ、3回目(上限)の失敗で`preview_status`を`failed`にし、監査を保存してから
+  削除します。上限を超えた配信(前回の`failed`更新前に落ちた場合など)では撮影せずに
+  `failed`にします。専用の失敗キューは設けません(設計 §7.5)。
+- 冪等性: 資料が未存在・削除済み(`preview_status IS NULL`)、または`pending`以外
+  (`ready`・`failed`)の場合は**撮影せずメッセージを削除**します。Blobキーは資料IDから
+  決定的に導出するため再撮影しても上書きになり、メッセージ削除も冪等です。撮影中に資料が
+  削除されて`ready`更新が0行になった場合は、保存したプレビューBlobを削除して孤児を残しません。
+- 撮影(`capture.ts`)は設計 §7.5 の必須条件をコードで固定します。**Chromium sandbox有効**
+  (`chromiumSandbox: true`。Playwrightの既定は`false`のため明示が必須)、**JavaScript無効**
+  (`javaScriptEnabled: false`)、**service worker無効**(`serviceWorkers: "block"`)、
+  1280x720 viewport、`fullPage: false`、`animations: "disabled"`、`omitBackground: false`
+  (白背景)、描画timeout10秒です。`--no-sandbox`などsandboxを弱める引数は
+  `assertSandboxArguments`が起動前に拒否します(fail closed)。
+- **外部ネットワーク接続の遮断は4重**です。(1)HTMLは`page.setContent`で流し込み、
+  ページ取得にネットワークも`file://`も使わない (2)context単位の`route("**/*")`で
+  すべてのsubresource要求を`abort`する (3)context を`offline: true`にする
+  (4)JavaScript無効でスクリプト経由の通信を発生させない。加えてChromium起動引数で
+  telemetry・component update・Safe Browsingの背景通信を止めます。本番ではネットワーク側でも
+  egressを禁止します(設計 §8)。実際に遮断されることは、ローカルHTTPサーバーが撮影中に
+  1件も要求を受けないことで結合テストが確認します。
+- **メッセージ削除の失敗で業務結果を巻き戻しません**。`ready`更新後に削除だけ失敗した
+  場合にそれを処理全体の失敗として扱うと、試行上限に達していれば成功済みのプレビューを
+  `failed`へ書き換えてしまいます。削除失敗は分類だけを運用ログへ残し、再配信されたときに
+  `pending`以外の資料として撮影せず削除します。
+- 多重timeout: 描画10秒(`capture.ts`) < 1メッセージの処理上限30秒(`withProcessingDeadline`)
+  < Job実行上限45秒(`index.ts`) < visibility timeout 60秒。環境変数schemaがこの大小関係を
+  検証し、満たさない設定ではJobが起動しません(fail closed)。
+- 監査は`action = upload`(アップロード処理の続き)として、`preview_status`の更新と
+  **同じトランザクション**で保存します(設計 §15.1)。`audit_events`の
+  `actor_subject_id`・`actor_tenant_id`はNOT NULLでワーカーには操作者がいないため、
+  同じ資料のアップロード監査から引き継ぎます(Q-040)。メールアドレス・所属・App Roleは
+  引き継がず`null`にします。
+- ログに出すのは固定の`event`名・成否・エラー分類(`preview_timeout`/`preview_failed`/
+  `storage_failed`/`database_failed`/`validation_failed`)・相関ID・資料IDだけです。
+  HTML本文、ファイル名、プレビュー画像、Blobキー、中止した要求のURLは出しません(設計 §15.2)。
 
 ## HTML受け入れ検査(`app/lib/html/`)
 

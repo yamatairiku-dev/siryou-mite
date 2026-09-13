@@ -139,7 +139,7 @@
 
 ## Phase 3: 非同期処理
 
-### T18 [ ] プレビュー生成ワーカー(ローカル実行まで) 🔒
+### T18 [~] プレビュー生成ワーカー(ローカル実行まで) 🔒
 - 設計: §7.5
 - 依存: T05, T12
 - 内容: 1実行1メッセージ、`dequeueCount` 最大3回、JavaScript無効・外部通信なし・Chromium sandbox有効のPlaywright撮影、1280x720 JPEG・1MB以下、失敗時 `failed` と監査。専用Dockerfileを作成する(Container Appsでのsecurity spikeは対象外)

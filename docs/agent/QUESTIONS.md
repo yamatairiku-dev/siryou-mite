@@ -248,3 +248,63 @@
 - 置いた仮定: Q-036で追加した管理者だけに見えるリンクの隣に「監査履歴」リンクを置いた(`canUseAdminScreen`)。これは表示制御であって認可ではなく、`/admin/audit`のloaderが`requireAdmin`で必ず判定し直す(設計§4.2)
 - 影響範囲: `app/routes/app.tsx`、`tests/unit/routes/app.test.tsx`
 - 回答:
+
+### Q-040 [未回答] T18: プレビュー生成監査の操作者をアップロード監査から引き継いだ
+- 状況: 設計§12.2の`audit_events`は`actor_subject_id`・`actor_tenant_id`がNOT NULLだが、プレビュー生成はJobの処理で操作者がいない。`documents`にtenantの列は無く、Preview用の環境変数にもtenant IDは無い(`ENTRA_TENANT_ID`はWeb専用・任意)
+- 置いた仮定: 同じ資料の**アップロード監査**(`action = upload`・`result = success`。設計§15.1によりアップロードと同一トランザクションで必ず保存される)を`searchAuditEvents`で1件引き、その`actor_subject_id`・`actor_tenant_id`をプレビュー監査へ引き継いだ。`actor_email_at_event`・`actor_group_values`・`actor_roles`は`null`にして個人データを増やさない。アップロード監査が見つからない場合(1年経過でpurge済みなど想定外)は監査行を作らず、`preview_audit_actor_unresolved`を運用ログへ記録して状態更新だけを確定させる
+- 影響範囲: `services/preview/dependencies.ts`。tenantを環境変数で持ちたい場合は`services/preview/env.ts`・`.env.example`・`docs/OPERATIONS.md`の追加が必要
+- 回答:
+
+### Q-041 [未回答] T18: プレビュー生成の監査`action`を`upload`にした
+- 状況: 設計§10.2は「処理の成功・失敗は監査履歴へ残す」と定めるが、`audit_events.action`のenum(`upload`/`view`/`delete`/`admin_operation`。migrationのCHECK制約)にプレビュー生成に対応する値が無い
+- 置いた仮定: プレビュー生成はアップロード処理の続き(設計§10.1(9)、§10.2)と解釈し、`action = upload`で記録した(成功=`result: success`、恒久失敗=`result: failed` + `error_category`)。enumを増やすとmigration・CHECK制約・T17の監査履歴画面の選択肢まで波及するため追加していない。`admin_operation`はQ-034のとおり管理画面の操作に取っておく。同じ資料の`upload`監査は「アップロード」「プレビュー結果」で最大2行になり、後者は`actor_email_at_event`が`null`である点で区別できる
+- 影響範囲: `services/preview/dependencies.ts`(`PREVIEW_AUDIT_ACTION`)、T17の監査履歴画面の見え方
+- 回答:
+
+### Q-042 [未回答] T18: 検証できないQueueメッセージは監査を残さず削除する
+- 状況: 設計§7.5は`schemaVersion`と`documentId`だけを含むメッセージを前提とするが、schemaに合わない本文を受け取った場合の扱いを定めていない
+- 置いた仮定: 資料IDが分からずDB更新も監査(NOT NULLの操作者)も行えないため、`validation_failed`を運用ログへ記録してメッセージを削除する(恒久失敗扱い)。削除しないと同じ本文が最大7日間再配信され続け、正常なメッセージの処理枠を奪うため。本文そのものはログへ出さない。`services/shared/storage.ts`には検証失敗でも`messageId`・`popReceipt`を返す`receivePreviewGenerationEnvelopes`を追加した(既存の`receivePreviewGenerationMessages`は例外にする挙動のまま残している)
+- 影響範囲: `services/shared/storage.ts`、`services/preview/worker.ts`
+- 回答:
+
+### Q-043 [未回答] T18: `preview_status`が`pending`でない資料は撮影し直さない
+- 状況: 設計§7.5は「同じメッセージを複数回受け取っても結果が壊れないようにする」と定めるが、既に`ready`・`failed`の資料へ重複配信された場合の動作を定めていない
+- 置いた仮定: `ready`は撮影済み、`failed`は試行を使い切った資料(設計§10.2「手動再実行は設けない」)のため、どちらも**撮影せず状態も監査も変えずにメッセージを削除**する。撮影し直すとChromium起動とBlob書き込みが無駄に発生し、`failed`の資料が後から`ready`に変わって§10.2の「3回失敗したら代替画像」と矛盾する
+- 影響範囲: `services/preview/worker.ts`。将来「失敗した資料の再生成」機能を入れる場合は、この分岐と`preview_status`の戻し方を決める必要がある
+- 回答:
+
+### Q-044 [未回答] T18: 上限byte数超過は試行回数を使い切らずに`failed`にする
+- 状況: 設計§7.5は「品質を下げても1MB以下にならない場合は`failed`とする」と定める一方、「最大3回試行し、3回失敗した場合は`failed`」とも定めており、どちらを優先するかが読み取れない
+- 置いた仮定: 上限byte数超過は同じHTMLを撮り直しても結果が変わらない決定的な失敗のため、`dequeueCount`に関係なく1回目で`failed`にしてメッセージを削除する(`isDeterministicFailure`)。一時障害(Blob・DB・Chromiumのエラーやtimeout)だけを3回まで再試行する
+- 影響範囲: `services/preview/worker.ts`
+- 回答:
+
+### Q-045 [未回答] T18: Playwrightを本番dependencyへ移さず、`playwright-core`と専用imageで賄う
+- 状況: ワーカーは本番でPlaywrightを必要とするが、`@playwright/test`はdevDependencyで、production dependencyを増やさない制約がある。`playwright`パッケージをdependenciesへ入れると、Web・Display・Migration・Maintenanceが使う共通imageにもbrowserダウンロード付きの依存が入る
+- 置いた仮定: production dependencyを増やさず、撮影時だけ`playwright-core`(`@playwright/test` 1.61.1 が package-lock.json で同じversionに固定している推移的依存)を動的importする。Preview専用image(`Dockerfile.preview`)は、`npm ci --omit=dev`で作った本番依存に加えて`node_modules/playwright-core`だけをdev installのstageからコピーする。browser binaryはPlaywright公式image(`mcr.microsoft.com/playwright:v1.61.1-noble`、`@playwright/test`と同じversion)のものを使い、`npm ci`時は`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`でダウンロードしない。`package.json`・`package-lock.json`は変更していないため`docs/agent/DEPENDENCIES.md`には「新規追加」ではなく利用方針として追記した
+- 影響範囲: `Dockerfile.preview`、`services/preview/capture.ts`。`@playwright/test`を更新するときは**base imageのtagも同時に上げる**必要がある(不一致だとbrowserとPlaywright本体の対応が崩れる)。`playwright-core`を直接importしているため、将来`@playwright/test`をdevDependencyから外す場合は`playwright-core`を明示的な依存として追加する必要がある
+- 回答:
+
+### Q-046 [未回答] T18: 外部ネットワーク遮断を4重(setContent・route abort・offline・JS無効)で実装した
+- 状況: 設計§7.5は「プレビュー生成ブラウザはJavaScript無効、外部ネットワーク接続なしで実行する」と定めるが、実現方法は定めていない。JavaScriptを無効にしても`<img src="https://...">`やCSSの`url()`は読みに行く
+- 置いた仮定: (1)HTMLはBlobから取得した文字列を`page.setContent`で流し込み、ページ取得自体にネットワークも`file://`も使わない (2)context単位で`route("**/*")`を登録し、すべてのsubresource要求を`abort("blockedbyclient")`する (3)contextを`offline: true`にする (4)`javaScriptEnabled: false`でスクリプト経由の通信を発生させない (5)Chromium起動引数でtelemetry・component update・Safe Browsingの背景通信を止める。中止した要求のURLはログへ出さない(設計§15.2)。本番ではこれに加えてネットワーク側でegressを禁止する(設計§8)
+- 影響範囲: `services/preview/capture.ts`。ローカルHTTPサーバーが撮影中に1件も要求を受けないことを`tests/integration/preview-capture.test.ts`で確認している
+- 回答:
+
+### Q-047 [未回答] T18: Jobの終了コードとContainer Apps側の再試行
+- 状況: 設計§7.5はJob実行上限45秒と1実行1メッセージを定めるが、実行の終了コードを定めていない
+- 置いた仮定: 再試行に回した場合(`retry_scheduled`)だけ終了コード1、それ以外(処理完了・撮影不要・恒久失敗・メッセージ無し)は0にした。再試行はQueueの再配信で行うため、Container Apps Job側の再試行回数(`replicaRetryLimit`)は0にする想定を`docs/OPERATIONS.md`へ記載した。Job実行上限(45秒)の超過時は`preview_job_timeout`を記録して終了コード1で強制終了し、メッセージは削除しない(visibility timeout経過後に再配信される)
+- 影響範囲: `services/preview/index.ts`、`docs/OPERATIONS.md`。Container Apps Jobのマニフェスト(Bicep)は人が作成する
+- 回答:
+
+### Q-048 [未回答] T18: 撮影中に資料が削除された場合は保存済みプレビューを削除する
+- 状況: 撮影とBlob保存の途中で資料が削除されると、削除処理(設計§10.4(4))のBlob削除が先に走り終えている可能性があり、あとから保存されたプレビュー画像が回収経路の無い孤児Blobになる
+- 置いた仮定: `ready`更新(`active`かつ`preview_status IS NOT NULL`の資料だけを更新する)が0行だった場合は、保存したプレビューBlobを削除してからメッセージを削除する。`preview_status`がNULL(=削除済み)の資料はそもそも撮影しない
+- 影響範囲: `services/preview/worker.ts`、`services/preview/dependencies.ts`。T19の孤児Blob掃除とは独立した即時の後始末
+- 回答:
+
+### Q-049 [未回答] T18: 結合テストでvisibility timeoutの経過を実時間で待たない
+- 状況: `dequeueCount`が1→2→3と増える経路を検証するには再配信が必要だが、visibility timeoutの経過を実時間で待つテストは遅く不安定になる(Q-006と同じ問題)
+- 置いた仮定: ワーカーが残したメッセージを、テスト側から`queueClient.updateMessage(..., visibilityTimeout: 0)`で即座に再表示してから次の実行を行う。`dequeueCount`の増加は実際の受信で起きるため、判定そのものは本番と同じ経路を通る。処理上限(30秒)の検証はQ-006と同じ`AbortSignal.timeout`のspy差し替え方式で、(a)指定した30秒がsignal生成へ渡ること (b)中断が`preview_timeout`として扱われDBもqueueも変わらないこと (c)差し替えを戻すと同じメッセージの処理が成功すること、を確認している
+- 影響範囲: `tests/integration/preview-worker.test.ts`
+- 回答:

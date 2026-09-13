@@ -30,6 +30,7 @@ import {
   parsePreviewQueueMessage,
   PREVIEW_BLOB_CONTENT_TYPE,
   PREVIEW_QUEUE_SCHEMA_VERSION,
+  receivePreviewGenerationEnvelopes,
   receivePreviewGenerationMessages,
   resolveStorageConnectionConfig,
   sendPreviewGenerationMessage,
@@ -496,6 +497,33 @@ describe("Queue操作(設計 §7.5)", () => {
     ]);
   });
 
+  it("envelope受信は不正な本文をmessage=nullで返す(削除できるようにする)", async () => {
+    const { queueClient, receiveMessages } = createStubQueueClient();
+    receiveMessages.mockResolvedValueOnce({
+      receivedMessageItems: [
+        { messageId: "m1", popReceipt: "p1", dequeueCount: 3, messageText: "!!!" },
+        {
+          messageId: "m2",
+          popReceipt: "p2",
+          dequeueCount: 1,
+          messageText: encodePreviewQueueMessage(documentId),
+        },
+      ],
+    });
+
+    const result = await receivePreviewGenerationEnvelopes(queueClient);
+
+    expect(result).toEqual([
+      { messageId: "m1", popReceipt: "p1", dequeueCount: 3, message: null },
+      {
+        messageId: "m2",
+        popReceipt: "p2",
+        dequeueCount: 1,
+        message: { schemaVersion: PREVIEW_QUEUE_SCHEMA_VERSION, documentId },
+      },
+    ]);
+  });
+
   it("不正な本文のメッセージは例外にする", async () => {
     const { queueClient, receiveMessages } = createStubQueueClient();
     receiveMessages.mockResolvedValueOnce({
@@ -624,6 +652,16 @@ describe("すべてのBlob/Queue操作のabortSignal(設計 §7.3, §7.5, §14)"
         const { queueClient, sendMessage } = createStubQueueClient();
         await sendPreviewGenerationMessage(queueClient, documentId, options);
         return optionsOf(sendMessage.mock.calls[0]?.[1]);
+      },
+    },
+    {
+      name: "receivePreviewGenerationEnvelopes",
+      run: async (options) => {
+        const { queueClient, receiveMessages } = createStubQueueClient();
+        await receivePreviewGenerationEnvelopes(queueClient, options);
+        return optionsOf(
+          (receiveMessages.mock.calls[0] as unknown[] | undefined)?.[0],
+        );
       },
     },
     {

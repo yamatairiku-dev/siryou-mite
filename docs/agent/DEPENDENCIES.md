@@ -82,3 +82,25 @@
 
 `parse5`、`node-pg-migrate`、`@azure/identity`、`@azure/storage-blob`、
 `@azure/storage-queue`はTypeScriptの型定義を同梱しているため、追加の`@types/*`は不要。
+
+## T18で確認したもの
+
+### playwright-core 1.61.1(依存追加なし。Preview Jobのruntimeで使用)
+
+- 追加の有無: **`package.json`・`package-lock.json`は変更していない**。`@playwright/test`
+  1.61.1(devDependency)が`playwright` → `playwright-core`を同じversionで固定しており、
+  `services/preview/capture.ts`は撮影時だけ`playwright-core`を動的importする
+- 標準APIで代替できない理由: HTMLを描画してスクリーンショットを撮るには実ブラウザの
+  制御が必要で、Node.js標準APIには無い。設計 §7.5がPlaywrightとChromiumを明示している
+- 本番での供給方法: Preview専用image(`Dockerfile.preview`)が、`npm ci --omit=dev`で作った
+  本番依存に加えて`node_modules/playwright-core`をdev install stageからコピーする。
+  browser binaryはPlaywright公式image(`mcr.microsoft.com/playwright:v1.61.1-noble`)の
+  ものを使い、`npm ci`時は`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`でダウンロードしない
+- Web・Display・Migration・Maintenanceが使う共通imageには入らないため、production
+  dependencyは増えていない
+- メンテナンス状況: Microsoftが活発にメンテナンスしている
+- Security Policyの有無: GitHubリポジトリでSecurity Advisoryを公開している
+- ライセンス: Apache-2.0
+- 更新時の注意: `@playwright/test`のversionを上げるときは`Dockerfile.preview`のbase image
+  tag(`v<version>-noble`)も同じPRで上げる。`@playwright/test`をdevDependencyから外す場合は
+  `playwright-core`を明示的な依存として追加する必要がある

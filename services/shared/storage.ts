@@ -88,12 +88,24 @@ export const DEFAULT_QUEUE_VISIBILITY_TIMEOUT_SECONDS = 60;
 export interface StorageOperationOptions {
   /** 省略時は`DEFAULT_STORAGE_OPERATION_TIMEOUT_MS`。 */
   timeoutMs?: number;
+  /**
+   * 呼び出し側の中断signal(任意)。操作単位のtimeoutと**両方**が有効になり、
+   * どちらかが中断すればSDK呼び出しを中止する。Preview Jobのように1処理全体の
+   * 上限(設計 §7.5)を持つ呼び出し側が、期限超過後に外部書き込みを続けないために使う。
+   */
+  abortSignal?: AbortSignal;
 }
 
 function abortSignalFor(options?: StorageOperationOptions): AbortSignal {
-  return AbortSignal.timeout(
+  const timeoutSignal = AbortSignal.timeout(
     options?.timeoutMs ?? DEFAULT_STORAGE_OPERATION_TIMEOUT_MS,
   );
+
+  // 呼び出し側signalが無い場合はtimeout signalをそのまま使う(既存の呼び出し側の
+  // 挙動を変えない)。
+  return options?.abortSignal
+    ? AbortSignal.any([timeoutSignal, options.abortSignal])
+    : timeoutSignal;
 }
 
 // --- 接続設定(設計 §7.3「サービス間はManaged Identityを使用する」) ---
@@ -463,14 +475,30 @@ export interface ReceivedPreviewQueueMessage {
 }
 
 /**
- * Queueからメッセージを受信し、検証済みの形へ変換して返す。不正な本文は
- * 例外にするため、呼び出し側(Preview Job)は個別メッセージ単位で恒久失敗として
- * 扱える。visibility timeoutは既定60秒(設計 §7.5)。
+ * 受信したメッセージの封筒(envelope)。本文の検証に失敗した場合も`messageId`と
+ * `popReceipt`を保持するため、呼び出し側(Preview Job)は検証できないメッセージを
+ * queueから取り除ける(取り除けないと同じ不正メッセージが再配信され続ける)。
  */
-export async function receivePreviewGenerationMessages(
+export interface ReceivedPreviewQueueEnvelope {
+  messageId: string;
+  popReceipt: string;
+  /** `dequeueCount`(設計 §7.5「最大3回」の判定に使う)。 */
+  dequeueCount: number;
+  /** 検証済みのメッセージ本文。検証に失敗した場合は`null`。 */
+  message: PreviewQueueMessage | null;
+}
+
+/**
+ * Queueからメッセージを受信し、本文の検証結果を`message`(検証失敗時は`null`)として
+ * 返す。本文が不正でも`messageId`・`popReceipt`は返るため、呼び出し側は恒久失敗として
+ * 削除できる。visibility timeoutは既定60秒(設計 §7.5)。
+ *
+ * 本文そのもの(利用者由来ではないが、schema外の値が入り得る)は返さない。
+ */
+export async function receivePreviewGenerationEnvelopes(
   queueClient: QueueClient,
   options?: ReceivePreviewQueueMessagesOptions,
-): Promise<ReceivedPreviewQueueMessage[]> {
+): Promise<ReceivedPreviewQueueEnvelope[]> {
   const response = await queueClient.receiveMessages({
     abortSignal: abortSignalFor(options),
     visibilityTimeout:
@@ -481,12 +509,47 @@ export async function receivePreviewGenerationMessages(
       : {}),
   });
 
-  return response.receivedMessageItems.map((item) => ({
-    messageId: item.messageId,
-    popReceipt: item.popReceipt,
-    dequeueCount: item.dequeueCount,
-    message: parsePreviewQueueMessage(item.messageText),
-  }));
+  return response.receivedMessageItems.map((item) => {
+    let message: PreviewQueueMessage | null;
+    try {
+      message = parsePreviewQueueMessage(item.messageText);
+    } catch {
+      message = null;
+    }
+
+    return {
+      messageId: item.messageId,
+      popReceipt: item.popReceipt,
+      dequeueCount: item.dequeueCount,
+      message,
+    };
+  });
+}
+
+/**
+ * Queueからメッセージを受信し、検証済みの形へ変換して返す。不正な本文は
+ * 例外にするため、呼び出し側は個別メッセージ単位で恒久失敗として扱える。
+ * 不正な本文をqueueから取り除く必要がある場合(Preview Job)は
+ * `receivePreviewGenerationEnvelopes`を使う。
+ * visibility timeoutは既定60秒(設計 §7.5)。
+ */
+export async function receivePreviewGenerationMessages(
+  queueClient: QueueClient,
+  options?: ReceivePreviewQueueMessagesOptions,
+): Promise<ReceivedPreviewQueueMessage[]> {
+  const envelopes = await receivePreviewGenerationEnvelopes(queueClient, options);
+
+  return envelopes.map((envelope) => {
+    if (envelope.message === null) {
+      throw new InvalidQueueMessageError();
+    }
+    return {
+      messageId: envelope.messageId,
+      popReceipt: envelope.popReceipt,
+      dequeueCount: envelope.dequeueCount,
+      message: envelope.message,
+    };
+  });
 }
 
 /**

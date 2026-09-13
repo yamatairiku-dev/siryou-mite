@@ -122,9 +122,28 @@ Web・Display・Migration Job・Maintenance Jobは**同じNode.js image**を使�
 | Migration Job | `npm run db:migrate` |
 | Maintenance Job | `node build/services/maintenance/index.js` |
 
-Preview JobだけはChromiumを含む専用image(別Dockerfile)を使います。DisplayはWebと同じ
-`/health`(`GET`のみ)を持つため、imageのHEALTHCHECKは両方で使えます。Displayは
-`SIGTERM`・`SIGINT`で待受けを止め、DB接続を閉じてから終了します(猶予10秒)。
+DisplayはWebと同じ`/health`(`GET`のみ)を持つため、imageのHEALTHCHECKは両方で使えます。
+Displayは`SIGTERM`・`SIGINT`で待受けを止め、DB接続を閉じてから終了します(猶予10秒)。
+
+#### Preview Job専用image(`Dockerfile.preview`)
+
+Preview JobだけはChromiumを含む専用image(`Dockerfile.preview`)を使います(設計 §7.6。
+imageは合計2種類)。起動commandは`node build/services/preview/index.js`です。
+
+- base imageは`mcr.microsoft.com/playwright:v1.61.1-noble`で、tagは`package.json`の
+  `@playwright/test`のversionと**必ず一致**させます。`@playwright/test`を更新するときは
+  同じPRでbase imageのtagも上げます(不一致だとbrowserとPlaywright本体の対応が崩れます)。
+- 非rootの`pwuser`で実行します(設計 §7.5「ワーカーは非root」)。
+- browser binaryはbase imageの`/ms-playwright`を使い、`npm ci`時は
+  `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`でダウンロードしません。本番依存(`npm ci --omit=dev`)に
+  加えて`node_modules/playwright-core`だけをdev install stageからコピーします。
+- Chromium sandboxを有効にしたまま起動します(`--no-sandbox`は使いません)。Container Apps
+  Jobの設定でsandboxが起動できない場合でも、sandboxを無効にする回避はしません(設計 §7.5)。
+- Container Apps Job側では**読み取り専用filesystem**、1 vCPU・2GB、最大2件並列、
+  `replicaTimeout`はJob実行上限(45秒)に合わせます。Chromiumは書き込み可能な`/tmp`を
+  必要とするため、`/tmp`だけをemptyDir相当の書き込み可能volumeにします。
+- 再試行はStorage Queueの再配信で行うため、Job側の再試行(`replicaRetryLimit`)は0にします。
+  ワーカーは再試行に回した実行だけ終了コード1で終わります(監視用)。
 
 ### Display / Preview Job / Maintenance Job
 
@@ -146,6 +165,13 @@ Managed Identity必須・接続文字列禁止はWebと同じ制約です。
 | `PREVIEW_JOB_MAX_RUNTIME_SECONDS` | Preview | Job実行上限(既定45秒) |
 | `QUEUE_MAX_DEQUEUE_COUNT` | Preview | `dequeueCount`による最大試行回数(既定3回) |
 | `MAX_PREVIEW_IMAGE_BYTES` | Preview | プレビュー画像1件あたりの上限(既定1MB) |
+
+Preview Jobは上記に加えて、1実行で1メッセージだけを処理し、`dequeueCount`が
+`QUEUE_MAX_DEQUEUE_COUNT`に達した失敗でプレビュー状態を`failed`にして監査を残します
+(設計 §7.5)。`QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS`は
+`QUEUE_VISIBILITY_TIMEOUT_SECONDS`以下、`PREVIEW_JOB_MAX_RUNTIME_SECONDS`は
+`QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS`以上である必要があり、満たさない場合は
+起動時の環境変数検証で失敗します。
 
 Maintenance Jobは共通変数以外を必要としません。各サービスのManaged Identityは用途別に
 分離し(設計 §7.4)、DB roleとStorageロールは最小権限にします。
@@ -217,6 +243,19 @@ CIへ組み込む場合はPostgreSQLと同様に、Azuriteのservice container�
 `AZURE_STORAGE_CONNECTION_STRING`(Azuriteのホスト名を指す接続文字列)の設定が
 別途必要です。
 
+Preview Job(プレビュー生成ワーカー)の結合テストは2本あります。
+`tests/integration/preview-worker.test.ts`は、テスト専用schemaのPostgreSQLとAzuriteに
+対して本番と同じ組み立て(`createPreviewRuntime`)でワーカーを動かし、重複配信・
+再試行(`dequeueCount` 1→2→3)・処理上限(timeout)・削除済み資料・不正メッセージの
+扱いを検証します(撮影だけは固定JPEGへ差し替えます)。
+`tests/integration/preview-capture.test.ts`は**実際のChromium**を起動し、sandbox有効の
+まま1280x720のJPEGを撮影できること、HTMLが参照する外部URLへ1件も接続しないこと
+(ローカルHTTPサーバーで観測)、JavaScriptが実行されないこと、上限byte数に収まらない
+場合に失敗することを検証します。このテストにはPlaywrightのbrowser binaryが必要で、
+devcontainerには導入済みです。CIで実行する場合は
+`npx playwright install --with-deps chromium`(`@playwright/test`と同じversion)が
+必要です。
+
 ## バックアップ
 
 - PostgreSQL point-in-time restoreとBlob soft deleteを7日間保持する
@@ -243,7 +282,10 @@ CIへ組み込む場合はPostgreSQLと同様に、Azuriteのservice container�
 
 ## 定期Job
 
-- Preview Jobは1実行1メッセージ、最大3回試行する
+- Preview Jobは1実行1メッセージ、最大3回試行する(`dequeueCount`で判定し、3回目の
+  失敗でプレビュー状態を`failed`にして監査を保存してからメッセージを削除する)
+- Preview Jobは専用image(`Dockerfile.preview`)で動き、Chromium sandbox有効・
+  JavaScript無効・外部ネットワーク接続なしで撮影する
 - Migration Jobはdeploy前に1回実行し、失敗時はrevisionを更新しない
 - Maintenance Jobは毎日UTC 18:00（JST 03:00）に実行する
 - Maintenance JobはBlob削除再試行と、1年経過した監査・削除済みmetadataのpurgeを行う

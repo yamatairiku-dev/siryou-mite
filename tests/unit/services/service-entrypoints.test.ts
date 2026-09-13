@@ -1,23 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
 
 describe("サービスのエントリーポイント", () => {
-  it.each([["../../../services/maintenance/index", "maintenance", "T19"]] as const)(
-    "%s は自身の名称と担当タスクを説明する",
-    async (modulePath, serviceName, taskId) => {
-      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  it("maintenance は1実行で行う保守処理を説明し、importだけでは起動しない(T19で実装済み)", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
-      const service = await import(modulePath);
+    const service = await import("../../../services/maintenance/index");
 
-      expect(service.SERVICE_NAME).toBe(serviceName);
-      expect(service.describeService()).toContain(serviceName);
-      expect(service.describeService()).toContain(taskId);
+    expect(service.SERVICE_NAME).toBe("maintenance");
+    expect(service.describeService()).toContain("maintenance");
+    // 設計 §7.7「Blob削除失敗資料の再試行」と「1年経過後のpurge」。
+    expect(service.describeService()).toContain("blob cleanup");
+    expect(service.describeService()).toContain("purges expired data");
 
-      // importするだけでは起動処理(main)が実行されない(モジュールとして安全に読み込める)。
-      expect(logSpy).not.toHaveBeenCalled();
+    // 環境変数の検証もDB接続もimport時には行わない。
+    expect(logSpy).not.toHaveBeenCalled();
 
-      logSpy.mockRestore();
-    },
-  );
+    logSpy.mockRestore();
+  });
 
   it("preview は1実行1メッセージであることを説明し、importだけでは起動しない(T18で実装済み)", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});

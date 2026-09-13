@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { parseMaintenanceEnvironment } from "../../../services/maintenance/env";
+import {
+  DEFAULT_MAINTENANCE_JOB_MAX_RUNTIME_SECONDS,
+  parseMaintenanceEnvironment,
+} from "../../../services/maintenance/env";
 
 const baseEnvironment: NodeJS.ProcessEnv = {
   NODE_ENV: "development",
@@ -13,6 +16,46 @@ describe("parseMaintenanceEnvironment", () => {
     const result = parseMaintenanceEnvironment(baseEnvironment);
 
     expect(result.AZURE_STORAGE_CONTAINER).toBe("documents");
+    expect(result.MAINTENANCE_JOB_MAX_RUNTIME_SECONDS).toBe(
+      DEFAULT_MAINTENANCE_JOB_MAX_RUNTIME_SECONDS,
+    );
+    expect(result.MAINTENANCE_BATCH_SIZE).toBe(500);
+    expect(result.MAINTENANCE_BLOB_LIST_PAGE_SIZE).toBe(200);
+    expect(result.MAINTENANCE_ORPHAN_BLOB_GRACE_HOURS).toBe(24);
+    expect(result.MAINTENANCE_UPLOAD_ATTEMPT_RETENTION_DAYS).toBe(7);
+  });
+
+  it("設定値を数値へ変換する", () => {
+    const result = parseMaintenanceEnvironment({
+      ...baseEnvironment,
+      MAINTENANCE_JOB_MAX_RUNTIME_SECONDS: "60",
+      MAINTENANCE_BATCH_SIZE: "10",
+      MAINTENANCE_BLOB_LIST_PAGE_SIZE: "5",
+      MAINTENANCE_ORPHAN_BLOB_GRACE_HOURS: "1",
+      MAINTENANCE_UPLOAD_ATTEMPT_RETENTION_DAYS: "30",
+    });
+
+    expect(result.MAINTENANCE_JOB_MAX_RUNTIME_SECONDS).toBe(60);
+    expect(result.MAINTENANCE_BATCH_SIZE).toBe(10);
+    expect(result.MAINTENANCE_BLOB_LIST_PAGE_SIZE).toBe(5);
+    expect(result.MAINTENANCE_ORPHAN_BLOB_GRACE_HOURS).toBe(1);
+    expect(result.MAINTENANCE_UPLOAD_ATTEMPT_RETENTION_DAYS).toBe(30);
+  });
+
+  it.each([
+    // 孤児Blobの猶予は最低1時間(削除直後のBlobを消さないため)。
+    ["MAINTENANCE_ORPHAN_BLOB_GRACE_HOURS", "0"],
+    ["MAINTENANCE_ORPHAN_BLOB_GRACE_HOURS", "-1"],
+    ["MAINTENANCE_BATCH_SIZE", "0"],
+    ["MAINTENANCE_BATCH_SIZE", "100000"],
+    ["MAINTENANCE_BLOB_LIST_PAGE_SIZE", "0"],
+    ["MAINTENANCE_JOB_MAX_RUNTIME_SECONDS", "0"],
+    ["MAINTENANCE_UPLOAD_ATTEMPT_RETENTION_DAYS", "0"],
+    ["MAINTENANCE_UPLOAD_ATTEMPT_RETENTION_DAYS", "400"],
+  ])("%s に %s を指定すると拒否する", (key, value) => {
+    expect(() =>
+      parseMaintenanceEnvironment({ ...baseEnvironment, [key]: value }),
+    ).toThrow(key);
   });
 
   it("本番でAZURE_STORAGE_CONNECTION_STRINGを指定すると拒否する", () => {

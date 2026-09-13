@@ -321,3 +321,41 @@
 - 置いた仮定: `updateDocumentPreviewStatus`のUPDATE条件に「`failed`を書けるのは`preview_status = 'pending'`の資料だけ」を追加し(`ready`への更新は現状維持)、更新0行のときは`failPermanently`が状態も監査も変えずにメッセージだけ削除して`skipped`を返すようにした。読み取りで判定せずUPDATEの条件で判定するのは、Preview Jobが最大2件並列(設計§7.6)で動くため読み取りと更新の間に状態が変わり得るため。アップロード時のQueue送信失敗で`failed`を書く経路(`app/lib/upload/upload.server.ts`)は直前に`pending`で作成した資料が対象のため影響しない
 - 影響範囲: `services/shared/db/documents.ts`(共有モジュール。Web・Preview両方が使う)、`services/preview/worker.ts`、`tests/unit/db/documents.server.test.ts`、`tests/unit/services/preview-worker.test.ts`、`tests/integration/preview-worker.test.ts`
 - 回答:
+
+### Q-052 [未回答] T19: 監査の1年purgeを「保守role専用のDELETE」として許可した
+- 状況: 設計§16は「1年経過後の個人識別情報を自動削除する」、§7.7は「削除済み資料の最小メタデータと監査履歴を1年経過後に削除する」と定める一方、設計§12.2の監査は追記専用で、T03のmigrationは`BEFORE UPDATE OR DELETE` triggerでDELETEを一律拒否し、runtime roleにもDELETEをGRANTしていない。どちらも満たす方法は設計に書かれていない
+- 置いた仮定: 保守Job専用のDB role `siryou_mite_maintenance` を新しいmigration(`1789280690379_add-maintenance-role-and-purge-support.sql`)で扱い、(1)runtime roleのGRANTは一切変更しない(`audit_events`はSELECT/INSERTのまま) (2)保守roleにだけ`documents`へSELECT/UPDATE/DELETE、`audit_events`・`upload_attempts`へSELECT/DELETEをGRANT(監査へのINSERT・UPDATEは与えず、保守Jobが監査を書けないようにする) (3)`audit_events_prevent_mutation()`を`CREATE OR REPLACE`で更新し、**UPDATEは従来どおり全面禁止**、DELETEは「`retain_until`を過ぎた行」かつ「保守role、またはテーブル所有者」の場合だけ通す、とした。テーブル所有者を許可対象に含めたのは、所有者は`ALTER TABLE ... DISABLE TRIGGER`でtrigger自体を無効化できるため実効的な強度が変わらず、migration・結合テストが所有者で動くため。roleが存在しない環境(ローカル・CI)ではGRANTをスキップする既存方針を踏襲した
+- 補足(レビュー指摘の反映): trigger関数は`SET search_path = pg_catalog, pg_temp`で固定し、参照するカタログも`pg_catalog.`で修飾した。関数が`pg_class`・`pg_roles`という**リレーション**を参照するため、固定しないと呼び出し側が`SET search_path TO pg_temp, pg_catalog, ...`のように`pg_catalog`を明示的に後ろへ置いたうえで`pg_temp`へ同名テーブルを作ると判定を欺ける(結合テストで、固定前は保守roleのpurgeが拒否され、固定後は通ることを確認した)。また、roleの存在確認と`pg_has_role`はIFをネストして評価順を明示した(PostgreSQLは`AND`の短絡評価を保証せず、role未作成の環境で`role "..." does not exist`という分かりにくい例外になり得るため)
+- 影響範囲: `migrations/1789280690379_add-maintenance-role-and-purge-support.sql`、`docs/ARCHITECTURE.md`、`docs/OPERATIONS.md`、`tests/integration/maintenance-job.test.ts`。**IaC(Bicep)側で`siryou_mite_maintenance` roleの作成とMaintenance JobのManaged Identityとの対応付けが必要**(未作成のままだと保守Jobがpurgeに失敗する)。Maintenance Jobの`DATABASE_URL`はこのroleの資格情報にする
+- 回答:
+
+### Q-053 [未回答] T19: 保守Jobは監査(`audit_events`)を書かない
+- 状況: 設計§15.1は「アップロード、削除、管理操作は業務更新と監査を同じDBトランザクションで保存する」と定めるが、定期保守Job(設計§7.7)のpurge・Blob削除再試行を監査に残すかは定めていない。`audit_events`は`actor_subject_id`・`actor_tenant_id`がNOT NULL(設計§12.2)で、保守Jobには操作者がいない
+- 置いた仮定: 保守Jobは監査を追記しない。purgeは設計§16が求める保持期間経過後の自動削除であり、purgeのたびに監査を書くとその監査自体が新たに1年の保持対象になって個人識別情報以外のレコードが永久に増え続ける。実行結果は件数つきの運用ログ(`maintenance_task_finished`、`services/maintenance/log.ts`)で残し、設計§17「Maintenance Jobの失敗」の監視はこのログと終了コード(失敗が1件でもあれば1)で行う。DB側でも保守roleに`audit_events`のINSERT権限を与えず、書けないようにしている
+- 影響範囲: `services/maintenance/dependencies.ts`、`services/maintenance/log.ts`、migrationのGRANT
+- 回答:
+
+### Q-054 [未回答] T19: 孤児Blob掃除の対象条件(猶予・キー形式・既存行の有無)
+- 状況: TASKS.mdはT09のBlob削除補償が失敗した場合の孤児Blob掃除を求めるが、設計§7.7に記述が無く、判定条件も定められていない。アップロードはBlob保存→DB登録の順(設計§10.1)のため、保存直後のBlobは正常でも「DBに行が無いBlob」に見える
+- 置いた仮定: 次をすべて満たすBlobだけを削除する(取り返しがつかないためfail closed)。(1)キーが`documentHtmlBlobKey`/`documentPreviewBlobKey`の導出結果と完全一致する(想定外のキー・大文字UUIDは対象外。PostgreSQLの`uuid`は大文字小文字を区別しないがBlobキーは区別するため) (2)`lastModified`が取得でき、猶予`MAINTENANCE_ORPHAN_BLOB_GRACE_HOURS`(既定24時間、最小1時間)より古い (3)`documents`に同じ資料IDの行が`status`を問わず1件も無い。キーを直接指定して削除する関数は用意せず、必ず資料IDへ逆引きしてから既存のBlob削除関数を使う。結合テストではAzuriteの`lastModified`を過去にできないため、猶予0を注入する経路と、既定猶予で新しいBlobを消さない経路の両方を検証した
+- 影響範囲: `services/shared/storage.ts`(`parseDocumentBlobKey`・`listBlobsByPrefix`を追加)、`services/maintenance/job.ts`、`services/maintenance/env.ts`
+- 回答:
+
+### Q-055 [未回答] T19: 監査が残っている資料メタデータは1年経過してもpurgeしない
+- 状況: 設計§7.7は「Blob削除が完了していない資料メタデータはpurgeしない」とだけ定めるが、`audit_events.document_id`は`ON DELETE`指定なしのFK(T03)で、監査が残っている資料行は物理削除できない。閲覧監査は資料の削除より後に発生し得るため、資料の削除から1年経っても監査の保持期間(記録から1年)が残っていることがある
+- 置いた仮定: 資料purgeのSQLに`NOT EXISTS (SELECT 1 FROM audit_events WHERE document_id = d.id)`を足し、監査が残っている資料は対象にしない(FK違反でバッチ全体が失敗するのを避けるため)。監査は自身の`retain_until`で先にpurgeされるので、その後の実行で資料も消える。1回の実行では監査purge → 資料purgeの順に行う
+- 影響範囲: `services/shared/db/maintenance.ts`、`services/maintenance/job.ts`。資料IDは推測困難なランダム値で個人データではない(設計§15.2)ため、最大で監査の保持期間ぶん資料行が残ることは§16の「1年経過後の個人識別情報の自動削除」に反しない(削除時点で機微・表示用項目はNULLへ消去済み、設計§12.1)
+- 回答:
+
+### Q-056 [未回答] T19: `upload_attempts`のpurgeは「3つの時刻すべてが保持期間より古い行」に限定した
+- 状況: Q-011は「`finished_at`または`expires_at`が十分過去の行をpurgeする」としているが、素直に「どちらかが古ければ削除」にすると、leaseが失効した後に解放された行(`expires_at`は古いが`finished_at`は直近)が即座に消え、頻度判定(直近1分の`started_at`を数える、設計§6.1)をすり抜けられる
+- 置いた仮定: `expires_at`が保持期間より古く、かつ`finished_at`がNULLまたは保持期間より古い行だけを削除する(`expires_at > started_at`はCHECK制約で保証されているため`started_at`の条件は不要)。保持期間は`MAINTENANCE_UPLOAD_ATTEMPT_RETENTION_DAYS`(既定7日)で、repository側で最低1時間を強制する
+- 影響範囲: `services/shared/db/maintenance.ts`、`services/maintenance/env.ts`
+- 回答:
+
+### Q-057 [未回答] T19: Job実行上限・バッチ件数・keyset cursorの扱い
+- 状況: 設計§7.7はMaintenance Jobの実行時刻だけを定め、Preview Jobの§7.5のような実行上限・処理単位を定めていない。大量データでメモリを使い切らない要件と、1件の失敗で全体を止めない要件をどう両立するかも未定
+- 置いた仮定: (1)`MAINTENANCE_JOB_MAX_RUNTIME_SECONDS`(既定900秒)の`AbortSignal`を「新しいバッチ・新しい対象を始めない」意味で使い、実行中の1件は中断しない。すべて冪等なので残りは翌日の実行が続きから処理する。応答しないI/Oに備え、上限+60秒で強制終了する (2)DB操作は`MAINTENANCE_BATCH_SIZE`(既定500)のバッチに区切り、削除件数がバッチ未満になるまで繰り返す (3)Blob削除の再試行対象は`(deleted_at, id)`のkeyset cursorで進める。削除に失敗した資料はフラグが残るため、先頭から取り直す方式だと同じ資料を掴み続けて後続が進まない。cursorの`deleted_at`は`Date`ではなく**DBが返した文字列のまま**渡す(`timestamptz`はmicrosecond精度、JavaScriptの`Date`はmillisecond精度で、変換すると同じmillisecond内の行が次のバッチにも現れて無限ループになり得る) (4)1つの処理が例外で落ちても残り4つは実行し、失敗が1件でもあれば終了コード1にする
+- 補足(レビュー指摘の反映): 各処理は件数カウンタを**引数で受け取って加算する**形にした(戻り値で返す形だと、例外が出た時点までに完了していた件数が`maintenance_task_finished`から消え、設計§17の監視値が実際より少なく見える)。また、Blob削除後の`completeBlobCleanup`が更新0行だった場合は`maintenance_blob_cleanup_flag_unchanged`(`database_failed`)として別eventで記録する。Blob削除自体は完了しているため件数は成功として数えるが、その資料は翌日以降も再試行対象として残り続けるため観測できるようにした
+- 影響範囲: `services/maintenance/job.ts`、`services/maintenance/env.ts`、`services/maintenance/index.ts`、`services/shared/db/maintenance.ts`、`tests/unit/services/maintenance-job.test.ts`
+- 回答:

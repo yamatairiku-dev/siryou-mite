@@ -146,7 +146,8 @@
 - 内容: 1実行1メッセージ、`dequeueCount` 最大3回、JavaScript無効・外部通信なし・Chromium sandbox有効のPlaywright撮影、1280x720 JPEG・1MB以下、失敗時 `failed` と監査。専用Dockerfileを作成する(Container Appsでのsecurity spikeは対象外)
 - 完了条件: Azuriteでの結合テスト(重複配信・再試行・timeout)
 
-### T19 [ ] 定期保守Job
+### T19 [x] 定期保守Job
+- 実装メモ: `services/maintenance/{index,job,dependencies,log,env}.ts` と purge専用の `services/shared/db/maintenance.ts` に実装。1実行で「`blob_cleanup_pending` の冪等な再試行」「監査の1年purge」「削除済み資料メタデータの1年purge」「孤児Blob掃除」「`upload_attempts` の古い行purge」を順に行い、各処理は独立にtry/catchして部分失敗でも他を止めず、件数を運用ログへ残す(失敗が1件でもあれば終了コード1)。資料purgeは `status='deleted'` ∧ `blob_cleanup_pending=false` ∧ `deleted_at <= now()-1年` ∧ 参照監査なし のANDで、設計§7.7どおりBlob削除未完了はpurgeしない。監査の追記専用性はruntime roleの権限を一切変えずに維持し、保守role `siryou_mite_maintenance` 専用のDELETE GRANT + trigger条件(UPDATEは全role禁止、DELETEは `retain_until` 経過後かつ保守roleのみ、`search_path` は `pg_catalog, pg_temp` へ固定)で1年purgeだけを通す(Q-052、Q-053)。孤児Blobは「キーが導出結果と完全一致」「`lastModified` が猶予(既定24h・最小1h)より古い」「DBに行が無い」の3条件すべてを満たす場合だけ削除し、アップロードのBlob保存→DB登録の窓を消さない(Q-054)。keyset cursorは `deleted_at::text` でマイクロ秒精度を保ち無限ループを避ける(Q-055〜Q-057)
 - 設計: §7.7, §16
 - 依存: T14
 - 内容: `blob_cleanup_pending` の冪等な再試行、削除済み資料と監査の1年経過後のpurge(Blob削除未完了はpurgeしない)。あわせてT09でBlob削除の補償自体が失敗した場合の孤児Blob(DBに行が無く回収経路が無い)の掃除と、T08で追加した `upload_attempts` の古い行(`finished_at` または `expires_at` が十分過去)をpurgeする(Q-011。runtime roleへのDELETE権限のGRANTもこのタスクのmigrationで追加する)

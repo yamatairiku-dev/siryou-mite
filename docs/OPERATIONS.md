@@ -165,6 +165,11 @@ Managed Identity必須・接続文字列禁止はWebと同じ制約です。
 | `PREVIEW_JOB_MAX_RUNTIME_SECONDS` | Preview | Job実行上限(既定45秒) |
 | `QUEUE_MAX_DEQUEUE_COUNT` | Preview | `dequeueCount`による最大試行回数(既定3回) |
 | `MAX_PREVIEW_IMAGE_BYTES` | Preview | プレビュー画像1件あたりの上限(既定1MB) |
+| `MAINTENANCE_JOB_MAX_RUNTIME_SECONDS` | Maintenance | Job実行上限(既定900秒)。超えたら新しいバッチを始めずに終了する |
+| `MAINTENANCE_BATCH_SIZE` | Maintenance | DBの抽出・削除1回あたりの件数(既定500) |
+| `MAINTENANCE_BLOB_LIST_PAGE_SIZE` | Maintenance | Blob一覧1ページの件数(既定200) |
+| `MAINTENANCE_ORPHAN_BLOB_GRACE_HOURS` | Maintenance | 孤児Blobと判定するまでの猶予(既定24時間、最小1時間) |
+| `MAINTENANCE_UPLOAD_ATTEMPT_RETENTION_DAYS` | Maintenance | `upload_attempts`の古い行を残す日数(既定7日) |
 
 Preview Jobは上記に加えて、1実行で1メッセージだけを処理し、`dequeueCount`が
 `QUEUE_MAX_DEQUEUE_COUNT`に達した失敗でプレビュー状態を`failed`にして監査を残します
@@ -173,8 +178,14 @@ Preview Jobは上記に加えて、1実行で1メッセージだけを処理し�
 `QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS`以上である必要があり、満たさない場合は
 起動時の環境変数検証で失敗します。
 
-Maintenance Jobは共通変数以外を必要としません。各サービスのManaged Identityは用途別に
-分離し(設計 §7.4)、DB roleとStorageロールは最小権限にします。
+Maintenance Jobは上記に加えて、**保守専用のDB role**(`siryou_mite_maintenance`)の
+資格情報で`DATABASE_URL`を設定します。runtime role(`siryou_mite_runtime`)には
+purge用のDELETE権限を与えていないため、runtime roleの接続では1年経過後のpurge
+(設計 §16)が失敗します。保持期間(1年)は設計値のため環境変数にしていません。
+
+各サービスのManaged Identityは用途別に分離し(設計 §7.4)、DB roleとStorageロールは
+最小権限にします。Maintenance JobのStorage権限はBlobの一覧・削除が必要です
+(HTML・プレビューの削除と孤児Blobの掃除)。
 
 `NODE_ENV`はWeb・Display・Preview・Maintenanceのどれも既定値`development`で、明示的に
 設定しない限り本番制約(`AZURE_STORAGE_CONNECTION_STRING`禁止・`AZURE_STORAGE_ACCOUNT_NAME`
@@ -216,14 +227,28 @@ Entra IDの割り当て解除・アカウント制御とセッション失効手
   Managed Identityと対応付ける実際のrole作成・用途別分割はIaC(Bicep)側の
   別タスクで行う
 - `audit_events`は追記専用で、`BEFORE UPDATE OR DELETE` triggerがDB role設定に
-  関わらずUPDATE・DELETEを拒否する。1年経過分のpurgeなど正当な運用作業は、
-  テーブル所有者相当の権限で該当triggerを一時的に無効化する手順が別途必要になる
-  (Maintenance Jobの具体的な手順は別タスクで設計する)
+  関わらずUPDATEを拒否する。DELETEは設計 §16の1年経過後の自動削除だけを通すため、
+  `add-maintenance-role-and-purge-support` migrationで「`retain_until`を過ぎた行」
+  かつ「保守role(`siryou_mite_maintenance`)またはテーブル所有者からの削除」に限って
+  許可する。runtime roleにはDELETEをGRANTしないため、Web・Display・Previewの
+  接続からは引き続き削除できない
+- 保守role(`siryou_mite_maintenance`)には`documents`へSELECT/UPDATE/DELETE、
+  `audit_events`・`upload_attempts`へSELECT/DELETEだけを与える(監査へのINSERT・
+  UPDATEは与えない)。runtime roleと同じく、roleが存在しない環境では
+  migrationは何もせず成功する
 
 結合テスト`npm run test:integration`(`tests/integration/`)は、ローカルPostgreSQLへ
 専用schemaを作ってmigrationを適用し、テーブル・制約・indexと追記専用の拒否動作を
 検証します。`npm run test`・`npm run verify`には含まれないため、CIへ組み込む場合は
 別途PostgreSQL service containerの起動が必要です。
+
+定期保守Jobの結合テスト(`tests/integration/maintenance-job.test.ts`)は、テスト専用
+schemaのPostgreSQLとAzuriteに対して本番と同じ組み立て(`createMaintenanceRuntime`)で
+Jobを動かし、Blob削除再試行の冪等性、`blob_cleanup_pending`と1年未満の資料・監査を
+purgeしないこと、孤児Blob掃除が猶予内のBlobと想定外のキーに触らないこと、
+`upload_attempts`のpurge、そしてruntime roleが`audit_events`をDELETEできないままで
+あることを検証します(設計 §7.7, §16, §18.2)。roleごとの挙動は、テスト用に作った
+`siryou_mite_runtime`/`siryou_mite_maintenance` roleへ`SET ROLE`して確認します。
 
 Display(HTML表示サービス)の結合テスト(`tests/integration/display-service.test.ts`)は、
 テスト専用schemaのPostgreSQLとAzuriteに対して本番と同じ組み立てでDisplayを起動し、
@@ -287,6 +312,23 @@ devcontainerには導入済みです。CIで実行する場合は
 - Preview Jobは専用image(`Dockerfile.preview`)で動き、Chromium sandbox有効・
   JavaScript無効・外部ネットワーク接続なしで撮影する
 - Migration Jobはdeploy前に1回実行し、失敗時はrevisionを更新しない
-- Maintenance Jobは毎日UTC 18:00（JST 03:00）に実行する
-- Maintenance JobはBlob削除再試行と、1年経過した監査・削除済みmetadataのpurgeを行う
+- Maintenance Jobは毎日UTC 18:00（JST 03:00）に実行し、並列実行しない
+  (`parallelism: 1`。同時に2つ動いても結果は壊れないが、無駄な競合を避ける)
+- Maintenance Jobは1回の実行で次の5つを順に行う(1つが失敗しても残りは実行する)
+  1. `blob_cleanup_pending`の資料のHTML・プレビューBlobを冪等に再試行削除する
+  2. `retain_until`(記録から1年)を過ぎた監査履歴をpurgeする
+  3. 1年経過した削除済み資料の最小メタデータをpurgeする
+  4. DBに行が無い孤児Blobを、最終更新から猶予(既定24時間)を過ぎたものだけ削除する
+  5. `upload_attempts`の古い行(既定7日より前)をpurgeする
 - `blob_cleanup_pending`の資料metadataはBlob削除完了までpurgeしない
+- 監査が残っている資料メタデータはpurgeしない(監査のFK)。監査が先にpurgeされた
+  次回以降の実行で対象になる
+- 処理ごとに`{"event":"maintenance_task_finished","task":...,"examined":...,
+  "succeeded":...,"failed":...}`を1行のJSONで出力する。1件でも失敗があれば
+  終了コード1で終わる(設計 §17「Maintenance Jobの失敗」の監視対象)。件数は途中で
+  例外が出た場合もそこまでの実績を保つ
+- Blobは削除できたのに`blob_cleanup_pending`を下ろせなかった場合は
+  `maintenance_blob_cleanup_flag_unchanged`(`errorCategory: database_failed`)を
+  出力する。その資料は翌日以降も再試行対象として残るため、継続して出る場合は調査する
+- Job実行上限(既定900秒)を超えると新しいバッチを始めずに終了する。すべての処理は
+  冪等なので、残りは翌日の実行が続きから処理する

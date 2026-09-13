@@ -27,6 +27,8 @@ import {
   HTML_BLOB_CONTENT_TYPE,
   InvalidDocumentIdError,
   InvalidQueueMessageError,
+  listBlobsByPrefix,
+  parseDocumentBlobKey,
   parsePreviewQueueMessage,
   PREVIEW_BLOB_CONTENT_TYPE,
   PREVIEW_QUEUE_SCHEMA_VERSION,
@@ -712,4 +714,151 @@ describe("すべてのBlob/Queue操作のabortSignal(設計 §7.3, §7.5, §14)"
       expect(options.abortSignal).toBe(signal);
     },
   );
+});
+
+describe("Blobキーの逆引き(設計 §7.3, §7.7の孤児Blob掃除)", () => {
+  it("導出したキーから資料IDと種別を復元する", () => {
+    expect(parseDocumentBlobKey(documentHtmlBlobKey(documentId))).toEqual({
+      kind: "html",
+      documentId,
+    });
+    expect(parseDocumentBlobKey(documentPreviewBlobKey(documentId))).toEqual({
+      kind: "preview",
+      documentId,
+    });
+  });
+
+  it.each([
+    ["接頭辞が違う", `other/${documentId}/document.html`],
+    ["ファイル名が違う", `html/${documentId}/document.htm`],
+    ["余分なパスがある", `html/extra/${documentId}/document.html`],
+    ["資料IDがUUIDでない", "html/not-a-uuid/document.html"],
+    ["資料IDが空", "html//document.html"],
+    ["パストラバーサル", "html/../../etc/passwd/document.html"],
+    ["接頭辞だけ", "html/"],
+    ["空文字", ""],
+  ])("%s キーは対象外(null)にする", (_label, key) => {
+    expect(parseDocumentBlobKey(key)).toBeNull();
+  });
+
+  it("大文字のUUIDは対象外にする(Blobキーは大文字小文字を区別する)", () => {
+    const mixedCaseId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee".toUpperCase();
+
+    expect(
+      parseDocumentBlobKey(`html/${mixedCaseId}/document.html`),
+    ).toBeNull();
+    // 同じUUIDでも小文字なら対象になる。
+    expect(
+      parseDocumentBlobKey(`html/${mixedCaseId.toLowerCase()}/document.html`),
+    ).toEqual({ kind: "html", documentId: mixedCaseId.toLowerCase() });
+  });
+});
+
+/** `listBlobsFlat().byPage()`だけを持つ最小のContainerClient stub。 */
+function createStubListContainerClient(
+  pages: Array<{
+    blobItems: Array<{ name: string; properties: { lastModified?: Date } }>;
+    continuationToken?: string;
+  }>,
+) {
+  const byPage = vi.fn((_options: unknown) => {
+    let index = 0;
+    return {
+      async next() {
+        const page = pages[index];
+        index += 1;
+        // 実際のSDKは`{ segment: { blobItems }, continuationToken }`を返す。
+        return page
+          ? {
+              done: false,
+              value: {
+                segment: { blobItems: page.blobItems },
+                continuationToken: page.continuationToken,
+              },
+            }
+          : { done: true, value: undefined };
+      },
+    };
+  });
+  const listBlobsFlat = vi.fn((_options: unknown) => ({ byPage }));
+
+  return {
+    containerClient: { listBlobsFlat } as unknown as ContainerClient,
+    listBlobsFlat,
+    byPage,
+  };
+}
+
+describe("Blob一覧(設計 §7.7の孤児Blob掃除)", () => {
+  it("接頭辞・ページサイズ・abortSignalを渡し、1ページだけ読む", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const lastModified = new Date("2026-01-01T00:00:00.000Z");
+    const { containerClient, listBlobsFlat, byPage } =
+      createStubListContainerClient([
+        {
+          blobItems: [
+            { name: `html/${documentId}/document.html`, properties: { lastModified } },
+          ],
+          continuationToken: "next-page",
+        },
+      ]);
+
+    const page = await listBlobsByPrefix(containerClient, "html/", {
+      pageSize: 2,
+      timeoutMs: 4321,
+    });
+
+    expect(listBlobsFlat).toHaveBeenCalledWith(
+      expect.objectContaining({ prefix: "html/" }),
+    );
+    const [listOptions] = listBlobsFlat.mock.calls[0] as [
+      { abortSignal: AbortSignal },
+    ];
+    expect(listOptions.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(timeoutSpy).toHaveBeenCalledWith(4321);
+    expect(byPage).toHaveBeenCalledWith(
+      expect.objectContaining({ maxPageSize: 2 }),
+    );
+    expect(page).toEqual({
+      blobs: [{ key: `html/${documentId}/document.html`, lastModified }],
+      continuationToken: "next-page",
+    });
+  });
+
+  it("continuationTokenを指定すると続きから読む", async () => {
+    const { containerClient, byPage } = createStubListContainerClient([
+      { blobItems: [] },
+    ]);
+
+    const page = await listBlobsByPrefix(containerClient, "preview/", {
+      pageSize: 10,
+      continuationToken: "token-1",
+    });
+
+    expect(byPage).toHaveBeenCalledWith(
+      expect.objectContaining({ continuationToken: "token-1" }),
+    );
+    // 続きが無い場合は`null`(空文字は返さない)。
+    expect(page.continuationToken).toBeNull();
+  });
+
+  it("最終更新日時が無いBlobはnullとして返す(呼び出し側が猶予を判定できない)", async () => {
+    const { containerClient } = createStubListContainerClient([
+      { blobItems: [{ name: `html/${documentId}/document.html`, properties: {} }] },
+    ]);
+
+    const page = await listBlobsByPrefix(containerClient, "html/", {
+      pageSize: 10,
+    });
+
+    expect(page.blobs[0]?.lastModified).toBeNull();
+  });
+
+  it("ページが1件も無い場合は空を返す", async () => {
+    const { containerClient } = createStubListContainerClient([]);
+
+    await expect(
+      listBlobsByPrefix(containerClient, "html/", { pageSize: 10 }),
+    ).resolves.toEqual({ blobs: [], continuationToken: null });
+  });
 });

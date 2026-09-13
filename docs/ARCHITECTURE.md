@@ -150,10 +150,12 @@ migrationを`down`実行不可として扱うため、誤ってdown migrationを
   `BEFORE INSERT` triggerで機械的に計算します(`timestamptz + interval`は
   timezoneに依存しIMMUTABLEでないため、GENERATED列にはできません)。
   **追記専用**: `BEFORE UPDATE OR DELETE` triggerがDB roleの設定に関わらず
-  `RAISE EXCEPTION`するため、通常のアプリ操作からUPDATE・DELETEできません
-  (設計 §12.2)。1年経過後のpurgeなど正当な運用作業だけが、テーブル所有者相当の
-  権限で`ALTER TABLE audit_events DISABLE TRIGGER audit_events_append_only`を
-  一時的に使う想定です(Maintenance Jobの具体的な手順は別タスクで設計します)。
+  UPDATEを`RAISE EXCEPTION`で拒否するため、アプリ操作から更新できません
+  (設計 §12.2)。DELETEは、設計 §16が要求する1年経過後の自動削除だけを通すため、
+  T19のmigration(`add-maintenance-role-and-purge-support`)で
+  「`retain_until`を過ぎた行」かつ「保守role(`siryou_mite_maintenance`)または
+  テーブル所有者からの削除」という条件を満たす場合に限り許可します。
+  runtime roleには引き続きDELETEをGRANTしません。
   `document_id`は資料へのFK(`ON DELETE`指定なし)ですが、検証・保存失敗時の
   監査は資料レコード自体を作らないため`document_id`を持ちません(設計 §11.1)。
 - runtime用DB role(`siryou_mite_runtime`という名前を仮定)には、`documents`へ
@@ -162,6 +164,11 @@ migrationを`down`実行不可として扱うため、誤ってdown migrationを
   Managed Identityと対応付けるDB roleの実際の作成・用途別分割(Web/Display/Preview/
   Maintenanceを分けるか)はIaC(Bicep)側の別タスクの範囲とし、このmigrationは
   roleが存在する場合だけGRANTし、存在しない環境(ローカル・CI)では何もしません。
+- 保守Job用DB role(`siryou_mite_maintenance`)は、purge(設計 §7.7, §16)に必要な
+  権限だけを持ちます: `documents`へSELECT/UPDATE/DELETE、`audit_events`と
+  `upload_attempts`へSELECT/DELETE。監査へのINSERT・UPDATEは与えません
+  (保守Jobは監査を書きません)。Maintenance Jobの`DATABASE_URL`はこのroleの
+  資格情報を使い、runtime roleとは分離します。
 - keyset paginationのタイブレーカ`id DESC`を含むindex
   (`documents (owner_subject_id, created_at DESC, id DESC)`、
   `audit_events (occurred_at DESC, id DESC)`)を追加し、前方一致で完全に代替される
@@ -178,7 +185,9 @@ migrationを`down`実行不可として扱うため、誤ってdown migrationを
   並行アップロードが同じ集計値を見て全て許可され、システム全体50GB・利用者500MBを
   超過できます)。保存するのは`owner_subject_id`(Entraのoid)・時刻・byte数だけで、
   ファイル名・HTML本文は持ちません。runtime roleへはSELECT/INSERT/UPDATEだけを与え、
-  古い行のpurgeはMaintenance Job側の運用作業とします(設計 §7.7)。集計は
+  古い行のpurgeはMaintenance Job(保守role)が行います(Q-011、T19)。purgeの対象は
+  `expires_at`と`finished_at`の両方が保持期間(既定7日)より古い行だけで、頻度判定の
+  窓(1分)・lease(120秒)に使われ得る行は消しません。集計は
   `documents (owner_subject_id) INCLUDE (byte_size) WHERE status = 'active'`と
   `upload_attempts (expires_at) INCLUDE (byte_size) WHERE finished_at IS NULL`の
   部分indexで、システムロック保持中の集計を短く保ちます。
@@ -290,6 +299,7 @@ services/
   shared/db/pool.ts       pg Poolの生成・トランザクション(環境変数は読まない)
   shared/db/documents.ts  documents repository(SQL・Zod schema)
   shared/db/audit-events.ts  audit_events repository(追記専用)
+  shared/db/maintenance.ts   定期保守Jobのpurge専用SQL(DELETEを扱う唯一のrepository)
   display/index.ts        Display（HTML表示サービス）のエントリーポイント(環境変数検証と起動のみ)
   display/server.ts       Displayのnode:http ハンドラー(経路・Origin・body上限・grant検証・監査)
   display/headers.ts      表示レスポンスのCSP・sandbox(設計 §9.2)
@@ -300,7 +310,10 @@ services/
   preview/capture.ts      Playwright(Chromium)での撮影と安全設定(sandbox有効・JS無効・通信遮断)
   preview/dependencies.ts PreviewのQueue・DB・Blob・撮影の組み立て
   preview/env.ts          Preview Job用環境変数schema
-  maintenance/index.ts     Maintenance Job（定期保守）のエントリーポイント
+  maintenance/index.ts    Maintenance Job（定期保守）のエントリーポイント(環境変数検証・Job実行上限・終了コード)
+  maintenance/job.ts      5つの保守処理の手順(Blob削除再試行・purge・孤児Blob掃除・upload_attempts purge)
+  maintenance/dependencies.ts MaintenanceのDB・Blobクライアント組み立て
+  maintenance/log.ts      保守処理の件数つき運用ログ(1行1event JSON)
   maintenance/env.ts      Maintenance Job用環境変数schema
 tsconfig.services.json    services/専用のTypeScript設定。build/services/へ出力
 Dockerfile                Web・Display・Migration・Maintenance共通のNode.js image
@@ -323,10 +336,9 @@ Dockerfile.preview        Preview Job専用image（Playwright公式Ubuntu image 
   Web側とservices側で検証ヘルパーの実装が一部重複するが、`tsconfig.services.json`の
   `rootDir: services`制約により`app/`をimportできないための意図した重複とする。
 - サービス間で共有したいコード（DB接続、Blob/Queueクライアント、運用ログなど）が
-  増えた場合も同様に`services/shared/`へ追加する。Display(`services/display/`)は実装済みで、
-  Display(`services/display/`)とPreview(`services/preview/`)は実装済みで、
-  Maintenanceの`index.ts`は引き続き起動確認用の最小実装（担当タスクを示すコメント付き）
-  であり、業務ロジックはT19で追加する。
+  増えた場合も同様に`services/shared/`へ追加する。Display(`services/display/`)、
+  Preview(`services/preview/`)、Maintenance(`services/maintenance/`)はいずれも実装済みで、
+  entrypoint / 処理本体(依存注入) / 依存の組み立て / 環境変数schema の4分割を共通の形とする。
 - Dockerfileのbuild stageは`npm run build`（Web）に続けて`npm run build:services`を
   実行し、`build/client`・`build/server`・`build/services`を同じimageへ入れる（設計 §7.6:
   Web・Display・Migration・MaintenanceでNode.js imageは1種類）。実行単位の切り替えは

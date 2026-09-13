@@ -375,6 +375,146 @@ export async function deleteDocumentPreview(
   await deleteBlob(containerClient, documentPreviewBlobKey(documentId), options);
 }
 
+// --- 孤児Blobの掃除(設計 §7.7、T19) ---
+
+/** 非公開HTMLのBlobキーの接頭辞(設計 §7.3)。 */
+export const HTML_BLOB_KEY_PREFIX = "html/";
+/** プレビュー画像のBlobキーの接頭辞(設計 §7.3)。 */
+export const PREVIEW_BLOB_KEY_PREFIX = "preview/";
+
+/** 資料Blobの種別。孤児Blobの削除はこの2種類だけを対象にする。 */
+export type DocumentBlobKind = "html" | "preview";
+
+export type ParsedDocumentBlobKey = {
+  kind: DocumentBlobKind;
+  documentId: string;
+};
+
+/**
+ * Blobキーを資料IDへ逆引きする。`documentHtmlBlobKey`/`documentPreviewBlobKey`が
+ * 生成する形と**完全に一致**する場合だけ資料IDを返し、それ以外(想定外のキー、
+ * UUIDでない部分、余分なパス)は`null`を返す。
+ *
+ * 保守Job(設計 §7.7)の孤児Blob掃除は、この関数が資料IDを返したBlobだけを
+ * 削除対象にする。キーを直接指定して削除する経路は用意しない(取り違えで
+ * 無関係なBlobを消さないため)。
+ */
+export function parseDocumentBlobKey(
+  blobKey: string,
+): ParsedDocumentBlobKey | null {
+  const kinds: Array<{
+    kind: DocumentBlobKind;
+    prefix: string;
+    suffix: string;
+    derive: (documentId: string) => string;
+  }> = [
+    {
+      kind: "html",
+      prefix: HTML_BLOB_KEY_PREFIX,
+      suffix: "/document.html",
+      derive: documentHtmlBlobKey,
+    },
+    {
+      kind: "preview",
+      prefix: PREVIEW_BLOB_KEY_PREFIX,
+      suffix: "/preview.jpg",
+      derive: documentPreviewBlobKey,
+    },
+  ];
+
+  for (const candidate of kinds) {
+    if (
+      !blobKey.startsWith(candidate.prefix) ||
+      !blobKey.endsWith(candidate.suffix)
+    ) {
+      continue;
+    }
+
+    const documentId = blobKey.slice(
+      candidate.prefix.length,
+      blobKey.length - candidate.suffix.length,
+    );
+
+    if (!documentIdSchema.safeParse(documentId).success) {
+      return null;
+    }
+
+    // 大文字のUUIDはこのアプリが作らない形(`randomUUID`は小文字)。PostgreSQLの
+    // `uuid`型は大文字小文字を区別しないのに対しBlobキーは区別するため、
+    // 突き合わせが噛み合わない値は対象外にする(fail closed)。
+    if (documentId !== documentId.toLowerCase()) {
+      return null;
+    }
+
+    // 導出結果と突き合わせ、少しでも違う形のキーは対象外にする。
+    if (candidate.derive(documentId) !== blobKey) {
+      return null;
+    }
+
+    return { kind: candidate.kind, documentId };
+  }
+
+  return null;
+}
+
+/** 一覧で取得するBlobの最小情報。本文は読まない。 */
+export type StoredBlobSummary = {
+  key: string;
+  /** Storageが返す最終更新日時。取得できない場合は`null`。 */
+  lastModified: Date | null;
+};
+
+export type StoredBlobPage = {
+  blobs: StoredBlobSummary[];
+  /** 続きがある場合だけ文字列。無い場合は`null`。 */
+  continuationToken: string | null;
+};
+
+export interface ListBlobsOptions extends StorageOperationOptions {
+  /** 1ページの最大件数。メモリを使い切らないよう呼び出し側が必ず指定する。 */
+  pageSize: number;
+  /** 前ページの`continuationToken`。先頭から読む場合は省略する。 */
+  continuationToken?: string | null;
+}
+
+/**
+ * 接頭辞に一致するBlobを1ページ分だけ列挙する(設計 §7.7の孤児Blob掃除)。
+ *
+ * 全件をメモリへ読み込まないよう、`byPage`で1ページだけ取得して打ち切る。
+ * 戻り値にBlob本文は含めない。
+ */
+export async function listBlobsByPrefix(
+  containerClient: ContainerClient,
+  prefix: string,
+  options: ListBlobsOptions,
+): Promise<StoredBlobPage> {
+  const iterator = containerClient
+    .listBlobsFlat({ prefix, abortSignal: abortSignalFor(options) })
+    .byPage({
+      maxPageSize: options.pageSize,
+      ...(options.continuationToken
+        ? { continuationToken: options.continuationToken }
+        : {}),
+    });
+
+  const page = await iterator.next();
+  if (page.done || !page.value) {
+    return { blobs: [], continuationToken: null };
+  }
+
+  const blobs: StoredBlobSummary[] = page.value.segment.blobItems.map(
+    (item) => ({
+      key: item.name,
+      lastModified: item.properties.lastModified ?? null,
+    }),
+  );
+
+  return {
+    blobs,
+    continuationToken: page.value.continuationToken || null,
+  };
+}
+
 // --- Storage Queue(設計 §7.5) ---
 
 /** 現時点で発行するQueueメッセージのschema version。増分は後方非互換の変更時のみ。 */

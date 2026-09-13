@@ -226,9 +226,16 @@ DBはWebだけでなくDisplay(閲覧監査と`active`再確認)・Preview・Mai
 - 一覧はoffsetを使わないkeyset paginationです。`(created_at DESC, id DESC)`で並べ、
   cursorは`(created_at, id)`をbase64urlへ符号化しただけの位置情報です。cursorは署名
   しませんが、SQLが常に`owner_subject_id`で絞り込むため、改ざんしても他人の資料は
-  返りません。壊れたcursorはZod検証で拒否します。
-- `services/shared/db/audit-events.ts`: 監査イベントのrepositoryです。**INSERTだけ**を
-  公開し、UPDATE・DELETEを行う関数を持ちません(DB側でもtriggerとrole権限で禁止)。
+  返りません。壊れたcursorはZod検証で拒否します。監査履歴も同じ方式で
+  `(occurred_at DESC, id DESC)`に並べますが、cursorには`Date`(ミリ秒まで)ではなく
+  DBから取り出したマイクロ秒精度の文字列を使い、同じミリ秒に発生した監査イベントを
+  取りこぼさないようにしています。監査履歴のcursorも位置情報だけで、閲覧できるのは
+  `requireAdmin`を通ったloaderに限られます。
+- `services/shared/db/audit-events.ts`: 監査イベントのrepositoryです。**INSERTと、
+  監査履歴画面(設計 §5.7の`/admin/audit`)が使うSELECTだけ**を公開し、UPDATE・DELETEを
+  行う関数を持ちません(DB側でもtriggerとrole権限で禁止)。監査履歴の検索は日時・
+  利用者・資料ID・操作・結果で絞り込み、`action`・`result`はINSERTと同じZod enumに
+  限ります(enum外の値はDBへ渡しません)。
   入力はZodのstrict objectで検証し、設計 §12.2に無い項目(HTML本文、ファイル名、
   token、表示grant、Cookie、principal header、IPアドレスなど)は型にも実装にも
   存在しないため保存できません。`error_category`はDBでは自由記述TEXTですが、

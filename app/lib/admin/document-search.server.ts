@@ -18,6 +18,12 @@
  */
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import {
+  jstMinuteSchema,
+  jstMinuteToUtcIso,
+  optionalCriterion,
+  readSearchCriteria,
+} from "~/lib/admin/search-criteria.server";
 import { requireAdmin } from "~/lib/auth/authorization.server";
 import {
   insertAuditEvent,
@@ -48,45 +54,6 @@ const ADMIN_SEARCH_LOG_EVENT = "admin_document_search";
 
 /** 1ページの件数。全件は返さない(設計 §5.2の20件に合わせる)。 */
 export const ADMIN_SEARCH_PAGE_SIZE = 20;
-
-/** 日本時間の固定オフセット(サマータイムが無いため定数でよい。設計 §5.2)。 */
-const JST_UTC_OFFSET_MINUTES = 9 * 60;
-
-/** 画面が送ってくる検索条件(`datetime-local`と同じ`YYYY-MM-DDTHH:mm`形式)。 */
-const jstMinutePattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
-
-/**
- * 日本時間の`YYYY-MM-DDTHH:mm`をUTCのISO日時文字列へ変換する。
- * 形式・実在しない日付(`2026-02-30`など)はfail closedで`null`を返す。
- */
-function jstMinuteToUtcIso(value: string, addMinutes = 0): string | null {
-  if (!jstMinutePattern.test(value)) {
-    return null;
-  }
-  const millis = Date.parse(`${value}:00.000+09:00`);
-  if (Number.isNaN(millis)) {
-    return null;
-  }
-  // `2026-02-30`のような存在しない日付は翌月へ繰り上がって解釈されるため、
-  // 日本時間へ戻して入力と一致することを確かめる。
-  const roundTrip = new Date(millis + JST_UTC_OFFSET_MINUTES * 60_000)
-    .toISOString()
-    .slice(0, 16);
-  if (roundTrip !== value) {
-    return null;
-  }
-  return new Date(millis + addMinutes * 60_000).toISOString();
-}
-
-/** 空文字(未指定)を許す検索条件のschema。 */
-function optionalCriterion<T extends z.ZodType<string>>(schema: T) {
-  return z.union([z.literal(""), schema]);
-}
-
-const jstMinuteSchema = z
-  .string()
-  .regex(jstMinutePattern)
-  .refine((value) => jstMinuteToUtcIso(value) !== null);
 
 /**
  * URLのクエリ文字列から受け取る検索条件。すべて任意で、空文字は「絞り込まない」。
@@ -153,18 +120,15 @@ function normalizeEmail(value: string): string | null {
   return result.success ? result.data : null;
 }
 
-function readCriteria(request: Request): Record<string, string> {
-  const params = new URL(request.url).searchParams;
-  const read = (name: string): string => (params.get(name) ?? "").trim();
-  return {
-    documentId: read("documentId"),
-    ownerEmail: read("ownerEmail"),
-    fileName: read("fileName"),
-    uploadedFrom: read("uploadedFrom"),
-    uploadedTo: read("uploadedTo"),
-    cursor: read("cursor"),
-  };
-}
+/** 画面から受け取る検索条件の名前(schemaのkeyと一致させる)。 */
+const criteriaNames = [
+  "documentId",
+  "ownerEmail",
+  "fileName",
+  "uploadedFrom",
+  "uploadedTo",
+  "cursor",
+] as const;
 
 function toAdminDocumentCard(document: DocumentRecord): AdminDocumentCard {
   return {
@@ -227,7 +191,9 @@ export async function handleAdminDocumentSearch(
     throw error;
   }
 
-  const parsed = searchCriteriaSchema.safeParse(readCriteria(request));
+  const parsed = searchCriteriaSchema.safeParse(
+    readSearchCriteria(request, criteriaNames),
+  );
   if (!parsed.success) {
     logOperationEvent({
       event: ADMIN_SEARCH_LOG_EVENT,

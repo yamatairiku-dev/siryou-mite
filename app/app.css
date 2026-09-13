@@ -224,7 +224,7 @@ dd {
   margin: 0;
 }
 
-/* 管理画面の検索フォーム(設計 §5.6)。 */
+/* 管理画面・監査履歴画面の検索フォーム(設計 §5.6, §5.7)。 */
 .admin-search-form {
   display: grid;
   gap: 12px;
@@ -238,7 +238,8 @@ dd {
   margin-bottom: 4px;
 }
 
-.admin-search-form input {
+.admin-search-form input,
+.admin-search-form select {
   width: 100%;
 }
 

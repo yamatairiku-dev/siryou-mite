@@ -230,3 +230,21 @@
 - 置いた仮定: 初期画面`/app`に管理者だけへ見えるリンクを置いた(`canUseAdminScreen`)。これは表示制御であって認可ではなく、`/admin/documents`のloaderが`requireAdmin`で必ず判定し直す(設計§4.2)
 - 影響範囲: `app/routes/app.tsx`、`tests/unit/routes/app.test.tsx`
 - 回答:
+
+### Q-037 [未回答] T17: 監査履歴の「利用者」をどの列で検索するかが設計に無い
+- 状況: 設計§5.7は検索条件を「日時、利用者、資料ID、操作、結果」と挙げるだけで、「利用者」が`actor_subject_id`(Entraの`oid`)なのか`actor_email_at_event`(監査時点のメールアドレス)なのかを定めていない。§4.2は「メールアドレスを認可判定に使わない」と定めるが、検索条件としての可否には触れていない
+- 置いた仮定: 検索欄を2つに分け、「利用者のメールアドレス」は`actor_email_at_event`の部分一致(`ILIKE`。`%`・`_`はrepositoryでエスケープ)、「利用者ID」は`actor_subject_id`の完全一致にした。管理者が実際に手元に持つのはメールアドレスであることが多く、一方で同じ人物でもメールアドレスは変わり得るため、変わらない識別子でも追える両方を用意した。どちらも**検索条件にしか使わず認可判定には使わない**(認可は`requireAdmin`のApp Roleだけで決まる)。一致方法・1ページ20件・日時は日本時間の分単位で「開始は含む・終了は指定した分の終わりまで含む」はT16(Q-033)と同じ規則にそろえた
+- 影響範囲: `services/shared/db/audit-events.ts`、`app/lib/admin/audit-search.server.ts`、`app/routes/admin.audit.tsx`。`actor_email_at_event`の部分一致に使えるindexは無い(既存indexは`occurred_at`・`actor_subject_id`・`action`・`result`・`document_id`)。保存期間1年分の規模では、日時範囲と併用すれば`audit_events_occurred_at_id_idx`を辿れるため新しいindexは追加していない。メールアドレス単独での全期間検索が遅い場合は`pg_trgm`のindex追加(拡張の有効化が必要)を検討する
+- 回答:
+
+### Q-038 [未回答] T17: keyset paginationのcursorが`Date`のミリ秒までしか持てない
+- 状況: PostgreSQLの`timestamptz`はマイクロ秒まで保持するが、`pg`が返す`Date`はミリ秒までしか持てない。`Date`からcursorを作ると、同じミリ秒に発生した行が行値比較`(occurred_at, id) < (cursor)`から外れて**取りこぼされる**。監査履歴は同一ミリ秒に複数行が入り得る(結合テストで実際に再現した)
+- 置いた仮定: 監査履歴の検索SQLでcursor専用に`to_char(occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`を取得し、その値でcursorを組み立てた(表示用の`occurredAt`は従来どおり`Date`)。同一時刻3件をcursorで全件たどれることを結合テストで確認している
+- 影響範囲: `services/shared/db/audit-events.ts`、`tests/integration/audit-events-repository.test.ts`。**`documents`側(`encodeDocumentCursor`。T04の所有者別一覧とT16の管理画面検索)には同じ問題が残っている**。同一ミリ秒に複数件アップロードされた場合に一覧で取りこぼす可能性があり、T17の範囲外のため修正していない(修正する場合は`services/shared/db/documents.ts`の`documentColumns`へ同じ`to_char`列を足す)
+- 回答:
+
+### Q-039 [未回答] T17: 初期画面から監査履歴画面への導線が設計に無い
+- 状況: 設計§13に`/admin/audit`はあるが、§5.2の初期画面の要素に監査履歴画面へのリンクが無く、管理者がURLを直接入力する以外の導線が定義されていない(T16のQ-036と同じ状況)
+- 置いた仮定: Q-036で追加した管理者だけに見えるリンクの隣に「監査履歴」リンクを置いた(`canUseAdminScreen`)。これは表示制御であって認可ではなく、`/admin/audit`のloaderが`requireAdmin`で必ず判定し直す(設計§4.2)
+- 影響範囲: `app/routes/app.tsx`、`tests/unit/routes/app.test.tsx`
+- 回答:

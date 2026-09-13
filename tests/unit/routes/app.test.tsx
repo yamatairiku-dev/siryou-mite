@@ -289,6 +289,21 @@ describe("初期画面コンポーネント", () => {
     expect(adminLink.getAttribute("href")).toBe("/admin/documents");
   });
 
+  it("管理者には監査履歴画面へのリンクを表示し、一般利用者には表示しない(設計 §5.7)", async () => {
+    const general = renderApp({ documents: [], canUseAdminScreen: false });
+    await screen.findByText(/所有者 太郎さん/);
+    expect(screen.queryByRole("link", { name: "監査履歴" })).toBeNull();
+    general.unmount();
+
+    renderApp({ documents: [], canUseAdminScreen: true });
+    const auditLink = (await screen.findByRole("link", {
+      name: "監査履歴",
+    })) as HTMLAnchorElement;
+    // 表示制御であって認可ではない。`/admin/audit`のloaderが`requireAdmin`で
+    // 判定し直す(設計 §4.2)。
+    expect(auditLink.getAttribute("href")).toBe("/admin/audit");
+  });
+
   it("プレビュー状態が生成失敗の場合は代替画像を使う", async () => {
     renderApp({ documents: [cardFrom({ previewStatus: "failed" })] });
 

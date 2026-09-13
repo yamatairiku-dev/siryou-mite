@@ -336,13 +336,17 @@ export default function Application({ loaderData }: Route.ComponentProps) {
       </p>
 
       {/*
-        管理画面への導線は管理者にだけ表示する(設計 §5.6)。表示制御であって
-        認可ではなく、`/admin/documents`側で必ず`requireAdmin`が判定する。
+        管理画面・監査履歴画面への導線は管理者にだけ表示する(設計 §5.6, §5.7)。
+        表示制御であって認可ではなく、`/admin/documents`・`/admin/audit`側で
+        必ず`requireAdmin`が判定する。
       */}
       {loaderData.canUseAdminScreen && (
         <p>
           <a className="button button-secondary" href="/admin/documents">
             管理画面（全資料の検索）
+          </a>{" "}
+          <a className="button button-secondary" href="/admin/audit">
+            監査履歴
           </a>
         </p>
       )}

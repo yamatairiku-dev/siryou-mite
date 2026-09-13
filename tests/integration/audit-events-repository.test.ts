@@ -3,6 +3,7 @@ import type { Client } from "pg";
 import {
   auditErrorCategories,
   insertAuditEvent,
+  searchAuditEvents,
 } from "~/lib/db/audit-events.server";
 import { createDocument } from "~/lib/db/documents.server";
 import { closePool } from "~/lib/db/pool.server";
@@ -241,5 +242,236 @@ describe("追記専用(設計 §12.2)", () => {
       /append-only/,
     );
     expect(await storedRows()).toHaveLength(1);
+  });
+});
+
+/**
+ * T17 結合テスト: 監査履歴の検索(設計 §5.7, §12.2, §18.2)。
+ *
+ * 実際のPostgreSQLに対して、検索条件の絞り込み・並び順・keyset paginationが
+ * 期待どおりに動くこと、SELECTしか実行せず追記専用の性質を壊さないことを確認する。
+ */
+describe("searchAuditEvents", () => {
+  const otherActorSubjectId = "actor-oid-002";
+
+  /** 検索対象の監査イベントを時系列順に用意する。 */
+  async function seedEvents() {
+    const document = await createDocument(
+      { ownerSubjectId: actorSubjectId, byteSize: 10 },
+      client,
+    );
+
+    const upload = await insertAuditEvent(
+      {
+        action: "upload",
+        result: "success",
+        documentId: document.id,
+        actorSubjectId,
+        actorTenantId: "tenant-id",
+        actorEmailAtEvent: "actor@example.com",
+        actorGroupValues: ["ZAA535-A"],
+        actorRoles: ["User"],
+        correlationId,
+      },
+      client,
+    );
+    const view = await insertAuditEvent(
+      {
+        action: "view",
+        result: "denied",
+        documentId: document.id,
+        actorSubjectId: otherActorSubjectId,
+        actorTenantId: "tenant-id",
+        actorEmailAtEvent: "other@example.com",
+        actorRoles: ["User"],
+        correlationId,
+        errorCategory: "not_authorized",
+      },
+      client,
+    );
+    const adminOperation = await insertAuditEvent(
+      {
+        action: "admin_operation",
+        result: "success",
+        actorSubjectId: otherActorSubjectId,
+        actorTenantId: "tenant-id",
+        actorEmailAtEvent: "other@example.com",
+        actorRoles: ["Admin"],
+        correlationId,
+      },
+      client,
+    );
+
+    return { document, upload, view, adminOperation };
+  }
+
+  function idsOf(page: Awaited<ReturnType<typeof searchAuditEvents>>) {
+    return page.events.map((event) => event.id).sort();
+  }
+
+  /**
+   * 新しい順に並んでいるか(設計 §5.7の一覧)。
+   *
+   * `occurred_at`はマイクロ秒まで保持されるが`Date`はミリ秒までしか持てないため、
+   * 同じミリ秒に見える2件の前後関係はここでは判定しない(同一時刻でも順序が一意に
+   * 定まることはcursorの結合テストで確認する)。
+   */
+  function isSortedNewestFirst(
+    page: Awaited<ReturnType<typeof searchAuditEvents>>,
+  ): boolean {
+    return page.events.every((event, index) => {
+      const previous = page.events[index - 1];
+      return (
+        !previous || previous.occurredAt.getTime() >= event.occurredAt.getTime()
+      );
+    });
+  }
+
+  it("条件を指定しない場合は全件を新しい順に返す(設計 §5.7)", async () => {
+    const seeded = await seedEvents();
+
+    const page = await searchAuditEvents({}, client);
+
+    expect(idsOf(page)).toEqual(
+      [seeded.adminOperation.id, seeded.view.id, seeded.upload.id].sort(),
+    );
+    expect(isSortedNewestFirst(page)).toBe(true);
+    expect(page.nextCursor).toBeNull();
+  });
+
+  it.each([
+    ["操作", { action: "delete" as const }],
+    ["結果", { result: "failed" as const }],
+    ["利用者ID", { actorSubjectId: "actor-oid-999" }],
+    ["メールアドレス", { actorEmail: "nobody@example.com" }],
+  ])("%s が一致しない監査イベントは返さない", async (_label, criteria) => {
+    await seedEvents();
+
+    const page = await searchAuditEvents(criteria, client);
+
+    expect(page.events).toEqual([]);
+  });
+
+  it("利用者・操作・結果・資料IDで絞り込める(設計 §5.7)", async () => {
+    const seeded = await seedEvents();
+
+    expect(idsOf(await searchAuditEvents({ actorSubjectId }, client))).toEqual([
+      seeded.upload.id,
+    ]);
+    expect(idsOf(await searchAuditEvents({ action: "view" }, client))).toEqual([
+      seeded.view.id,
+    ]);
+    expect(
+      idsOf(await searchAuditEvents({ result: "denied" }, client)),
+    ).toEqual([seeded.view.id]);
+    expect(
+      idsOf(
+        await searchAuditEvents({ documentId: seeded.document.id }, client),
+      ),
+    ).toEqual([seeded.view.id, seeded.upload.id].sort());
+  });
+
+  it("メールアドレスは大文字小文字を区別しない部分一致で絞り込む", async () => {
+    const seeded = await seedEvents();
+
+    const page = await searchAuditEvents({ actorEmail: "OTHER@EXAMPLE" }, client);
+
+    expect(idsOf(page)).toEqual([seeded.adminOperation.id, seeded.view.id].sort());
+  });
+
+  it("`%`だけの入力は全件一致にならない(ワイルドカードをエスケープする)", async () => {
+    await seedEvents();
+
+    const page = await searchAuditEvents({ actorEmail: "%" }, client);
+
+    expect(page.events).toEqual([]);
+  });
+
+  it("日時の下限は含み、上限は含まない", async () => {
+    const seeded = await seedEvents();
+    const times = [seeded.upload, seeded.view, seeded.adminOperation].map(
+      (event) => event.occurredAt.getTime(),
+    );
+    const oldest = new Date(Math.min(...times));
+    const newest = new Date(Math.max(...times));
+
+    // 下限は境界の値そのものを含む。
+    expect(
+      idsOf(
+        await searchAuditEvents(
+          { occurredFrom: oldest.toISOString() },
+          client,
+        ),
+      ),
+    ).toEqual([seeded.adminOperation.id, seeded.view.id, seeded.upload.id].sort());
+    // 上限は境界の値を含まない。
+    expect(
+      (await searchAuditEvents({ occurredTo: oldest.toISOString() }, client))
+        .events,
+    ).toEqual([]);
+    expect(
+      (
+        await searchAuditEvents(
+          { occurredFrom: new Date(newest.getTime() + 1).toISOString() },
+          client,
+        )
+      ).events,
+    ).toEqual([]);
+  });
+
+  it("keyset paginationで重複・欠落なく続きを取得できる", async () => {
+    const seeded = await seedEvents();
+
+    const first = await searchAuditEvents({ limit: 2 }, client);
+    expect(first.events).toHaveLength(2);
+    expect(first.nextCursor).not.toBeNull();
+
+    const second = await searchAuditEvents(
+      { limit: 2, cursor: first.nextCursor },
+      client,
+    );
+    expect(second.events).toHaveLength(1);
+    expect(second.nextCursor).toBeNull();
+
+    const collected = [...first.events, ...second.events].map(
+      (event) => event.id,
+    );
+    expect(new Set(collected).size).toBe(3);
+    expect(collected.sort()).toEqual(
+      [seeded.adminOperation.id, seeded.view.id, seeded.upload.id].sort(),
+    );
+  });
+
+  it("同じ時刻の監査イベントもcursorで取りこぼさない", async () => {
+    // 同一トランザクション内の`now()`は同じ値になるため、`occurred_at`が完全に
+    // 一致する監査イベントを作れる(`timestamptz`はマイクロ秒まで保持する)。
+    await client.query("BEGIN");
+    const seeded = await seedEvents();
+    await client.query("COMMIT");
+
+    const collected: string[] = [];
+    let cursor: string | null = null;
+    for (let pageIndex = 0; pageIndex < 5; pageIndex += 1) {
+      const page: Awaited<ReturnType<typeof searchAuditEvents>> =
+        await searchAuditEvents({ limit: 1, cursor }, client);
+      collected.push(...page.events.map((event) => event.id));
+      cursor = page.nextCursor;
+      if (cursor === null) {
+        break;
+      }
+    }
+
+    expect(collected.sort()).toEqual(
+      [seeded.adminOperation.id, seeded.view.id, seeded.upload.id].sort(),
+    );
+  });
+
+  it("検索しても監査イベントは増減・変化しない(追記専用。設計 §12.2)", async () => {
+    await seedEvents();
+    const before = await storedRows();
+
+    await searchAuditEvents({ action: "admin_operation" }, client);
+
+    expect(await storedRows()).toEqual(before);
   });
 });

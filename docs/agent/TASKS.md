@@ -130,7 +130,8 @@
 - 内容: 資料ID・オーナーのメール・元ファイル名・日時で検索、閲覧、強制削除。管理操作の監査
 - 完了条件: 一般ユーザーの拒否を含む単体テスト
 
-### T17 [ ] 監査履歴画面 `/admin/audit` 🔒
+### T17 [x] 監査履歴画面 `/admin/audit` 🔒
+- 実装メモ: `app/lib/admin/audit-search.server.ts` と `app/routes/admin.audit.tsx` に実装(T16と同じ構造)。`requireAdmin`(App Role・`oid`基準)を通るまで検索SQLを実行せず、日時・利用者(メール部分一致/`actor_subject_id`完全一致)・資料ID・`action`・`result` をstrict Zod(INSERTと同じenum)で検証してからプレースホルダで`searchAuditEvents`へ渡す。追加したのはSELECTのみで追記専用性は不変(既存GRANT・indexで足りたためmigrationなし)。閲覧自体を`admin_operation`として検索と同一transactionで監査し、保存失敗時は結果を返さない。`actor_email_at_event`・groups・rolesは運用ログへ出さない。cursorは`to_char`のマイクロ秒精度でkeysetの取りこぼしを回避(Q-038)。JST変換などT16との共通処理は `app/lib/admin/search-criteria.server.ts` へ集約(Q-037〜Q-039)
 - 設計: §5.7, §15
 - 依存: T04, T16
 - 内容: 日時・利用者・資料ID・操作・結果で検索。監査履歴の閲覧自体も監査する
@@ -157,6 +158,12 @@
 - 依存: T10, T13, T14, T16, T17
 - 内容: Easy Authのprincipal headerをfixtureで再現する。本番で有効になり得る認証bypassは作らない
 - 完了条件: `npm run test:e2e` 成功
+
+### T22 [ ] 資料一覧cursorのミリ秒精度による取りこぼしの修正
+- 設計: §5.2, §5.6
+- 依存: T17
+- 内容: `services/shared/db/documents.ts` の `encodeDocumentCursor` は `pg` が返す `Date`(ミリ秒精度)由来のため、`created_at` の小数秒が切り捨てられ、同一ミリ秒の資料がページ境界にあると次ページで取りこぼされる(T17のレビューで実在を確認。丸めは切り捨て方向のため重複は起きず欠落のみ)。T17でaudit側に入れた対策と同じく、`documentColumns` に `to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')` のcursor専用列を足してマイクロ秒精度で往復させる。影響は `/app` の一覧(T10)と `/admin/documents` の検索(T16)
+- 完了条件: 同一ミリ秒に複数件ある場合でも重複・欠落なくページングできることを結合テストで確認(Q-038)
 
 ### T21 [ ] ドキュメント整合と引き継ぎ
 - 依存: T20

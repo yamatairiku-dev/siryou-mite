@@ -284,8 +284,9 @@ describe("検索条件", () => {
       originalFileName: "資料",
       // 入力は日本時間、repositoryへはUTCのISO日時で渡す(設計 §5.2)。
       uploadedFrom: "2026-01-01T15:00:00.000Z",
-      // 上限は指定した分の終わりまでを含める(1分進めた排他的上限)。
-      uploadedTo: "2026-01-02T14:59:00.000Z",
+      // 上限は指定した分の終わりまでを含める。repositoryのSQLは
+      // `created_at < uploadedTo`(排他的上限)なので、23:59 JSTの1分後を渡す。
+      uploadedTo: "2026-01-02T15:00:00.000Z",
       limit: 20,
     });
   });

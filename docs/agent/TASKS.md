@@ -123,7 +123,8 @@
 
 ## Phase 2: 管理機能
 
-### T16 [~] 管理画面 `/admin/documents` 🔒
+### T16 [x] 管理画面 `/admin/documents` 🔒
+- 実装メモ: `app/lib/admin/document-search.server.ts`(認可・Zod検証・監査)と `app/routes/admin.documents.tsx` に実装。loader冒頭の`requireAdmin`(roles claim完全一致、`oid`基準)を通るまで検索SQLを1回も実行せず、検索条件はstrict Zodで検証してからプレースホルダとLIKEエスケープ付きで`searchDocumentsForAdmin`へ渡す。検索と`admin_operation`監査は同一transactionで、監査・運用ログには検索条件そのもの(メール・ファイル名)を保存しない。JST入力は`created_at >= from`/`created_at < to`に合わせ上限を1分進めた排他的上限へ変換。強制削除は持たずT14の確認画面へ導線を出すだけ(Q-033〜Q-036)
 - 設計: §5.6, §4.2
 - 依存: T10, T14
 - 内容: 資料ID・オーナーのメール・元ファイル名・日時で検索、閲覧、強制削除。管理操作の監査

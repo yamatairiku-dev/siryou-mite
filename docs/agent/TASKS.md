@@ -155,7 +155,7 @@
 
 ## Phase 4: 仕上げ
 
-### T20 [ ] E2Eテスト
+### T20 [~] E2Eテスト
 - 設計: §18.3
 - 依存: T10, T13, T14, T16, T17
 - 内容: Easy Authのprincipal headerをfixtureで再現する。本番で有効になり得る認証bypassは作らない

@@ -224,6 +224,24 @@ dd {
   margin: 0;
 }
 
+/* 管理画面の検索フォーム(設計 §5.6)。 */
+.admin-search-form {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.admin-search-form label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.admin-search-form input {
+  width: 100%;
+}
+
 .correlation-id {
   color: #6b778c;
   font-size: 12px;

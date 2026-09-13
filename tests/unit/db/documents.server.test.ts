@@ -9,8 +9,10 @@ import {
   getOwnerUsage,
   getSystemUsage,
   InvalidCursorError,
+  escapeLikePattern,
   listDocumentsByOwner,
   markBlobCleanupCompleted,
+  searchDocumentsForAdmin,
   updateDocumentPreviewStatus,
 } from "~/lib/db/documents.server";
 import { createStubExecutor, lastCall } from "./stub-executor";
@@ -455,5 +457,185 @@ describe("使用量の集計", () => {
     await expect(getSystemUsage(executor)).rejects.toThrow(
       "安全な整数の範囲を超えています",
     );
+  });
+});
+
+/**
+ * T16: 管理画面の横断検索(設計 §5.6)。
+ *
+ * 所有者で絞らない唯一の一覧SQLであるため、条件の受け渡しとパラメーター化を
+ * ここで固定する。実際のSQL実行と検索結果は結合テストで確認する。
+ */
+describe("searchDocumentsForAdmin", () => {
+  const adminSearchRow = documentRow({ owner_email_at_upload: "owner@example.com" });
+
+  it("条件を指定しない場合は`active`だけで絞り込み、新しい順に20件+1件を取得する", async () => {
+    const { executor, calls } = createStubExecutor([[adminSearchRow]]);
+
+    const page = await searchDocumentsForAdmin({}, executor);
+
+    const call = lastCall(calls);
+    expect(call.text).toContain("status = 'active'");
+    // 所有者による絞り込み条件は付かない(管理者は全資料を検索できる。設計 §4.2)。
+    expect(call.text).not.toContain("owner_subject_id =");
+    expect(call.text).not.toContain("ILIKE");
+    expect(call.text).toContain("ORDER BY created_at DESC, id DESC");
+    expect(call.values).toEqual([21]);
+    expect(page.documents[0]).toMatchObject({
+      id: documentId,
+      ownerEmailAtUpload: "owner@example.com",
+    });
+    expect(page.nextCursor).toBeNull();
+  });
+
+  it("4つの検索条件をすべてプレースホルダーで渡す", async () => {
+    const { executor, calls } = createStubExecutor([[]]);
+
+    await searchDocumentsForAdmin(
+      {
+        documentId,
+        ownerEmail: "owner@example.com",
+        originalFileName: "資料",
+        uploadedFrom: "2026-01-01T00:00:00.000Z",
+        uploadedTo: "2026-02-01T00:00:00.000Z",
+      },
+      executor,
+    );
+
+    const call = lastCall(calls);
+    expect(call.text).toContain("id = $1::uuid");
+    expect(call.text).toContain("owner_email_at_upload ILIKE $2 ESCAPE '\\'");
+    expect(call.text).toContain("original_file_name ILIKE $3 ESCAPE '\\'");
+    expect(call.text).toContain("created_at >= $4::timestamptz");
+    expect(call.text).toContain("created_at < $5::timestamptz");
+    expect(call.values).toEqual([
+      documentId,
+      "%owner@example.com%",
+      "%資料%",
+      "2026-01-01T00:00:00.000Z",
+      "2026-02-01T00:00:00.000Z",
+      21,
+    ]);
+    // 利用者入力はSQL文字列へ連結されていない。
+    expect(call.text).not.toContain("owner@example.com");
+    expect(call.text).not.toContain("資料");
+  });
+
+  it("空文字・空白だけの条件では絞り込まない", async () => {
+    const { executor, calls } = createStubExecutor([[]]);
+
+    await searchDocumentsForAdmin(
+      { ownerEmail: "", originalFileName: "   " },
+      executor,
+    );
+
+    const call = lastCall(calls);
+    expect(call.text).not.toContain("ILIKE");
+    expect(call.values).toEqual([21]);
+  });
+
+  it("`LIKE`のワイルドカードをエスケープし、全件一致にしない", async () => {
+    const { executor, calls } = createStubExecutor([[]]);
+
+    await searchDocumentsForAdmin(
+      { ownerEmail: "%", originalFileName: "a_b\\c%" },
+      executor,
+    );
+
+    expect(lastCall(calls).values).toEqual([
+      "%\\%%",
+      "%a\\_b\\\\c\\%%",
+      21,
+    ]);
+    expect(escapeLikePattern("100%_\\")).toBe("100\\%\\_\\\\");
+  });
+
+  it("SQLインジェクションを狙う入力も値として渡す", async () => {
+    const injection = "' OR 1=1 --";
+    const { executor, calls } = createStubExecutor([[]]);
+
+    await searchDocumentsForAdmin({ originalFileName: injection }, executor);
+
+    const call = lastCall(calls);
+    expect(call.text).not.toContain("OR 1=1");
+    expect(call.values).toContain(`%${injection}%`);
+  });
+
+  it("資料IDがUUIDでない場合はSQLを実行せずに拒否する", async () => {
+    const { executor, calls } = createStubExecutor([[]]);
+
+    await expect(
+      searchDocumentsForAdmin({ documentId: "not-a-uuid" }, executor),
+    ).rejects.toThrow();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("日時がISO形式でない場合はSQLを実行せずに拒否する", async () => {
+    const { executor, calls } = createStubExecutor([[]]);
+
+    await expect(
+      searchDocumentsForAdmin({ uploadedFrom: "2026/01/01" }, executor),
+    ).rejects.toThrow();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("極端に長い検索文字列はSQLを実行せずに拒否する", async () => {
+    const { executor, calls } = createStubExecutor([[]]);
+
+    await expect(
+      searchDocumentsForAdmin({ ownerEmail: "a".repeat(321) }, executor),
+    ).rejects.toThrow();
+    await expect(
+      searchDocumentsForAdmin({ originalFileName: "a".repeat(1001) }, executor),
+    ).rejects.toThrow();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("未知の検索条件を受け付けない(所有者条件の偽装などを防ぐ)", async () => {
+    const { executor, calls } = createStubExecutor([[]]);
+
+    await expect(
+      searchDocumentsForAdmin(
+        { ownerSubjectId: "oid-someone-else" } as never,
+        executor,
+      ),
+    ).rejects.toThrow();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("次ページがある場合はcursorを返し、cursor指定時は行値比較で続きを取得する", async () => {
+    const rows = Array.from({ length: 3 }, (_, index) =>
+      documentRow({ id: `1111111${index}-1111-4111-8111-111111111111` }),
+    );
+    const first = createStubExecutor([rows]);
+
+    const page = await searchDocumentsForAdmin({ limit: 2 }, first.executor);
+
+    expect(page.documents).toHaveLength(2);
+    expect(page.nextCursor).not.toBeNull();
+
+    const second = createStubExecutor([[]]);
+    await searchDocumentsForAdmin(
+      { limit: 2, cursor: page.nextCursor ?? "" },
+      second.executor,
+    );
+
+    const call = lastCall(second.calls);
+    expect(call.text).toContain("(created_at, id) < ($1::timestamptz, $2::uuid)");
+    expect(call.text).not.toContain("OFFSET");
+    expect(call.values).toEqual([
+      "2026-01-02T03:04:05.000Z",
+      "11111111-1111-4111-8111-111111111111",
+      3,
+    ]);
+  });
+
+  it("壊れたcursorはSQLを実行せずに拒否する", async () => {
+    const { executor, calls } = createStubExecutor([[]]);
+
+    await expect(
+      searchDocumentsForAdmin({ cursor: "!!!not-base64!!!" }, executor),
+    ).rejects.toThrow(InvalidCursorError);
+    expect(calls).toHaveLength(0);
   });
 });

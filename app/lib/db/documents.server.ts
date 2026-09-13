@@ -17,10 +17,12 @@ import {
   getSystemUsage as getSystemUsageWith,
   listDocumentsByOwner as listDocumentsByOwnerWith,
   markBlobCleanupCompleted as markBlobCleanupCompletedWith,
+  searchDocumentsForAdmin as searchDocumentsForAdminWith,
   type DocumentListPage,
   type DocumentRecord,
   type DocumentUsage,
   type ListDocumentsByOwnerOptions,
+  type SearchDocumentsForAdminOptions,
 } from "../../../services/shared/db/documents";
 
 export {
@@ -29,6 +31,7 @@ export {
   deleteDocumentAsAdmin,
   deleteDocumentAsOwner,
   encodeDocumentCursor,
+  escapeLikePattern,
   InvalidCursorError,
   updateDocumentPreviewStatus,
 } from "../../../services/shared/db/documents";
@@ -40,6 +43,7 @@ export type {
   DocumentUsage,
   ListDocumentsByOwnerOptions,
   PreviewStatus,
+  SearchDocumentsForAdminOptions,
 } from "../../../services/shared/db/documents";
 
 /** 資料を1件取得する(削除済みも返すため、閲覧可否は呼び出し側が`status`で判定する)。 */
@@ -56,6 +60,17 @@ export async function listDocumentsByOwner(
   executor: Queryable = getPool(),
 ): Promise<DocumentListPage> {
   return listDocumentsByOwnerWith(options, executor);
+}
+
+/**
+ * 管理者による全資料の横断検索(設計 §5.6)。所有者では絞り込まないため、
+ * `requireAdmin`/`assertAdmin`で`Admin`ロールを確認済みのloaderからだけ呼ぶ。
+ */
+export async function searchDocumentsForAdmin(
+  options: SearchDocumentsForAdminOptions,
+  executor: Queryable = getPool(),
+): Promise<DocumentListPage> {
+  return searchDocumentsForAdminWith(options, executor);
 }
 
 /** Blob削除が完了した資料の再試行フラグを下ろす(設計 §10.4(4)(5))。 */

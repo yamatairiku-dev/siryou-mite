@@ -109,7 +109,8 @@ describe("documents table", () => {
         "documents_pkey",
         // T04のmigrationで`id DESC`を加えたindexへ置き換えた(keyset pagination)。
         "documents_owner_created_at_id_idx",
-        "documents_created_at_idx",
+        // T16のmigrationで`id DESC`を加えたindexへ置き換えた(管理画面の横断検索)。
+        "documents_created_at_id_idx",
         "documents_owner_email_at_upload_idx",
         "documents_original_file_name_idx",
       ]),

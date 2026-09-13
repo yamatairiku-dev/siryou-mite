@@ -13,6 +13,7 @@ export default [
     "documents/:documentId/preview-status",
     "routes/documents.$documentId.preview-status.ts",
   ),
+  route("admin/documents", "routes/admin.documents.tsx"),
   route("auth/login", "routes/auth.login.tsx"),
   route("auth/logout", "routes/auth.logout.tsx"),
   route("health", "routes/health.ts"),

@@ -473,3 +473,148 @@ export async function getSystemUsage(
   );
   return toUsage(result.rows[0]);
 }
+
+/**
+ * 管理画面(設計 §5.6)の横断検索の条件。すべて任意で、未指定(`null`・空文字)の
+ * 項目では絞り込まない。
+ *
+ * `listDocumentsByOwner`と違い所有者で絞らないため、この関数は`Admin`ロールを
+ * 確認済みの経路(`requireAdmin`/`assertAdmin`を通ったloader)からだけ呼ぶ。
+ */
+const adminSearchOptionsSchema = z
+  .object({
+    /** 資料IDは完全一致。UUIDでない値はDBへ渡す前に弾く。 */
+    documentId: z.uuid().nullable().default(null),
+    /** オーナーのメールアドレス(アップロード時点の値)の部分一致。 */
+    ownerEmail: optionalSearchText(320),
+    /** 元ファイル名の部分一致。 */
+    originalFileName: optionalSearchText(1000),
+    /** アップロード日時の下限(この日時を含む)。UTCのISO日時文字列。 */
+    uploadedFrom: z.iso.datetime({ offset: true }).nullable().default(null),
+    /** アップロード日時の上限(この日時を**含まない**)。UTCのISO日時文字列。 */
+    uploadedTo: z.iso.datetime({ offset: true }).nullable().default(null),
+    /** 1ページの最大件数。全件は返さない(設計 §5.2の20件に合わせる)。 */
+    limit: z.number().int().min(1).max(100).default(20),
+    cursor: z.string().max(500).nullable().default(null),
+  })
+  .strict();
+
+export type SearchDocumentsForAdminOptions = z.input<
+  typeof adminSearchOptionsSchema
+>;
+
+/**
+ * 検索文字列の共通スキーマ。前後の空白を除き、空文字は「未指定」として`null`へ
+ * 寄せる(空文字で`%%`のような全件一致パターンを作らないため)。長すぎる入力は
+ * DBへ渡す前にここで弾く。
+ */
+function optionalSearchText(maxLength: number) {
+  return z
+    .string()
+    .trim()
+    .max(maxLength)
+    .nullable()
+    .default(null)
+    .transform((value) => (value === null || value === "" ? null : value));
+}
+
+/**
+ * `LIKE`/`ILIKE`のワイルドカードをエスケープする。
+ *
+ * 利用者が入力した`%`・`_`・`\`をそのままパターンへ入れると、`%`だけの入力が
+ * 全件一致になるなど、意図しない検索結果になる。エスケープ文字は`\`で、SQL側でも
+ * `ESCAPE '\'`を明示する。エスケープ後の値はプレースホルダー経由で渡すため、
+ * SQL文字列へ連結されることはない。
+ */
+export function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+
+/** 部分一致(`%...%`)のパターンを組み立てる。 */
+function containsPattern(value: string): string {
+  return `%${escapeLikePattern(value)}%`;
+}
+
+/**
+ * 管理者による全資料の横断検索(設計 §5.6, §4.2「他人の資料一覧・検索」)。
+ *
+ * - 所有者では絞り込まない。呼び出し側が`Admin`ロールを確認済みであること。
+ * - 検索条件は任意の組み合わせで、指定された条件だけをANDで足す。値は必ず
+ *   プレースホルダー(`$1`, `$2`, ...)で渡し、利用者入力をSQLへ連結しない。
+ *   プレースホルダー番号はこの関数が採番する固定文字列である。
+ * - `active`な資料だけを対象にする。削除済みはメールアドレス・元ファイル名・
+ *   タイトルがNULLへ消去済み(設計 §12.1)で検索条件に一致せず、強制削除・閲覧の
+ *   対象にもならないため、一覧へ出さない。
+ * - 並び順とページングは所有者別一覧と同じ`(created_at DESC, id DESC)`の
+ *   keyset paginationで、cursorも`encodeDocumentCursor`を共用する。
+ */
+export async function searchDocumentsForAdmin(
+  options: SearchDocumentsForAdminOptions,
+  executor: Queryable,
+): Promise<DocumentListPage> {
+  const criteria = adminSearchOptionsSchema.parse(options);
+  // 次ページの有無を判定するため1件多く取得する。
+  const fetchLimit = criteria.limit + 1;
+
+  const values: unknown[] = [];
+  const placeholder = (value: unknown): string => {
+    values.push(value);
+    return `$${values.length}`;
+  };
+
+  const conditions: string[] = ["status = 'active'"];
+
+  if (criteria.documentId !== null) {
+    conditions.push(`id = ${placeholder(criteria.documentId)}::uuid`);
+  }
+  if (criteria.ownerEmail !== null) {
+    conditions.push(
+      `owner_email_at_upload ILIKE ${placeholder(
+        containsPattern(criteria.ownerEmail),
+      )} ESCAPE '\\'`,
+    );
+  }
+  if (criteria.originalFileName !== null) {
+    conditions.push(
+      `original_file_name ILIKE ${placeholder(
+        containsPattern(criteria.originalFileName),
+      )} ESCAPE '\\'`,
+    );
+  }
+  if (criteria.uploadedFrom !== null) {
+    conditions.push(
+      `created_at >= ${placeholder(criteria.uploadedFrom)}::timestamptz`,
+    );
+  }
+  if (criteria.uploadedTo !== null) {
+    conditions.push(
+      `created_at < ${placeholder(criteria.uploadedTo)}::timestamptz`,
+    );
+  }
+  if (criteria.cursor !== null) {
+    const position = decodeDocumentCursor(criteria.cursor);
+    conditions.push(
+      `(created_at, id) < (${placeholder(
+        position.createdAt,
+      )}::timestamptz, ${placeholder(position.id)}::uuid)`,
+    );
+  }
+
+  const result = await executor.query<DocumentRow>(
+    `SELECT ${documentColumns}
+       FROM documents
+      WHERE ${conditions.join("\n        AND ")}
+      ORDER BY created_at DESC, id DESC
+      LIMIT ${placeholder(fetchLimit)}`,
+    values,
+  );
+
+  const documents = result.rows.slice(0, criteria.limit).map(toDocumentRecord);
+  const hasNext = result.rows.length > criteria.limit;
+  const last = documents[documents.length - 1];
+
+  return {
+    documents,
+    nextCursor: hasNext && last ? encodeDocumentCursor(last) : null,
+  };
+}

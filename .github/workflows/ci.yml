@@ -12,18 +12,35 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+
+    # 結合テストとE2Eが使うローカル専用のPostgreSQL・Azurite(devcontainerと同じimage)。
+    # 認証情報はCI内だけで使う使い捨ての値で、Azuriteのキーは公開されている既定値。
+    services:
+      postgres:
+        image: postgres:18.4-alpine
+        env:
+          POSTGRES_USER: siryou_mite
+          POSTGRES_PASSWORD: local-development-password
+          POSTGRES_DB: siryou_mite
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U siryou_mite -d siryou_mite"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite:3.36.0
+        ports:
+          - 10000:10000
+          - 10001:10001
+
+    # 単体・結合テストはsetupファイルで、E2Eはplaywright.config.tsで残りの環境変数を
+    # 設定するため、ここではservice containerへの接続先だけを渡す。
     env:
-      NODE_ENV: production
-      APP_NAME: CIテストアプリ
-      APP_ORIGIN: http://localhost:3000
-      AUTH_MODE: entra
-      SESSION_SECRET: test-session-secret-at-least-32-characters
-      SESSION_MAX_AGE_SECONDS: "28800"
-      ENTRA_CLIENT_ID: 00000000-0000-0000-0000-000000000000
-      ENTRA_CLIENT_SECRET: test-only-client-secret
-      ENTRA_TENANT_ID: 00000000-0000-0000-0000-000000000001
-      ENTRA_REDIRECT_URI: http://localhost:3000/auth/callback
+      DATABASE_URL: postgresql://siryou_mite:local-development-password@localhost:5432/siryou_mite
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;QueueEndpoint=http://localhost:10001/devstoreaccount1;"
 
     steps:
       - name: Checkout
@@ -38,23 +55,18 @@ jobs:
       - name: Install
         run: npm ci --include=dev
 
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Verify (typecheck, unit tests, build)
+        run: npm run verify
 
-      - name: Unit tests
-        run: npm run test:coverage
-
-      - name: Build
-        run: npm run build
-
+      # 結合テスト(preview-capture)もChromiumを起動するため、結合テストより前に入れる
       - name: Install Playwright
         run: npx playwright install --with-deps chromium
 
+      - name: Integration tests
+        run: npm run test:integration
+
       - name: E2E tests
         run: npm run test:e2e
-        env:
-          NODE_ENV: development
-          AUTH_MODE: dev
 
       - name: Upload reports
         if: always()

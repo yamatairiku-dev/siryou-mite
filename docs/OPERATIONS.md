@@ -340,3 +340,19 @@ devcontainerには導入済みです。CIで実行する場合は
   出力する。その資料は翌日以降も再試行対象として残るため、継続して出る場合は調査する
 - Job実行上限(既定900秒)を超えると新しいバッチを始めずに終了する。すべての処理は
   冪等なので、残りは翌日の実行が続きから処理する
+
+## ローカル開発環境のデータ
+
+E2E(`npm run test:e2e`)はテストが作った資料・監査行・Blobを削除しません。監査履歴は
+追記専用で、アップロード監査が残る資料行も物理削除できないためです。テストごとに
+ランダムな利用者を使うので結果には影響しませんが、繰り返し実行するとdevcontainerの
+PostgreSQLとAzuriteのデータが増え続けます。
+
+データを作り直す場合は、devcontainerの外(ホスト側)で次を実行してvolumeを削除し、
+devcontainerを再起動してから`npm run db:migrate`を実行します。ローカルのデータはすべて
+消えます。
+
+```sh
+docker compose -f .devcontainer/docker-compose.yml down
+docker volume rm siryou-mite-local_postgres_data siryou-mite-local_azurite_data
+```

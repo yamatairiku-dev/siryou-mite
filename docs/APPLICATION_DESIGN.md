@@ -4,8 +4,8 @@
 
 - 状態: Easy Auth移行実装中
 - 対象: 初期リリース
-- 最終更新日: 2026-08-02
-- 実装状態: 業務機能未着手
+- 最終更新日: 2026-09-27
+- 実装状態: 初期リリース分を実装済み(実装中の判断は`docs/agent/QUESTIONS.md`の回答を反映)
 
 この文書は、`docs/ラフ仕様.md`と要件ヒアリングの結果をもとに、初期リリースの
 機能、データ、セキュリティ、運用の設計を定義する。
@@ -149,6 +149,10 @@ App Roleを定義する。
 - 未ログインの場合はEntra IDログイン後に同じURLへ戻す。
 - 所有者以外も、URLを知っているログイン済みユーザーであれば閲覧できる。
 - 上部に「URLをコピー」と「初期画面へ戻る」を表示する。
+- 見出しに資料タイトルを表示する。タイトルが無い場合は元ファイル名、それも無い場合は
+  「資料」と表示する。所有者以外の閲覧者にも同じ見出しを表示する。
+- 表示grantの期限切れなどで表示できなかった場合に備え、「表示をやり直す」を表示する。
+  押すとgrantを取り直して再表示する。
 - Teamsなどへ共有するのはこのアプリ側固定URLとし、DisplayのURLやgrantは共有しない。
 - 初期リリースではTeams上の資料固有プレビューを保証せず、URLまたは汎用的な
   アプリ情報だけが表示される前提とする。
@@ -175,11 +179,31 @@ App Roleを定義する。
 管理者は資料を閲覧し、強制削除できる。オーナー変更はできない。管理者による
 閲覧と削除も監査履歴へ記録する。
 
+検索条件の扱い:
+
+- 資料IDは完全一致とする。
+- オーナーのメールアドレスと元ファイル名は、大文字小文字を区別しない部分一致とする。
+  入力中の`%`と`_`はワイルドカードとして扱わない。
+- アップロード日時は日本時間の分単位で指定する。開始は指定した分を含み、終了は
+  指定した分の終わりまでを含む。
+- 1ページは20件とし、初期画面と同じkeyset paginationで追加読込する。
+- 強制削除後は、利用者による削除と同じく初期画面へ戻す。
+- 初期画面には、管理者にだけ管理画面と監査履歴画面へのリンクを表示する。これは
+  表示制御であり、認可は各画面のloaderで改めて判定する。
+
 ### 5.7 監査履歴画面
 
 管理者だけが、アップロード、閲覧、削除、管理操作の履歴を、日時、利用者、
 資料ID、操作、結果で検索・閲覧できる。監査履歴の閲覧自体も監査対象とする。
 CSV出力と詳細分析機能は設けない。
+
+「利用者」は次の2つの欄で検索する。どちらも検索条件にだけ使い、認可判定には使わない。
+
+- 利用者のメールアドレス: 操作時点のメールアドレスに対する、大文字小文字を区別しない
+  部分一致
+- 利用者ID: Entraの`oid`(`actor_subject_id`)に対する完全一致
+
+日時の粒度、1ページの件数、paginationは管理画面(§5.6)と同じとする。
 
 ## 6. HTML受け入れ仕様
 
@@ -204,6 +228,13 @@ CSV出力と詳細分析機能は設けない。
 Content-Type、拡張子、ファイル名は信用せず、サーバー側で内容を検査する。
 ファイル名と`title`は表示用文字列として長さを制限し、HTMLとして解釈しない。
 
+上記に加え、次の場合も拒否する。
+
+- ファイル名が255文字を超える(`file_name_too_long`)
+- ファイル名に制御文字またはパス区切りを含む(`invalid_file_name`)
+- 要素の入れ子が512段、または要素数が50万を超える(`excessive_complexity`)。
+  HTML解析の計算量とメモリが増え続けることを防ぐため
+
 ### 6.2 動的機能の扱い
 
 JavaScript、`iframe`、フォームなどを含むことだけを理由にアップロードを拒否しない。
@@ -226,6 +257,12 @@ JavaScript、`iframe`、フォームなどを含むことだけを理由にア�
 HTML属性で検出できる外部画像、stylesheet、font、media、`iframe`などの外部resource
 参照は拒否する。inline CSS内など検査をすり抜けた外部resourceはCSPで遮断し、
 プレビューと実表示の双方で読み込まない。
+
+外部resourceの判定はfail closedとする。resourceを読み込む属性の値は、`data:`、
+同一文書内(`#id`)、値なし、`about:blank`だけを許可する。`<link href>`は`rel`の種類を
+問わず対象とする。CSSのescape、`<object><param value>`、JavaScriptが組み立てるURL、
+上限を超えた`iframe srcdoc`の中身など、検査で判定しきれない箇所はCSPとsandboxで遮断する
+多層防御とし、リリース確認でCSPとsandboxが実際に効いていることを確認する。
 
 アップロードされたHTMLの内容は改変せず、単一のprivate Blobとして保存する。
 表示サービスは同じHTMLへHTTPレスポンスヘッダーでCSPとsandboxを強制する。
@@ -341,8 +378,12 @@ WebのEasy Authが使うアプリ登録で、IDトークンへ次を発行する
   `application/x-www-form-urlencoded`のPOST bodyでiframeへ送る。
 - POST bodyは最大8KB、`Origin`はアプリオリジンだけを許可し、grantの有効期間は
   60秒とする。URL、クエリ文字列、Cookieではgrantを受け取らない。
-- grantはEd25519で署名し、資料ID、操作利用者の`oid`、操作時点のメールアドレス、
-  有効期限、ランダムnonce、`keyId`を含む。Blobキーとファイル名は含めない。
+- grantはEd25519で署名し、資料ID、操作利用者の`oid`と`tid`(tenant ID)、
+  操作時点のメールアドレス、有効期限、ランダムnonce、`keyId`を含む。Blobキーと
+  ファイル名は含めない。`tid`はDisplayが閲覧監査の`actor_tenant_id`を保存するために
+  使う。メールアドレスとして解釈できないclaimの場合、メールアドレスは`null`とする。
+- grantは有効期限内であれば再利用できる。iframeの再読込で同じgrantが再POSTされるため、
+  単回使用にはしない。
 - grantの署名、期限、対象資料を検証し、DBで資料が`active`であることを再確認する。
 - 有効かつ削除されていないHTMLをBlobから取得した後、閲覧成功監査を保存してから返す。
 - grantとPOST bodyをアプリケーションログ、ingressログ、エラーログへ記録しない。
@@ -574,8 +615,9 @@ sandbox allow-popups allow-popups-to-escape-sandbox;
    場合はHTMLを返さない。
 7. 表示サービスがHTMLを返す。JavaScript無効時の手動POST fallbackは設けない。
 
-認証拒否、資料不存在、grant不正、Blob取得失敗は、発生した境界で`denied`または
-`failed`として監査する。
+署名検証を通ったgrantに対する資料不存在・削除済み(`denied`)とBlob取得失敗
+(`failed`)は、表示サービスで監査する。署名検証を通らないgrant(不正・期限切れ)は
+監査へ残さず、運用ログだけに記録する(§15.1)。
 
 ### 10.4 削除
 
@@ -633,7 +675,7 @@ stateDiagram-v2
 |---|---|
 | `id` | 監査イベントID |
 | `occurred_at` | UTC発生日時 |
-| `action` | upload、view、delete、admin operationなど |
+| `action` | `upload`、`view`、`delete`、`admin_operation` |
 | `result` | success、denied、failed |
 | `document_id` | 対象資料ID |
 | `actor_subject_id` | Entra内部識別子 |
@@ -642,8 +684,25 @@ stateDiagram-v2
 | `actor_group_values` | 操作時点の所属コード配列 |
 | `actor_roles` | 操作時点のApp Role配列 |
 | `correlation_id` | 一連の処理を追跡するランダムID |
-| `error_category` | 秘密情報を含まない分類 |
+| `error_category` | 秘密情報を含まない分類。値は下記の一覧に限る |
 | `retain_until` | 1年後の削除予定日時 |
+
+`action`の使い分け:
+
+- `upload`: アップロードと、その続きであるプレビュー生成の結果。プレビュー生成の行は
+  アップロード監査の操作者を引き継ぎ、`actor_email_at_event`を`null`とする
+- `view`: 表示サービスでの閲覧
+- `delete`: 所有者による削除と管理者による強制削除。強制削除は`actor_roles`と、
+  資料のオーナーと操作者の不一致で判別する
+- `admin_operation`: 管理画面の検索と監査履歴の閲覧
+
+`error_category`の値は次に限る: `validation_failed`、`html_inspection_failed`、
+`quota_exceeded`、`rate_limited`、`not_authenticated`、`not_authorized`、
+`document_not_found`、`grant_invalid`、`grant_expired`、`storage_failed`、
+`queue_failed`、`preview_timeout`、`preview_failed`、`database_failed`、`internal_error`。
+
+メールアドレス形式として解釈できない`email`/`preferred_username` claim(UPNなど)は、
+`documents`と監査へ`null`として保存し、処理自体は成功させる。認可には`oid`だけを使う。
 
 HTML本文、質問・回答全文、token、Cookie、principal header全文、ファイル名、IPアドレスは監査イベントへ
 保存しない。監査イベントは追記専用とし、通常のアプリ操作から更新・削除できない。
@@ -681,6 +740,12 @@ HTML本文、質問・回答全文、token、Cookie、principal header全文、�
 - 保存期間は1年
 - アップロード、閲覧、削除、管理操作を記録
 - 成功、拒否、失敗を記録
+- ただし、操作者を検証できない要求の拒否は監査へ残さず、運用ログだけに記録する。
+  対象は、未認証の要求、署名検証を通らない表示grant、GETで表示する画面(削除確認・
+  管理画面)での拒否と入力エラー。検証前の利用者情報で監査行を作れること(なりすまし)と、
+  要求を繰り返すだけで追記専用の監査領域を増やせることを防ぐため
+- プレビュー状態の参照と定期保守Jobの処理は監査しない。保守Jobの結果は件数付きの
+  運用ログと終了コードで監視する
 - 管理者による監査履歴閲覧も記録
 - アップロード、削除、管理操作は業務更新と監査を同じDBトランザクションで保存する
 - 閲覧成功は表示サービスがHTMLを返す直前に保存する

@@ -101,6 +101,12 @@ grantはアプリJavaScriptがhidden formのPOST bodyでiframeへ送り、URL、
   静止画プレビューは`preview/{documentId}/preview.jpg`に保存する。どちらも資料IDから
   決定的に導出し(`services/shared/storage.ts`の`documentHtmlBlobKey`/
   `documentPreviewBlobKey`)、キーそのものをDBへ保持しない
+- 生成済み(`ready`)のプレビュー画像は、Blobを公開せず短期SASも発行せずに、Webの
+  認証付きresource route `GET /documents/:documentId/preview`がBlobを読んで
+  `image/jpeg`(`Cache-Control: no-store`)として中継する(Q-030)。認可は
+  `/documents/:documentId/preview-status`と同じで、`ready`以外・削除済み・未存在は
+  同じ404、Blob取得失敗は画像を返さず運用ログ(`document_preview_image`)へ分類だけを
+  残す。処理本体は`app/lib/documents/preview-image.server.ts`。参照は監査しない(Q-032)
 - プレビュー生成のQueueメッセージは`schemaVersion`と`documentId`だけを持つJSONで、
   HTML本文・ファイル名・利用者情報は含めない(設計 §7.5)
 - 表示サービスはNode.js標準HTTPサーバーとし、`GET /health`と`POST /display`だけを持つ

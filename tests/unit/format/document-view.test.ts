@@ -6,6 +6,8 @@ import {
   PREVIEW_FALLBACK_IMAGE_SRC,
   PREVIEW_PROCESSING_IMAGE_SRC,
   previewImageSrc,
+  previewImageRoute,
+  replaceWithFallbackPreview,
 } from "~/lib/format/document-view";
 
 /** T10 単体テスト: 初期画面カードの表示用フォーマット(設計 §5.2, §5.3)。 */
@@ -63,15 +65,46 @@ describe("formatPreviewStatus", () => {
   });
 });
 
+const DOCUMENT_ID = "11111111-1111-4111-8111-111111111111";
+
 describe("previewImageSrc", () => {
-  it("生成中は共通の処理中画像", () => {
-    expect(previewImageSrc("pending")).toBe(PREVIEW_PROCESSING_IMAGE_SRC);
+  it("生成済みは認証付きresource routeの実プレビュー画像(T23、Q-030)", () => {
+    expect(previewImageSrc(DOCUMENT_ID, "ready")).toBe(
+      `/documents/${DOCUMENT_ID}/preview`,
+    );
   });
 
-  it.each(["ready", "failed", null] as const)(
-    "%s は共通の代替画像(実プレビュー取得はT15の範囲)",
-    (status) => {
-      expect(previewImageSrc(status)).toBe(PREVIEW_FALLBACK_IMAGE_SRC);
-    },
-  );
+  it("生成中は共通の処理中画像", () => {
+    expect(previewImageSrc(DOCUMENT_ID, "pending")).toBe(
+      PREVIEW_PROCESSING_IMAGE_SRC,
+    );
+  });
+
+  it.each(["failed", null] as const)("%s は共通の代替画像", (status) => {
+    expect(previewImageSrc(DOCUMENT_ID, status)).toBe(
+      PREVIEW_FALLBACK_IMAGE_SRC,
+    );
+  });
+});
+
+describe("previewImageRoute", () => {
+  it("資料IDをpath segmentとしてエンコードする", () => {
+    expect(previewImageRoute("a/b?c")).toBe("/documents/a%2Fb%3Fc/preview");
+  });
+});
+
+describe("replaceWithFallbackPreview", () => {
+  it("代替画像へ1回だけ切り替える", () => {
+    const image = {
+      dataset: {} as Record<string, string>,
+      src: "/documents/x/preview",
+    } as unknown as HTMLImageElement;
+
+    replaceWithFallbackPreview(image);
+    expect(image.src).toBe(PREVIEW_FALLBACK_IMAGE_SRC);
+
+    image.src = "/other";
+    replaceWithFallbackPreview(image);
+    expect(image.src).toBe("/other");
+  });
 });

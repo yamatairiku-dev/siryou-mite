@@ -70,17 +70,41 @@ export const PREVIEW_PROCESSING_IMAGE_SRC = "/preview-processing.svg";
 /** 共通の代替画像(生成失敗時。設計 §5.2, §5.3)。 */
 export const PREVIEW_FALLBACK_IMAGE_SRC = "/preview-fallback.svg";
 
+/** 生成済みプレビュー画像の配信経路(認証付きresource route。設計 §13、Q-030)。 */
+export function previewImageRoute(documentId: string): string {
+  return `/documents/${encodeURIComponent(documentId)}/preview`;
+}
+
 /**
- * カードに表示するプレビュー画像。
+ * カードに表示するプレビュー画像(設計 §5.2, §5.3)。
  *
- * `ready`状態でHTMLから生成した実プレビュー画像(Blobの
- * `preview/{id}/preview.jpg`)を配信する経路は設計§13のルート一覧に存在せず、
- * T15時点では範囲外(未確定。QUESTIONS.md参照、T18で判断)。そのため
- * ここでは「生成中(`pending`)」と「それ以外(生成済み・失敗・不明)」の
- * 2状態の切り替えだけを行い、`ready`も暫定的に共通の代替画像へ寄せる。
+ * - `ready`: Blobを公開せず、認証付きresource route
+ *   `/documents/:documentId/preview`で中継した実プレビュー画像(Q-030)。
+ * - `pending`: 共通の処理中画像。ポーリング(初期画面)で`ready`になると、
+ *   呼び出し側の状態更新によりこの関数の結果が実画像の経路へ切り替わる。
+ * - `failed`・不明: 共通の代替画像。
  */
-export function previewImageSrc(status: PreviewStatus | null): string {
+export function previewImageSrc(
+  documentId: string,
+  status: PreviewStatus | null,
+): string {
+  if (status === "ready") {
+    return previewImageRoute(documentId);
+  }
   return status === "pending"
     ? PREVIEW_PROCESSING_IMAGE_SRC
     : PREVIEW_FALLBACK_IMAGE_SRC;
+}
+
+/**
+ * `ready`の画像取得に失敗した場合(削除直後・Blob取得失敗の404/503など)に、
+ * 壊れた画像ではなく共通の代替画像を表示する`<img onError>`用handler。
+ * 代替画像自体の読み込み失敗で無限に差し替え続けないよう、1回だけ切り替える。
+ */
+export function replaceWithFallbackPreview(image: HTMLImageElement): void {
+  if (image.dataset["previewFallback"] === "1") {
+    return;
+  }
+  image.dataset["previewFallback"] = "1";
+  image.src = PREVIEW_FALLBACK_IMAGE_SRC;
 }

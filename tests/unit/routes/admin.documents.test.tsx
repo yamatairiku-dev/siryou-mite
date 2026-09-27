@@ -556,6 +556,24 @@ describe("管理画面コンポーネント", () => {
     expect((input as HTMLInputElement).value).toBe("資料");
   });
 
+  it("生成済みのカード画像は認証付きのプレビュー配信経路を使う(T23)", async () => {
+    renderAdminDocuments({
+      documents: [
+        cardFrom(),
+        cardFrom({
+          id: "22222222-2222-4222-8222-222222222222",
+          previewStatus: "failed" as const,
+        }),
+      ],
+    });
+
+    const images = await screen.findAllByRole("img");
+    expect(images.map((image) => image.getAttribute("src"))).toEqual([
+      `/documents/${DOCUMENT_ID}/preview`,
+      "/preview-fallback.svg",
+    ]);
+  });
+
   it("カードにオーナーのメールアドレスと資料の情報を表示する", async () => {
     renderAdminDocuments({ documents: [cardFrom()] });
 

@@ -311,6 +311,28 @@ describe("初期画面コンポーネント", () => {
     expect(image.getAttribute("src")).toBe("/preview-fallback.svg");
   });
 
+  it("プレビュー状態が生成済みの場合は認証付きの配信経路を使う(T23)", async () => {
+    renderApp({
+      documents: [cardFrom({ id: "doc-ready", previewStatus: "ready" })],
+    });
+
+    const image = await screen.findByRole("img");
+    expect(image.getAttribute("src")).toBe("/documents/doc-ready/preview");
+  });
+
+  it("生成済み画像の取得に失敗したら代替画像へ1回だけ切り替える(T23)", async () => {
+    renderApp({
+      documents: [cardFrom({ id: "doc-ready", previewStatus: "ready" })],
+    });
+
+    const image = await screen.findByRole("img");
+    fireEvent.error(image);
+    expect(image.getAttribute("src")).toBe("/preview-fallback.svg");
+    // 代替画像自体の失敗では差し替えを繰り返さない。
+    fireEvent.error(image);
+    expect(image.getAttribute("src")).toBe("/preview-fallback.svg");
+  });
+
   it("プレビュー状態が生成中の場合は処理中画像を使う", async () => {
     renderApp({ documents: [cardFrom({ previewStatus: "pending" })] });
 
@@ -530,8 +552,9 @@ describe("プレビュー状態ポーリング(T15)", () => {
       "/documents/doc-1/preview-status",
       expect.anything(),
     );
+    // readyになったら認証付きresource routeの実プレビュー画像へ差し替わる(T23)。
     expect(screen.getByRole("img").getAttribute("src")).toBe(
-      "/preview-fallback.svg",
+      "/documents/doc-1/preview",
     );
     // pending以外になったのでこのカードのポーリングを止める(intervalをclear)。
     await vi.waitFor(() => expect(clearCount()).toBe(1));

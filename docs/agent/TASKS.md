@@ -175,6 +175,13 @@
 - 内容: `README.md`、`docs/ARCHITECTURE.md`、`docs/OPERATIONS.md` を実装に合わせて更新し、PR本文の下書きを `docs/agent/HANDOFF.md` にまとめる
 - 完了条件: `npm run verify` と `npm run test:e2e` 成功
 
+### T23 [x] 🔒 プレビュー画像の配信経路
+- 実装メモ: `app/lib/documents/preview-image.server.ts`(依存注入の`handlePreviewImageRequest`)と `app/routes/documents.$documentId.preview.ts` に実装。preview-statusと同じ順(`requireUser`→`z.uuid()`→`findDocumentById`→`assertCanViewDocument`)で、非UUID・未存在・削除済み・`ready`以外・BlobNotFoundはすべて同じ本文の404、その他のBlob失敗とJPEG先頭マーカー不一致は503(fail closed、運用ログは分類のみ、監査なし)。Blob取得はtimeout 5秒+`request.signal`。応答は`securityHeaders()`(no-store・nosniff)+`image/jpeg`・`Content-Disposition: inline`・`Cross-Origin-Resource-Policy: same-origin`。カードは`previewImageSrc(documentId, status)`で`ready`のときだけこの経路を使い、`<img onError>`で代替画像へ1回だけ切り替える。reviewerのSHOULD_FIX(hydration前の読み込み失敗で`onError`が発火しない、`data-preview-fallback`の印がsrc変更後も残る)は未対応
+- 設計: §5.2, §5.3, §7.3, §9.1, §13, §14
+- 依存: T15, T18
+- 内容: `ready`の資料のプレビュー画像(`preview/{id}/preview.jpg`)を、Blobを公開せず認証付きresource route `GET /documents/:documentId/preview` で中継して返す(Q-030の回答)。認可は`/documents/:documentId/preview-status`と同じ(`requireUser`→`z.uuid()`→`findDocumentById`→`assertCanViewDocument`、削除済み・未存在・非UUIDは同じ404)。`ready`でない資料は404。初期画面と管理画面のカードは`ready`のときだけこの経路を`<img src>`に使い、ポーリングで`ready`になったら差し替える。Blob取得にはtimeoutを付け、失敗時は画像を返さず運用ログへ分類だけを記録する(監査はしない。Q-032と同じ考え方)
+- 完了条件: 認可・404の統一・`ready`以外の拒否・応答ヘッダー(`Content-Type: image/jpeg`、`X-Content-Type-Options: nosniff`、キャッシュ方針)の単体テスト、Azuriteでの結合テスト、`npm run verify` 成功
+
 ## エージェントの対象外(人が対応)
 
 - `.github/workflows` の変更(CIへのPostgreSQL・Azurite service container追加など)。必要な差分は `QUESTIONS.md` に提案として記録する

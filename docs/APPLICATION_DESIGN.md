@@ -716,6 +716,7 @@ HTML本文、質問・回答全文、token、Cookie、principal header全文、�
 | `/documents` | アップロードaction |
 | `/documents/:documentId` | 資料表示画面 |
 | `/documents/:documentId/preview-status` | プレビュー状態resource route |
+| `/documents/:documentId/preview` | プレビュー画像resource route。`ready`の資料だけ、閲覧認可を通したうえでBlobを中継して返す(Blobは公開しない) |
 | `/documents/:documentId/delete` | 所有者・管理者削除action |
 | `/admin/documents` | 全資料の検索・管理 |
 | `/admin/audit` | 監査履歴の検索 |

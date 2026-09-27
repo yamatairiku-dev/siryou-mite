@@ -26,6 +26,7 @@ import {
   formatJstDateTime,
   formatPreviewStatus,
   previewImageSrc,
+  replaceWithFallbackPreview,
 } from "~/lib/format/document-view";
 import { requireUser, type AppUser } from "~/lib/session.server";
 import { encodeFileNameHeader } from "~/lib/upload/file-name-header";
@@ -429,7 +430,10 @@ export default function Application({ loaderData }: Route.ComponentProps) {
         {documents.map((document) => (
           <li key={document.id} className="card document-card">
             <img
-              src={previewImageSrc(document.previewStatus)}
+              src={previewImageSrc(document.id, document.previewStatus)}
+              onError={(event) =>
+                replaceWithFallbackPreview(event.currentTarget)
+              }
               alt={`${document.title}のプレビュー`}
               className="document-card-preview"
             />

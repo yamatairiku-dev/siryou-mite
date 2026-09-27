@@ -13,6 +13,10 @@ export default [
     "documents/:documentId/preview-status",
     "routes/documents.$documentId.preview-status.ts",
   ),
+  route(
+    "documents/:documentId/preview",
+    "routes/documents.$documentId.preview.ts",
+  ),
   route("admin/documents", "routes/admin.documents.tsx"),
   route("admin/audit", "routes/admin.audit.tsx"),
   route("auth/login", "routes/auth.login.tsx"),

@@ -95,16 +95,3 @@ export function previewImageSrc(
     ? PREVIEW_PROCESSING_IMAGE_SRC
     : PREVIEW_FALLBACK_IMAGE_SRC;
 }
-
-/**
- * `ready`の画像取得に失敗した場合(削除直後・Blob取得失敗の404/503など)に、
- * 壊れた画像ではなく共通の代替画像を表示する`<img onError>`用handler。
- * 代替画像自体の読み込み失敗で無限に差し替え続けないよう、1回だけ切り替える。
- */
-export function replaceWithFallbackPreview(image: HTMLImageElement): void {
-  if (image.dataset["previewFallback"] === "1") {
-    return;
-  }
-  image.dataset["previewFallback"] = "1";
-  image.src = PREVIEW_FALLBACK_IMAGE_SRC;
-}

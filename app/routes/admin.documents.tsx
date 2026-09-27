@@ -22,9 +22,8 @@ import {
   formatByteSize,
   formatJstDateTime,
   formatPreviewStatus,
-  previewImageSrc,
-  replaceWithFallbackPreview,
 } from "~/lib/format/document-view";
+import { PreviewImage } from "~/lib/format/preview-image";
 
 export async function loader({
   request,
@@ -133,11 +132,9 @@ export default function AdminDocuments({ loaderData }: Route.ComponentProps) {
         )}
         {page.documents.map((document) => (
           <li key={document.id} className="card document-card">
-            <img
-              src={previewImageSrc(document.id, document.previewStatus)}
-              onError={(event) =>
-                replaceWithFallbackPreview(event.currentTarget)
-              }
+            <PreviewImage
+              documentId={document.id}
+              status={document.previewStatus}
               alt={`${document.title}のプレビュー`}
               className="document-card-preview"
             />

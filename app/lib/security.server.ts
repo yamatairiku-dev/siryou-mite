@@ -18,6 +18,9 @@ export function securityHeaders(): HeadersInit {
   };
 }
 
+/** Easy AuthがリダイレクトするEntra IDのサインイン・サインアウトのオリジン。 */
+const ENTRA_LOGIN_ORIGIN = "https://login.microsoftonline.com";
+
 /**
  * HTML文書応答のCSP(`app/entry.server.tsx`が付ける)。resource routeの応答には付けない。
  *
@@ -25,6 +28,9 @@ export function securityHeaders(): HeadersInit {
  *   (要求ごとのnonce付き)だけを許可する。
  * - 資料本文は表示サービス(別オリジン)のiframe内に出すため、grantを送るhidden formの
  *   送信先(`form-action`)に表示サービスのオリジンを足す(設計 §7.2)。
+ * - `form-action`はフォーム送信後のリダイレクト先にも効く。hydration前のログイン・
+ *   ログアウトは通常のフォーム送信になり、`/.auth/*`経由でEntra IDへリダイレクトするため
+ *   `https://login.microsoftonline.com`も許可する。
  * - `frame-src`はiframe内の遷移先にも効く。資料内のtarget省略リンクは同じiframe内で
  *   任意の`https:`/`http:`へ遷移できる仕様(設計 §6.3)のため、この2つも許可する。
  *   iframe自体はsandbox付きで、資料側の制限は表示サービスのCSPとsandboxが担う。
@@ -42,7 +48,7 @@ export function documentContentSecurityPolicy(options: {
     "font-src 'self'",
     "connect-src 'self'",
     `frame-src ${options.displayOrigin} https: http:`,
-    `form-action 'self' ${options.displayOrigin}`,
+    `form-action 'self' ${options.displayOrigin} ${ENTRA_LOGIN_ORIGIN}`,
     "frame-ancestors 'none'",
     "base-uri 'none'",
     "object-src 'none'",

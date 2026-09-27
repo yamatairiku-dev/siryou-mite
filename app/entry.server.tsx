@@ -3,7 +3,9 @@
  * HTML文書応答のCSP(要求ごとのnonce)を足したもの。nonceは`<ServerRouter nonce>`経由で
  * `<Scripts>`・`<ScrollRestoration>`などのインラインスクリプトにも付く。
  * 開発サーバー(`react-router dev`)はHMR用のインラインスクリプト・スタイルを使うため
- * CSPを付けない。`import.meta.env.DEV`はbuild時の`NODE_ENV`で決まり、E2E(`NODE_ENV=test`
+ * CSPを付けない。条件は「build時の`NODE_ENV`がproduction以外」かつ「実行時の`NODE_ENV`が
+ * `development`」で、devcontainerで`npm run build && npm start`した場合もCSPは付かない
+ * (ローカルでCSPを確かめるときは`NODE_ENV=production`でbuild・起動する)。`import.meta.env.DEV`はbuild時の`NODE_ENV`で決まり、E2E(`NODE_ENV=test`
  * でbuild)でもtrueになるため、実行時の`NODE_ENV`が`development`の場合に限る。
  * 本番build(`DEV=false`)では常にCSPを付ける。
  */

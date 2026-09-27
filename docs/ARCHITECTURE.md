@@ -36,7 +36,11 @@ flowchart LR
   `style-src 'self'`で足りるため`<Links nonce="">`としてnonceを付けない(付けるとブラウザが
   属性を空にしてhydrationの不一致になる)。`frame-src`は表示サービスのオリジンに加えて
   `https:`・`http:`を許可する(資料内のtarget省略リンクがiframe内で遷移するため。設計 §6.3)。
-  開発サーバー(`react-router dev`かつ`NODE_ENV=development`)だけはHMRのためCSPを付けない。
+  `form-action`はフォーム送信後のリダイレクトにも効くため、hydration前のログイン・ログアウトが
+  `/.auth/*`経由でEntra IDへリダイレクトできるよう`https://login.microsoftonline.com`も許可する。
+  開発サーバーのHMRのため、「build時の`NODE_ENV`がproduction以外」かつ「実行時の`NODE_ENV`が
+  `development`」の場合だけCSPを付けない(devcontainerで`npm run build && npm start`した場合も
+  付かない。ローカルで確かめるときは`NODE_ENV=production`でbuild・起動する)。本番buildでは常に付く。
   E2E(`tests/e2e/app-csp.spec.ts`)でヘッダーと、主要操作中にCSP違反・hydration不一致が
   出ないことを確認している
 

@@ -44,10 +44,15 @@ test("HTML文書にnonce付きCSPが付き、主要操作でCSP違反・hydratio
   expect(policy).toContain(`frame-src ${DISPLAY_ORIGIN} https: http:`);
   expect(policy).not.toContain("unsafe-inline");
 
-  // 要求ごとにnonceが変わる。
+  // 要求ごとにnonceが変わる(両方の応答からnonceを取り出して比べる)。
+  const noncePattern = /'nonce-([A-Za-z0-9+/=]+)'/;
   const secondPolicy =
     (await page.request.get("/app")).headers()["content-security-policy"] ?? "";
-  expect(secondPolicy).not.toBe(policy);
+  const firstNonce = noncePattern.exec(policy)?.[1];
+  const secondNonce = noncePattern.exec(secondPolicy)?.[1];
+  expect(firstNonce).toBeTruthy();
+  expect(secondNonce).toBeTruthy();
+  expect(secondNonce).not.toBe(firstNonce);
 
   const title = `CSP資料-${persona.oid.slice(0, 8)}`;
   const result = await uploadHtmlViaUi(page, "csp.html", plainValidHtml(title));

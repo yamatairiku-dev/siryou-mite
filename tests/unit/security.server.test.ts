@@ -61,12 +61,12 @@ describe("documentContentSecurityPolicy", () => {
     expect(policy).not.toContain("unsafe-eval");
   });
 
-  it("grant送信フォームの宛先は表示サービスだけ、iframeは表示サービスと資料内リンクの遷移先(http/https)を許可する", () => {
+  it("フォームの宛先は表示サービスとEntra IDのリダイレクト先だけ、iframeは表示サービスと資料内リンクの遷移先(http/https)を許可する", () => {
     expect(directives.get("frame-src")).toBe(
       "https://display.example.com https: http:",
     );
     expect(directives.get("form-action")).toBe(
-      "'self' https://display.example.com",
+      "'self' https://display.example.com https://login.microsoftonline.com",
     );
     expect(directives.get("connect-src")).toBe("'self'");
     expect(directives.get("img-src")).toBe("'self'");

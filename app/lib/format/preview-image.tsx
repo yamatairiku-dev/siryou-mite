@@ -45,7 +45,7 @@ export function PreviewImage({
       setFailedSrc(image.getAttribute("src"));
     }
     // mount時(hydration直後)だけ確認する。以降の失敗はonErrorが拾う。
-  }, []);
+  }, [documentId]);
 
   const shownSrc = failedSrc === src ? PREVIEW_FALLBACK_IMAGE_SRC : src;
 

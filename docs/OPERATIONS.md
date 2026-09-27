@@ -95,7 +95,7 @@ Maintenance Job用)。`services/`配下は`app/`をimportせず、共通の検�
 |---|---|---|
 | `NODE_ENV` | 実行環境 | 本番・stagingは`production`を必須設定(fail closedの本番制約が働く条件) |
 | `PORT` | Webが待受けるport(既定3000) | Container/App Serviceの設定に合わせる |
-| `APP_NAME` | 画面タイトル等に表示するアプリ名 | `資料みて！`など業務名に設定する(既定値は汎用テンプレート名) |
+| `APP_NAME` | 画面タイトル等に表示するアプリ名 | 既定値は`資料みて！`。検証環境などで見分けたい場合だけ変更する |
 | `APP_ORIGIN` | Webのオリジン | 同一オリジン検証(`assertSameOrigin`)とEasy Auth callbackの基準になる値と一致させる |
 | `AUTH_MODE` | 認証方式(`dev`/`easyauth`) | `NODE_ENV=production`のときは`easyauth`必須(`dev`は起動時のZod検証で拒否される) |
 | `SESSION_SECRET` | ローカル`AUTH_MODE=dev`専用のセッション署名鍵 | 本番(`AUTH_MODE=easyauth`)では設定しない |

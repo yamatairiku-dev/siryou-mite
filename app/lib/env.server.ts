@@ -2,6 +2,7 @@
 // importしない方針(docs/ARCHITECTURE.md)のため、意図した重複として個別に保守する。
 import { createPrivateKey } from "node:crypto";
 import { z } from "zod";
+import { DEFAULT_APP_NAME } from "~/lib/app-name";
 
 const optionalNonEmptyString = z
   .string()
@@ -140,7 +141,7 @@ const schema = z
       .enum(["development", "test", "production"])
       .default("development"),
     PORT: z.coerce.number().int().positive().default(3000),
-    APP_NAME: z.string().trim().min(1).default("社内Webアプリ"),
+    APP_NAME: z.string().trim().min(1).default(DEFAULT_APP_NAME),
     APP_ORIGIN: originSchema().default("http://localhost:3000"),
     AUTH_MODE: z.enum(["dev", "easyauth"]).default("dev"),
     SESSION_SECRET: z.string().min(32).optional(),

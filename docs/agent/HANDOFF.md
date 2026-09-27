@@ -1,12 +1,12 @@
 # PR本文の下書き(T21: ドキュメント整合と引き継ぎ)
 
-自律実装(`agent/implementation`ブランチ、T01〜T22)の引き継ぎ資料です。司令塔・レビュー
+自律実装(`agent/implementation`ブランチ、T01〜T23とその後の追加対応)の引き継ぎ資料です。司令塔・レビュー
 担当はこのまま、または要約してPull Requestの説明として使ってください。
 
 ## 概要
 
 「資料みて！」(Entra IDで許可された社内ユーザーが閲覧用HTML資料をアップロードし、
-固定URLで安全に共有するアプリ)の初期リリースをT01〜T22で実装しました。
+固定URLで安全に共有するアプリ)の初期リリースをT01〜T23で実装しました。
 
 - Web(React Router Framework Mode、SSR、`app/`)
 - Display(アップロードされたHTMLを別オリジンで配信するNode.js標準HTTPサーバー、
@@ -55,8 +55,22 @@
 - T19: 定期保守Job(Maintenance Job、保守専用DB role、purge、孤児Blob掃除)を実装
 - T20: Easy Auth principal fixtureによるE2Eテスト(Web・Displayを実起動)を実装
 - T22: `documents`一覧cursorをマイクロ秒精度にして、同一ミリ秒の資料の取りこぼしを修正
-- T21(本タスク): `README.md`・`docs/ARCHITECTURE.md`・`docs/OPERATIONS.md`を実装に
+- T21: `README.md`・`docs/ARCHITECTURE.md`・`docs/OPERATIONS.md`を実装に
   合わせて更新し、本ファイル(`docs/agent/HANDOFF.md`)を作成
+- T23: プレビュー画像を認証付きresource route `GET /documents/:documentId/preview`
+  で中継して配信(Blobは非公開のまま、Q-030の回答)。読み込み失敗時の代替画像表示は
+  hydration前の失敗とsrc変更にも追従する
+
+### T23以降の追加対応
+
+- 確認事項Q-001〜Q-062の回答を`docs/agent/QUESTIONS.md`に記録し、承認した判断を
+  `docs/APPLICATION_DESIGN.md`・`docs/OPERATIONS.md`・`docs/RELEASE_CHECKLIST.md`へ反映
+- CI(`.github/workflows/ci.yml`)を`npm run verify`へ統一し、PostgreSQL・Azuriteの
+  service containerで結合テストとE2Eも実行するようにした(Q-001・Q-061の回答に基づき、
+  人のレビュー前提でClaudeが差分を作成)
+- `<title>`に`APP_NAME`を反映し、既定のアプリ名を「資料みて！」にした
+- WebアプリのHTML文書応答にnonce付きCSPを追加(`app/entry.server.tsx`、
+  `unsafe-inline`不使用、`form-action`にEntra IDのログインを許可)
 
 ## 追加した production 依存とその理由
 
@@ -82,96 +96,47 @@ production dependencyは増えていません。
 ## 動作確認の方法と結果
 
 devcontainer(PostgreSQL: `postgres:5432`、Azurite: `azurite:10000/10001`)上で以下を
-実行し、いずれも成功しました(実行日: 2026-09-13)。
+実行し、いずれも成功しました(実行日: 2026-09-27、T23以降の追加対応を含む最終状態)。
 
 ```
 npm run verify
-  - typecheck(Web) OK
-  - typecheck:services OK
-  - test:coverage: 全テストPASS、カバレッジ Statements 89.72% / Branches 87.38% /
-    Functions 82.21% / Lines 90.16%
-  - build(Web) OK
-  - build:services OK
+  - typecheck(Web)・typecheck:services OK
+  - test:coverage: 40 test files / 843 tests PASS、カバレッジ Statements 89.09% /
+    Branches 86.25% / Functions 81.74% / Lines 89.55%
+  - build(Web)・build:services OK
 
 npm run test:integration
-  - 15 test files / 170 tests PASS(PostgreSQL・Azuriteへの実接続)
+  - 16 test files / 175 tests PASS(PostgreSQL・Azuriteへの実接続)
 
 npm run test:e2e
-  - 29 tests PASS(Web・DisplayをPlaywrightのwebServerとして実起動、Chromium)
+  - 30 tests PASS(Web・DisplayをPlaywrightのwebServerとして実起動、Chromium)
 ```
+
+同じ内容をCI(`.github/workflows/ci.yml`)でも実行します。
 
 ## レビュー担当者に確認してほしい事項
 
-> 2026-09-27追記: Q-001〜Q-062はすべて回答済みです(`[回答済]`)。承認した判断は
-> `docs/APPLICATION_DESIGN.md`へ反映しました。以下は回答前の時点の記述です。
+`docs/agent/QUESTIONS.md`のQ-001〜Q-062はすべて回答済み(`[回答済]`)で、承認した判断は
+`docs/APPLICATION_DESIGN.md`へ反映しました。レビュー時は特に次の点をご確認ください。
 
-`docs/agent/QUESTIONS.md`にQ-001〜Q-062を記録しました。**Q-002以外はすべて
-`[未回答]`のままです**。実装は各Qに書いた「置いた仮定」で進めているため、下記は
-特に判断をお願いしたいものを分類したものです(全項目の確認を推奨します)。
-
-### CI・エージェント対象外の確定差分(最優先)
-
-- **Q-001 / Q-061**: `.github/workflows/ci.yml`は`typecheck`/`test:coverage`/`build`を
-  個別実行しており、T01の`typecheck:services`/`build:services`と、T03以降で必要に
-  なった結合テスト・E2E(PostgreSQL・Azurite service container、`DATABASE_URL`・
-  `AZURE_STORAGE_CONNECTION_STRING`のCI向け値、Chromiumのinstall)がCIに反映されて
-  いません。Q-061に具体的なYAML差分案を記載しています。`.github/`はエージェント対象外
-  のため、レビュー担当者(人)が適用してください。ローカル(devcontainer)では
-  `npm run verify`・`npm run test:integration`・`npm run test:e2e`すべて成功しています。
-
-### 監査(audit_events)関連
-
-- **Q-003**: `error_category`の15分類(`validation_failed`、`html_inspection_failed`、
-  `quota_exceeded`など)は設計書に一覧が無いため、§6・§7.2・§7.5・§10の失敗パターンから
-  実装側で起こした暫定の列挙です。分類の過不足がないかご確認ください。
 - **Q-052 / Q-053**: 監査(`audit_events`)は追記専用trigger + role権限で保護しつつ、
-  設計§16が求める1年経過後のpurgeだけを保守専用DB role(`siryou_mite_maintenance`)から
-  許可する構成にしました。**IaC(Bicep)側でこのroleの作成とMaintenance JobのManaged
-  Identityとの対応付けが必要**です(未作成のままだとMaintenance Jobのpurgeが失敗します)。
-  また、保守Job自体は監査を書かない設計にしています(purgeのたびに監査を書くと、その
-  監査自体が新たな1年保持対象になり増え続けるため)。この判断の妥当性をご確認ください。
-
-### HTML受け入れ検査の割り切り
-
-- **Q-007〜Q-009**: 設計に無い拒否理由(`excessive_complexity`、`invalid_file_name`、
-  `file_name_too_long`)を追加したこと、外部resource判定をfail closed(`data:`・
-  同一文書内・値なし・`about:blank`以外はすべて拒否)にしたこと、inline CSSのescapeや
-  `<object><param value>`など検査をすり抜け得る箇所はDisplay側のCSP/sandboxに委ねる
-  多層防御の割り切りにしたことを記録しています。誤検知・誤許可のリスク評価をお願いします。
-
-### E2Eの対象外範囲
-
-- **Q-058**: プレビュー生成(timeout・再試行・失敗時の代替画像)はPreview Jobが別
-  コンテナ(Chromium)実行のためE2E対象外とし、結合テスト(`tests/integration/
-  preview-worker.test.ts`・`preview-capture.test.ts`)で代替検証しています。
-- **Q-059**: `/.auth/me`と実Entra IDログインは Easy Auth platform機能のためE2E対象外
-  とし、複数所属コードの一致確認は監査履歴画面での確認で代替しています。実Entra ID
-  経路の確認はstaging環境での手動確認に委ねています。
-- **Q-060**: E2Eは`documents`・`audit_events`の破壊的クリーンアップを行いません
-  (追記専用triggerとFKにより、アップロード監査のある資料行は物理削除できないため)。
-  devcontainerの共有DB・Azuriteにテストデータが蓄積し続けるため、長期反復実行時は
-  `docker compose down -v`等でvolumeを作り直す運用が必要になり得ます。
-
-### その他、判断が分かれ得る主な仮定
-
-- Q-013〜Q-017(アップロードの実行順、未認証拒否を監査しない判断、応答形式・
-  ステータスコード、メールアドレス形式不一致時は`null`保存)
-- Q-018〜Q-020(grantへの`actorTenantId`追加、有効期限内のgrant再利用許容、
-  メールアドレスnullable化)
-- Q-026〜Q-029(削除監査の`action`統一、拒否時の監査有無、削除成功後の遷移先)
-- Q-033〜Q-039(管理画面・監査履歴画面の検索仕様、監査粒度、画面間導線)
-- Q-040〜Q-051(プレビュー生成の監査引き継ぎ、冪等性、timeout多重化の設計)
-- Q-054〜Q-057(孤児Blob掃除の条件、`upload_attempts`のpurge条件、Job実行上限)
-- Q-062(cursorの旧形式(ミリ秒精度)を経過措置としてfail closedにしていない判断)
-
-全項目の詳細と影響範囲は`docs/agent/QUESTIONS.md`を参照してください。
+  1年経過後のpurgeだけを保守専用DB role(`siryou_mite_maintenance`)から許可する構成です。
+  **IaC(Bicep)側でこのroleの作成とMaintenance JobのManaged Identityとの対応付けが必要**
+  です(未作成のままだとpurgeが失敗します)
+- **Q-007〜Q-009**: HTML受け入れ検査は設計に無い拒否理由を追加し、外部resource判定を
+  fail closedにしています。検査をすり抜け得る箇所はDisplay側のCSP/sandboxに委ねる
+  多層防御です
+- **Q-058 / Q-059**: Preview Jobの撮影と実Entra IDログインはE2E対象外で、結合テストと
+  staging手動確認(`docs/RELEASE_CHECKLIST.md`)で代替しています
+- **Web CSP**: `frame-src`は資料内のtarget省略リンクがiframe内で遷移できるよう
+  `https:`/`http:`を許可しています(設計§6.3)。開発サーバーだけHMRのためCSPを付けません
 
 ## エージェント対象外で人が対応すべき作業
 
 `docs/agent/TASKS.md`末尾の「エージェントの対象外(人が対応)」に記載のとおりです。
 
-- `.github/workflows`の変更(CIへのPostgreSQL・Azurite service container追加、
-  `npm run verify`への統一、E2E実行に必要な環境変数の追加。具体案はQ-001・Q-061)
+- `.github/workflows/ci.yml`の差分(Claudeが作成済み)のレビューと、GitHub Actions上での
+  実行確認
 - Bicep(`infra/`)とデプロイworkflow(このリポジトリには`infra/`ディレクトリ自体が
   まだありません)
 - Container Apps Job上でのChromium sandbox security spike(設計§21の未決事項の1つ。
@@ -184,17 +149,6 @@ npm run test:e2e
 
 ## 既知の制約・残課題
 
-- `app/root.tsx`の`<title>`(`meta`関数)と`.env.example`の`APP_NAME`既定値は
-  汎用テンプレート名(「社内Webアプリ」)のままです。E2E(`playwright.config.ts`)では
-  `APP_NAME=資料みて！`を明示的に注入して確認していますが、`app/root.tsx`の`meta`
-  自体は静的な文字列(`社内Webアプリ`)を返しており、`APP_NAME`環境変数を反映していません。
-  `app/`はこのタスクの変更範囲外のため直していません(コードを直さずに記録する、
-  というタスクのルールに従っています)。ブランド表示を統一する場合は別タスクとして
-  `app/root.tsx`の`meta`と`.env.example`の既定値を更新してください。
-- `docs/agent/QUESTIONS.md`のQ-001〜Q-062はQ-002を除きすべて`[未回答]`です。人が
-  確認後に「回答」欄を埋める運用を想定しています。
-- 結合テスト・E2Eはローカル(devcontainer)のPostgreSQL・Azuriteに依存し、CIでは
-  現状実行されません(Q-001・Q-061)。
 - Maintenance Jobの保守専用DB role(`siryou_mite_maintenance`)はmigrationが
   「roleが存在すればGRANT、存在しなければ何もしない」という設計のため、本番環境では
   IaC側でこのroleを作成し、Maintenance JobのManaged Identityと対応付けない限り、

@@ -46,7 +46,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
-        <Links />
+        {/* stylesheetは`style-src 'self'`で許可しており、nonceは要らない。既定の
+            `<ServerRouter nonce>`を付けると、ブラウザがnonce属性を空にするため
+            hydrationの属性不一致になる。 */}
+        <Links nonce="" />
       </head>
       <body>
         {children}

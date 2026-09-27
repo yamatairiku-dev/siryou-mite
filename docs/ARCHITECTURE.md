@@ -29,6 +29,16 @@ flowchart LR
 - loaderで読み取り、actionで更新を行う
 - 外部APIの資格情報をサーバー環境変数から取得する
 - 入力検証、認可、監査ログを行う
+- HTML文書応答には`app/entry.server.tsx`が要求ごとのnonce付きCSPを付ける
+  (`documentContentSecurityPolicy`、`app/lib/security.server.ts`)。スクリプトは同一オリジンと
+  nonce付きのインラインスクリプトだけを許可し、`unsafe-inline`は使わない。nonceは
+  `<ServerRouter nonce>`経由で`<Scripts>`などへ渡す。stylesheetの`<link>`は
+  `style-src 'self'`で足りるため`<Links nonce="">`としてnonceを付けない(付けるとブラウザが
+  属性を空にしてhydrationの不一致になる)。`frame-src`は表示サービスのオリジンに加えて
+  `https:`・`http:`を許可する(資料内のtarget省略リンクがiframe内で遷移するため。設計 §6.3)。
+  開発サーバー(`react-router dev`かつ`NODE_ENV=development`)だけはHMRのためCSPを付けない。
+  E2E(`tests/e2e/app-csp.spec.ts`)でヘッダーと、主要操作中にCSP違反・hydration不一致が
+  出ないことを確認している
 
 ### 外部サービス
 

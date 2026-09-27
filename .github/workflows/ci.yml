@@ -62,6 +62,12 @@ jobs:
       - name: Install Playwright
         run: npx playwright install --with-deps chromium
 
+      # Ubuntu 23.10+ のrunnerはAppArmorで非特権user namespaceを制限しており、
+      # Chromium sandboxが起動できない。Preview Jobは sandbox 有効(設計 §7.5)を
+      # テストで確認するため、sandboxを無効にせずrunner側の制限を外す
+      - name: Allow unprivileged user namespaces for Chromium sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Integration tests
         run: npm run test:integration
 

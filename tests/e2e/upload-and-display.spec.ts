@@ -141,7 +141,7 @@ test.describe("アップロードと資料表示", () => {
     await context.close();
   });
 
-  test("_topと_parentでアプリ画面を遷移できず、_blankは新しいタブで開く", async ({
+  test("_topと_parentでアプリ画面を遷移できず、target省略はiframe内でも開かず、_blankは新しいタブで開く", async ({
     browser,
   }) => {
     const { context, page, persona } = await newPersonaPage(
@@ -160,9 +160,9 @@ test.describe("アップロードと資料表示", () => {
     if (!result.ok) {
       throw new Error("upload failed");
     }
-    expect(
-      result.body.warnings.map((warning) => warning.code),
-    ).toContain("frame_navigation_disabled");
+    const warningCodes = result.body.warnings.map((warning) => warning.code);
+    expect(warningCodes).toContain("frame_navigation_disabled");
+    expect(warningCodes).toContain("same_frame_link_blocked");
 
     await page.goto(result.body.documentUrl);
     const documentViewUrl = page.url();
@@ -189,7 +189,7 @@ test.describe("アップロードと資料表示", () => {
     await assertClickDoesNotNavigateTopFrame("#parent-link");
 
     // `_blank`はallow-popupsにより新しいタブで開く(トップ画面は遷移しない)。
-    // `#self-link`(target省略)のクリックはiframe自身の内容を書き換えてしまう
+    // `#self-link`(target省略)のクリックはiframeをブロック画面に置き換えてしまう
     // ため、iframeの元の内容を使うこのチェックより先に行う。
     const [popup] = await Promise.all([
       context.waitForEvent("page"),
@@ -200,24 +200,34 @@ test.describe("アップロードと資料表示", () => {
     await popup.close();
     expect(page.url()).toBe(documentViewUrl);
 
-    // target省略のリンクは確認画面を経由せず、iframe自身(このsandbox内)が遷移する
-    // (設計 §6.3「target省略時とtarget="_self"は同じiframe内で開く」「アプリ独自の
-    // 確認画面…は設けない」)。
+    // target省略のリンクは、アプリ画面のCSP(`frame-src`が表示サービスだけ)により
+    // iframe内でも開かない(設計 §6.3)。利用者は右クリックの「新しいタブで開く」で開く。
     const displayFrame = page.frame({
       name: `document-display-${result.body.documentId}`,
     });
     if (!displayFrame) {
       throw new Error("display frame not found");
     }
-    const selfFrameNavigation = page.waitForEvent("framenavigated", {
-      predicate: (navigatedFrame) => navigatedFrame === displayFrame,
-      timeout: 5_000,
+    const cspViolations: string[] = [];
+    page.on("console", (message) => {
+      if (/Content Security Policy/i.test(message.text())) {
+        cspViolations.push(message.text());
+      }
     });
     await frame.locator("#self-link").click();
-    const navigatedFrame = await selfFrameNavigation;
-    expect(navigatedFrame.url()).toBe(targetHref);
-    // iframeの遷移であって、トップ画面は変わらない。
+    await expect
+      .poll(() => cspViolations.some((text) => text.includes("frame-src")))
+      .toBe(true);
+    expect(displayFrame.url()).not.toBe(targetHref);
     expect(page.url()).toBe(documentViewUrl);
+
+    // ブロックされたiframeは資料の代わりにブラウザのエラー画面になるが、
+    // 「表示をやり直す」で新しいgrantを取り直して元に戻せる。
+    await expect(frame.locator("#blank-link")).toHaveCount(0);
+    await page.getByRole("button", { name: "表示をやり直す" }).click();
+    await expect(
+      displayFrameLocator(page, result.body.documentId).locator("#blank-link"),
+    ).toBeVisible();
 
     await context.close();
   });

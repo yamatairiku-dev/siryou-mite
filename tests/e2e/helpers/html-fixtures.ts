@@ -35,9 +35,8 @@ export function scriptedHtml(title: string): string {
 /**
  * `target="_top"`・`target="_parent"`・`target="_blank"`・target省略のリンクを
  * 持つHTML(設計 §6.3)。href先はテスト側が指定する(公衆ネットワークに依存
- * しないよう、呼び出し側がアプリ自身のオリジンを渡す想定)。target省略時は
- * 確認画面を経由せずiframe自身が遷移する(設計 §6.3「target省略時と
- * target="_self"は同じiframe内で開く」「アプリ独自の確認画面…は設けない」)。
+ * しないよう、呼び出し側がアプリ自身のオリジンを渡す想定)。target省略のリンクは
+ * アプリ画面のCSP(`frame-src`)によりiframe内でも開かない(設計 §6.3)。
  */
 export function frameNavigationHtml(title: string, absoluteHref: string): string {
   return wrapDocument(
@@ -46,7 +45,7 @@ export function frameNavigationHtml(title: string, absoluteHref: string): string
       `<a id="top-link" target="_top" href="${absoluteHref}">topへ</a>`,
       `<a id="parent-link" target="_parent" href="${absoluteHref}">parentへ</a>`,
       `<a id="blank-link" target="_blank" href="${absoluteHref}">blankへ</a>`,
-      `<a id="self-link" href="${absoluteHref}">同じiframe内へ</a>`,
+      `<a id="self-link" href="${absoluteHref}">target省略</a>`,
     ].join(""),
   );
 }

@@ -34,8 +34,9 @@ flowchart LR
   nonce付きのインラインスクリプトだけを許可し、`unsafe-inline`は使わない。nonceは
   `<ServerRouter nonce>`経由で`<Scripts>`などへ渡す。stylesheetの`<link>`は
   `style-src 'self'`で足りるため`<Links nonce="">`としてnonceを付けない(付けるとブラウザが
-  属性を空にしてhydrationの不一致になる)。`frame-src`は表示サービスのオリジンに加えて
-  `https:`・`http:`を許可する(資料内のtarget省略リンクがiframe内で遷移するため。設計 §6.3)。
+  属性を空にしてhydrationの不一致になる)。`frame-src`は表示サービスのオリジンだけを
+  許可する。iframe内の遷移先にも効くため、資料内のtarget省略リンクはiframe内でも開かず、
+  利用者は右クリックの「新しいタブで開く」で開く(設計 §6.3)。
   `form-action`はフォーム送信後のリダイレクトにも効くため、hydration前のログイン・ログアウトが
   `/.auth/*`経由でEntra IDへリダイレクトできるよう`https://login.microsoftonline.com`も許可する。
   開発サーバーのHMRのため、「build時の`NODE_ENV`がproduction以外」かつ「実行時の`NODE_ENV`が

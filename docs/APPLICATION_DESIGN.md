@@ -281,7 +281,14 @@ HTML属性で検出できる外部画像、stylesheet、font、media、`iframe`�
 - `data:`、`file:`、その他のschemeをリンク先に使うHTMLは拒否する。
 - ページ内リンク以外の相対リンクと`base href`を含むHTMLは拒否する。
 - `meta refresh`を含むHTMLは拒否する。
-- `target`省略時と`target="_self"`は同じiframe内で開く。
+- `target`省略時と`target="_self"`(空の`target`を含む)のリンクはiframe内でも開かない。
+  アプリ画面のCSP(`frame-src`)は表示サービスのオリジンだけを許可するため、iframe内の
+  外部サイトへの遷移はブラウザがブロックする。外部サイトがアプリ画面の中に表示されて
+  アプリの一部に見えることを防ぐためである。
+- 利用者は右クリックの「新しいタブで開く」(Ctrl+クリック、ホイールクリックを含む)で
+  リンク先を開く。資料表示画面にこの操作と、表示が消えた場合の「表示をやり直す」を案内する。
+- `target`省略・`_self`の外部リンクを検出した場合は`same_frame_link_blocked`を警告する。
+  `<base target>`で新しいタブが既定になっているリンクは警告しない。
 - `target="_blank"`は新しいタブで開く。
 - `target="_top"`と`target="_parent"`は無効化し、アプリ画面を維持する。
 - アプリ独自の確認画面とリンククリック監査は設けない。
@@ -866,7 +873,7 @@ productionで有効になり得る認証bypassやテスト専用ログインrout
 - 管理者の検索、閲覧、強制削除、監査履歴閲覧
 - JavaScriptが実行されないこと
 - 外部resourceが読み込まれないこと
-- HTTPS・HTTPリンクが確認画面を経由せずiframe内または新しいタブで開くこと
+- HTTPS・HTTPリンクが確認画面を経由せず新しいタブで開き、target省略時はiframe内でも開かないこと
 - `_top`と`_parent`でアプリ画面を遷移できないこと
 - `data:`、`file:`、独自scheme、相対リンク、`base href`を含むHTMLのアップロード拒否
 - プレビューtimeout、再試行、失敗時の代替画像

@@ -34,6 +34,7 @@ export const htmlWarningCodes = [
   "form_submission",
   "download_link",
   "frame_navigation_disabled",
+  "same_frame_link_blocked",
   "html_syntax_error",
 ] as const;
 
@@ -70,7 +71,9 @@ const warningMessages: Record<HtmlWarningCode, string> = {
   form_submission: "フォームは送信できません。",
   download_link: "ダウンロードリンクは動作しません。",
   frame_navigation_disabled:
-    "target=\"_top\"、target=\"_parent\"のリンクは同じ画面内で開きます。",
+    "target=\"_top\"、target=\"_parent\"のリンクはクリックしても開きません。右クリックして「新しいタブで開く」を選んでください。",
+  same_frame_link_blocked:
+    "新しいタブを指定していない外部リンクはクリックしても開きません。右クリックして「新しいタブで開く」を選んでください。",
   html_syntax_error: "HTMLの構文に誤りがあり、表示が崩れる場合があります。",
 };
 

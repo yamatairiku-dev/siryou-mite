@@ -71,6 +71,8 @@
 - `<title>`に`APP_NAME`を反映し、既定のアプリ名を「資料みて！」にした
 - WebアプリのHTML文書応答にnonce付きCSPを追加(`app/entry.server.tsx`、
   `unsafe-inline`不使用、`form-action`にEntra IDのログインを許可)
+- アプリ画面の`frame-src`を表示サービスだけに絞り、資料内の外部リンクは新しいタブで
+  開く仕様に変更(設計§6.3。外部サイトがアプリ画面の一部に見えることを防ぐ)
 
 ## 追加した production 依存とその理由
 
@@ -128,8 +130,10 @@ npm run test:e2e
   多層防御です
 - **Q-058 / Q-059**: Preview Jobの撮影と実Entra IDログインはE2E対象外で、結合テストと
   staging手動確認(`docs/RELEASE_CHECKLIST.md`)で代替しています
-- **Web CSP**: `frame-src`は資料内のtarget省略リンクがiframe内で遷移できるよう
-  `https:`/`http:`を許可しています(設計§6.3)。開発サーバーだけHMRのためCSPを付けません
+- **Web CSP**: `frame-src`は表示サービスのオリジンだけです。資料内のtarget省略リンクは
+  iframe内でも開かず、利用者は右クリックの「新しいタブで開く」で開きます(設計§6.3、
+  アップロード時に`same_frame_link_blocked`で警告し、資料表示画面にも案内を表示)。
+  開発サーバーだけHMRのためCSPを付けません
 
 ## エージェント対象外で人が対応すべき作業
 

@@ -31,9 +31,10 @@ const ENTRA_LOGIN_ORIGIN = "https://login.microsoftonline.com";
  * - `form-action`はフォーム送信後のリダイレクト先にも効く。hydration前のログイン・
  *   ログアウトは通常のフォーム送信になり、`/.auth/*`経由でEntra IDへリダイレクトするため
  *   `https://login.microsoftonline.com`も許可する。
- * - `frame-src`はiframe内の遷移先にも効く。資料内のtarget省略リンクは同じiframe内で
- *   任意の`https:`/`http:`へ遷移できる仕様(設計 §6.3)のため、この2つも許可する。
- *   iframe自体はsandbox付きで、資料側の制限は表示サービスのCSPとsandboxが担う。
+ * - `frame-src`はiframe内の遷移先にも効くため、表示サービスのオリジンだけを許可する。
+ *   資料内の外部リンクをiframe内で開くことはできず、利用者は右クリックの「新しいタブで
+ *   開く」か`target="_blank"`のリンクで開く(設計 §6.3)。アプリ画面の中に外部サイトが
+ *   表示されてアプリの一部に見えることを防ぐ。
  * - アプリ画面自体の埋め込みは`X-Frame-Options: DENY`と同じく拒否する。
  */
 export function documentContentSecurityPolicy(options: {
@@ -47,7 +48,7 @@ export function documentContentSecurityPolicy(options: {
     "img-src 'self'",
     "font-src 'self'",
     "connect-src 'self'",
-    `frame-src ${options.displayOrigin} https: http:`,
+    `frame-src ${options.displayOrigin}`,
     `form-action 'self' ${options.displayOrigin} ${ENTRA_LOGIN_ORIGIN}`,
     "frame-ancestors 'none'",
     "base-uri 'none'",

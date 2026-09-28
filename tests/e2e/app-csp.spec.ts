@@ -41,7 +41,8 @@ test("HTML文書にnonce付きCSPが付き、主要操作でCSP違反・hydratio
   // `headers()`はセキュリティ関連のヘッダーを省くことがあるため`allHeaders()`で読む。
   const policy = (await response?.allHeaders())?.["content-security-policy"] ?? "";
   expect(policy).toMatch(/script-src 'self' 'nonce-[A-Za-z0-9+/=]+'/);
-  expect(policy).toContain(`frame-src ${DISPLAY_ORIGIN} https: http:`);
+  // iframeは表示サービスだけ。資料内の外部リンクをiframe内で開かせない(設計 §6.3)。
+  expect(policy).toMatch(new RegExp(`frame-src ${DISPLAY_ORIGIN};`));
   expect(policy).not.toContain("unsafe-inline");
 
   // 要求ごとにnonceが変わる(両方の応答からnonceを取り出して比べる)。

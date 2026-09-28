@@ -248,6 +248,16 @@ describe("資料表示画面コンポーネント", () => {
     );
   });
 
+  it("資料内のリンクは右クリックで新しいタブから開く旨と、表示が消えたときの戻し方を案内する", async () => {
+    renderDocumentView();
+
+    await screen.findByTestId("document-display-frame");
+    expect(
+      screen.getByText(/右クリックして「新しいタブで開く」を選ぶと開けます/),
+    ).toBeTruthy();
+    expect(screen.getByText(/「表示をやり直す」を押してください/)).toBeTruthy();
+  });
+
   it("マウント時にhidden formを自動送信してgrantをPOSTする(URL・クエリへは出さない)", async () => {
     renderDocumentView();
 

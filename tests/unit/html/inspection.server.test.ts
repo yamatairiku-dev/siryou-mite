@@ -201,7 +201,8 @@ describe("URLのscheme正規化と許可・拒否(設計 §6.3)", () => {
 
     expect(result.accepted).toBe(true);
     expect(result.rejectionCodes).toEqual([]);
-    expect(result.warningCodes).toEqual([]);
+    // target省略の外部リンクはiframe内で開けないため警告する(拒否はしない)。
+    expect(result.warningCodes).toEqual(["same_frame_link_blocked"]);
   });
 
   it("ページ内リンク以外の相対リンクを拒否する", () => {
@@ -448,7 +449,7 @@ describe("表示時に無効化される機能の警告(設計 §6.2, §5.3)", (
   it("フォームとダウンロードを警告にする", () => {
     const result = inspect(
       documentWith(
-        '<form action="https://example.com/p"><input name="q"></form><a href="https://example.com/f.zip" download>取得</a>',
+        '<form action="https://example.com/p"><input name="q"></form><a href="https://example.com/f.zip" target="_blank" download>取得</a>',
       ),
     );
 
@@ -461,6 +462,69 @@ describe("表示時に無効化される機能の警告(設計 §6.2, §5.3)", (
 
     expect(result.accepted).toBe(true);
     expect(result.warningCodes).toEqual(["embedded_content"]);
+  });
+
+  it("iframe自身を遷移させる外部リンク(target省略・空・`_self`)を警告にする", () => {
+    for (const link of [
+      '<a href="https://example.com/a">x</a>',
+      '<a href="http://example.com/a" target="">x</a>',
+      '<a href="https://example.com/a" target=" _SELF ">x</a>',
+      '<map name="m"><area href="https://example.com/a" alt="a"></map>',
+      '<svg><a href="https://example.com/a"><text>x</text></a></svg>',
+    ]) {
+      const result = inspect(documentWith(link));
+
+      expect(result.accepted).toBe(true);
+      expect(result.warningCodes).toEqual(["same_frame_link_blocked"]);
+    }
+  });
+
+  it("新しいタブで開く外部リンクとページ内リンクは警告しない", () => {
+    const result = inspect(
+      documentWith(
+        [
+          '<a href="https://example.com/a" target="_blank">x</a>',
+          // 同名のframeが無い名前付きtargetは新しいタブになる。
+          '<a href="https://example.com/b" target="other">y</a>',
+          '<a href="#section">ページ内</a>',
+          '<a>hrefなし</a>',
+        ].join(""),
+      ),
+    );
+
+    expect(result.warningCodes).toEqual([]);
+  });
+
+  it("`<base target>`で新しいタブが既定なら、target省略のリンクは警告しない", () => {
+    // `<base target>`は文書内の位置によらず、前にあるリンクにも効く。
+    const html =
+      '<!DOCTYPE html><html><head><title>t</title></head><body><a href="https://example.com/a">x</a><base target="_blank"></body></html>';
+
+    expect(inspect(html).warningCodes).toEqual([]);
+  });
+
+  it("`<base target>`があっても、明示的な`_self`や同じ画面を指す既定値は警告する", () => {
+    const withSelf =
+      '<!DOCTYPE html><html><head><base target="_blank"><title>t</title></head><body><a href="https://example.com/a" target="_self">x</a></body></html>';
+    const withSelfBase =
+      '<!DOCTYPE html><html><head><base target="_self"><base target="_blank"><title>t</title></head><body><a href="https://example.com/a">x</a></body></html>';
+
+    expect(inspect(withSelf).warningCodes).toEqual(["same_frame_link_blocked"]);
+    // 最初の`<base target>`だけが効く(HTML標準)。
+    expect(inspect(withSelfBase).warningCodes).toEqual([
+      "same_frame_link_blocked",
+    ]);
+  });
+
+  it("`srcdoc`内のリンクは表示されないため、iframe内遷移の警告対象にしない", () => {
+    const result = inspect(
+      documentWith(
+        '<iframe srcdoc="<a href=&quot;https://example.com/a&quot;>x</a>"></iframe>',
+      ),
+    );
+
+    expect(result.warningCodes).toContain("embedded_content");
+    expect(result.warningCodes).not.toContain("same_frame_link_blocked");
   });
 
   it("`target=_top`・`_parent`を警告にする", () => {

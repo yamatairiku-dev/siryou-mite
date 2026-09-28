@@ -145,6 +145,12 @@ h2 {
   font-size: 38px;
 }
 
+.document-view-hint {
+  color: #6b778c;
+  font-size: 13px;
+  margin: 16px 0 8px;
+}
+
 .notice {
   background: #fff8dc;
   border-radius: 8px;

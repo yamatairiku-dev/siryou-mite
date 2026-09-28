@@ -61,10 +61,9 @@ describe("documentContentSecurityPolicy", () => {
     expect(policy).not.toContain("unsafe-eval");
   });
 
-  it("フォームの宛先は表示サービスとEntra IDのリダイレクト先だけ、iframeは表示サービスと資料内リンクの遷移先(http/https)を許可する", () => {
-    expect(directives.get("frame-src")).toBe(
-      "https://display.example.com https: http:",
-    );
+  it("フォームの宛先は表示サービスとEntra IDのリダイレクト先だけ、iframeは表示サービスだけを許可する", () => {
+    // 資料内の外部リンクをiframe内で開かせない(設計 §6.3)。
+    expect(directives.get("frame-src")).toBe("https://display.example.com");
     expect(directives.get("form-action")).toBe(
       "'self' https://display.example.com https://login.microsoftonline.com",
     );

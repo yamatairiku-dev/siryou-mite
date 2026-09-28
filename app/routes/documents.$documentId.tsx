@@ -208,6 +208,14 @@ export default function DocumentView({ loaderData }: Route.ComponentProps) {
         />
       </form>
 
+      {/*
+        アプリ画面のCSP(`frame-src`)は表示サービス以外へのiframe内遷移を許可しないため、
+        資料内の外部リンクは新しいタブで開いてもらう(設計 §6.3)。
+      */}
+      <p className="document-view-hint">
+        資料内のリンクは、右クリックして「新しいタブで開く」を選ぶと開けます。クリックして資料が表示されなくなった場合は「表示をやり直す」を押してください。
+      </p>
+
       <iframe
         name={iframeName}
         title={`${loaderData.title}の内容`}

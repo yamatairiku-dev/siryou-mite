@@ -331,6 +331,20 @@ function textContentOf(element: Element): string {
     .join("");
 }
 
+/**
+ * 閲覧先の名前が新しいタブ(別の閲覧コンテキスト)を開くかどうか。空文字と`_self`・
+ * `_top`・`_parent`以外は、同名のframeが無いため新しいタブになる(`allow-popups`)。
+ */
+function opensNewBrowsingContext(target: string): boolean {
+  const keyword = target.trim().toLowerCase();
+  return (
+    keyword !== "" &&
+    keyword !== "_self" &&
+    keyword !== "_top" &&
+    keyword !== "_parent"
+  );
+}
+
 function attributeValue(element: Element, name: string): string | undefined {
   return element.attrs.find((attribute) => attribute.name === name)?.value;
 }
@@ -349,6 +363,12 @@ class HtmlDocumentInspector {
   private readonly nested: PendingDocument[] = [];
   private currentDepth = 0;
   title: string | null = null;
+  /** 最上位文書で最初に現れた`<base target>`の値(HTML標準の既定の閲覧先)。 */
+  private baseTarget: string | undefined;
+  /** `target`属性を持たない外部リンク(既定の閲覧先は`<base target>`で決まる)。 */
+  private hasExternalLinkWithoutTarget = false;
+  /** `target=""`または`target="_self"`でiframe自身を遷移させる外部リンク。 */
+  private hasExternalLinkToSameFrame = false;
 
   constructor(
     findings: Findings,
@@ -409,6 +429,51 @@ class HtmlDocumentInspector {
         queue.push(nestedDocument);
       }
     }
+
+    this.warnSameFrameExternalLinks();
+  }
+
+  /**
+   * iframe自身を遷移させる外部リンクを警告する(設計 §6.3)。アプリ画面のCSP
+   * (`frame-src`)は表示サービス以外への遷移を許可しないため、クリックしても開かない。
+   * `<base target>`は文書内の位置によらず後ろのリンクにも効くため、走査後に判定する。
+   */
+  private warnSameFrameExternalLinks(): void {
+    const defaultOpensNewTab =
+      this.baseTarget !== undefined && opensNewBrowsingContext(this.baseTarget);
+
+    if (
+      this.hasExternalLinkToSameFrame ||
+      (this.hasExternalLinkWithoutTarget && !defaultOpensNewTab)
+    ) {
+      this.findings.warn("same_frame_link_blocked");
+    }
+  }
+
+  /** 最上位文書の`a`・`area`の遷移先を記録する(`srcdoc`内は表示されないため対象外)。 */
+  private recordExternalLinkTarget(element: Element): void {
+    const href = attributeValue(element, "href");
+    if (href === undefined) {
+      return;
+    }
+    const classified = classifyUrl(href);
+    if (
+      classified.kind !== "absolute" ||
+      (classified.protocol !== "https:" && classified.protocol !== "http:")
+    ) {
+      return;
+    }
+
+    const target = attributeValue(element, "target");
+    if (target === undefined) {
+      this.hasExternalLinkWithoutTarget = true;
+      return;
+    }
+    const keyword = target.trim().toLowerCase();
+    if (keyword === "" || keyword === "_self") {
+      this.hasExternalLinkToSameFrame = true;
+    }
+    // `_top`・`_parent`はsandboxで無効化され、`frame_navigation_disabled`で警告済み。
   }
 
   /** 明示的なstackで走査する(深い入れ子でも再帰しない)。 */
@@ -460,6 +525,10 @@ class HtmlDocumentInspector {
           if (attributeValue(element, "href") !== undefined) {
             this.findings.reject("base_href");
           }
+          const target = attributeValue(element, "target");
+          if (isTopLevel && target !== undefined && this.baseTarget === undefined) {
+            this.baseTarget = target;
+          }
           break;
         }
         case "form": {
@@ -483,6 +552,14 @@ class HtmlDocumentInspector {
         default:
           break;
       }
+    }
+
+    if (
+      isTopLevel &&
+      ((tagName === "a" && (isHtmlElement || isSvgElement)) ||
+        (tagName === "area" && isHtmlElement))
+    ) {
+      this.recordExternalLinkTarget(element);
     }
 
     if (tagName === "script") {

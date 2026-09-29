@@ -10,7 +10,8 @@
 
 ## Phase 0: 共通基盤(契約を先に固める。並列化しない)
 
-### T01 [ ] 依存関係・ディレクトリ構成・サービス用build
+### T01 [x] 依存関係・ディレクトリ構成・サービス用build
+- 実装メモ: 6依存(+`@types/pg`)を追加し、`services/{display,preview,maintenance}/` を `tsconfig.services.json` で `build/services` へ出力、`npm run verify` に service typecheck/build を追加した
 - 設計: §7.6, §19.1
 - 依存: なし
 - 内容:
@@ -20,31 +21,36 @@
   - 構成を `docs/ARCHITECTURE.md` に記録し、各依存の追加理由(開発規約§7の項目)を `docs/agent/DEPENDENCIES.md` に記録する
 - 完了条件: `npm run verify` 成功。空のservice entryがbuildされる
 
-### T02 [ ] 環境変数スキーマの拡張
+### T02 [x] 環境変数スキーマの拡張
+- 実装メモ: Web用(`app/lib/env.server.ts`)とservice用(`services/shared/env.ts` + 各`services/<name>/env.ts`)にスキーマを分離し、DB・Storage・grant鍵・HMAC鍵・§6.1の制限値をZodで検証(本番は接続文字列禁止のfail closed)
 - 設計: §6.1(制限値), §7.2, §7.3, §9.5
 - 依存: T01
 - 内容: `DATABASE_URL`、Storage接続設定(ローカルは接続文字列、本番はManaged Identity)、`DISPLAY_ORIGIN`、grant鍵(Ed25519)、ログ用HMAC鍵、各種上限値をZodで検証する。Web用とservice用のスキーマを分ける
 - 完了条件: 単体テストで必須・不正値・本番時の制約を検証。`.env.example` と `docs/OPERATIONS.md` を更新
 
-### T03 [ ] DBマイグレーション
+### T03 [x] DBマイグレーション
+- 実装メモ: `documents`・`audit_events` をforward-onlyのSQL migrationで作成し、監査は`BEFORE UPDATE OR DELETE` triggerで追記専用を強制、runtime roleは最小権限GRANT。`npm run db:migrate` と結合テスト設定(`vitest.integration.config.ts`)を追加した
 - 設計: §7.4, §11, §12
 - 依存: T01
 - 内容: `node-pg-migrate` で `documents`・`audit_events` を作成する(forward-only)。`npm run db:migrate` を用意する。監査イベントは追記専用とし、runtime用roleで更新・削除できない前提のSQLにする
 - 完了条件: devcontainerのPostgreSQLに対してmigrationが成功する。結合テストでテーブルと制約を確認
 
-### T04 [ ] DB接続とrepository層(資料・監査) 🔒
+### T04 [x] DB接続とrepository層(資料・監査) 🔒
+- 実装メモ: `app/lib/db/{pool,documents,audit-events}.server.ts` を追加。監査はINSERTのみ・Zod strict + error_category enumで禁止項目を型と実行時の両方で拒否、一覧はkeyset pagination(所有者条件必須)、更新系は`executor`必須で監査と同一transactionを強制。keysetタイブレーカ用indexのmigrationを追加した
 - 設計: §7.4, §12, §15.1
 - 依存: T02, T03
 - 内容: `pg` Pool、`documents` repository、`audit_events` repository(追記のみ)、cursor paginationを実装する。SQLはrepositoryの `.server.ts` に置く。結合テスト用のvitest設定(`tests/integration`、ローカルPostgreSQL使用)を追加する
 - 完了条件: 単体・結合テスト成功。監査に禁止項目(本文・ファイル名・token等)を保存しないことをテスト
 
-### T05 [ ] Blob・Queueクライアント
+### T05 [x] Blob・Queueクライアント
+- 実装メモ: Blob/Queueの実処理を `services/shared/storage.ts` に集約し、Web は `app/lib/storage.server.ts` の薄いラッパー経由で参照。Blobキーは資料IDのUUID検証つき決定的導出、Queueメッセージは `schemaVersion` と `documentId` のみ(strict検証)、全操作に `abortSignal` timeout。SDK既定のAPIバージョンをAzuriteが拒否するため pipeline policy で `x-ms-version` を固定した
 - 設計: §7.3, §7.5
 - 依存: T02
 - 内容: Blobキーを資料IDから決定的に導出し(`html/{id}/document.html`、`preview/{id}/preview.jpg`)、保存・取得・削除を実装する。Queueメッセージは `schemaVersion` と `documentId` だけ。ローカルはAzurite
 - 完了条件: Azuriteに対する結合テスト成功。timeoutを設定している
 
-### T06 [ ] 認証・認可の設計適合 🔒
+### T06 [x] 認証・認可の設計適合 🔒
+- 実装メモ: group overage(`hasgroups`/`_claim_names`/`_claim_sources`/`groups.link`)の検出と `tid` 未設定の fail closed を `easy-auth.server.ts` へ追加し、App Role 判定を `auth/roles.server.ts`、owner・admin 認可を `auth/authorization.server.ts` へ分離(認可は `oid` のみで判定)
 - 設計: §4, §7.1, §7.1.2, §18.1
 - 依存: なし
 - 内容: 既存の `easy-auth.server.ts` / `session.server.ts` が設計を満たすか確認して不足分を補う(`tid`固定、`User`/`Admin` role、複数groupsと重複除去、overage・所属なしのfail closed、URI形式claim typeのallowlist)。owner・admin判定の認可ヘルパーを追加する
@@ -52,55 +58,64 @@
 
 ## Phase 1: 業務コア
 
-### T07 [ ] HTML受け入れ検査 🔒
+### T07 [x] HTML受け入れ検査 🔒
+- 実装メモ: `app/lib/html/{inspection-codes.ts,inspection.server.ts}` にHTMLを書き換えない純粋関数として実装。拡張子・サイズ・UTF-8・空ファイル・`meta refresh`・`base href`・相対リンク・禁止scheme・外部resourceを判定し、文字参照やprotocol-relativeなどの回避策もfail closedで拒否。入れ子/要素数の上限で解析を打ち切る(Q-007〜Q-009)
 - 設計: §6.1, §6.2, §6.3, §10.1(5), §18.1
 - 依存: T01
 - 内容: `parse5` で解析し、拡張子・サイズ・UTF-8・空ファイル、`meta refresh`、`base href`、ページ内以外の相対リンク、禁止scheme、外部resourceを判定する。拒否理由と警告コードを返す純粋関数として実装する(HTMLは書き換えない)
 - 完了条件: §18.1のHTML・URL関連の単体テストを網羅
 
-### T08 [ ] 件数・容量・頻度・同時実行の制限 🔒
+### T08 [x] 件数・容量・頻度・同時実行の制限 🔒
+- 実装メモ: `app/lib/db/upload-limits.server.ts` に実装。1 transaction内で利用者→システムの順に `pg_advisory_xact_lock` を取り(システムは固定キーで直列化)、件数・容量・頻度・同時実行を判定する。進行中の予約は `upload_attempts` テーブル(lease方式)で表し、その予約byte数・件数を集計に加算して並行時の上限超過を防ぐ(Q-010〜Q-012)
 - 設計: §6.1, §10.1(3)
 - 依存: T04
 - 内容: PostgreSQLのtransactionとadvisory lockで判定する。Redisなどは追加しない
 - 完了条件: 結合テストで各上限と同時実行の競合を確認
 
-### T09 [ ] アップロード `POST /documents` 🔒
+### T09 [x] アップロード `POST /documents` 🔒
+- 実装メモ: `app/routes/documents.ts`(POST以外は405)と `app/lib/upload/{upload,upload-request}.server.ts` に実装。§10.1の手順順に認証→同一オリジン→上限判定→streaming 10MB上限の検証→HTML検査→Blob保存→DB登録(監査と同一transaction)→Queue送信を行い、失敗時はBlob削除・予約枠解放・失敗監査で補償する。運用ログは `app/lib/log.server.ts`(oidはHMAC化)(Q-013〜Q-017)
 - 設計: §7.1, §10.1, §10.2, §13
 - 依存: T05, T06, T07, T08
 - 内容: `application/octet-stream`、`X-File-Name`(base64url)、streaming中の10MB上限、UUID v4、Blob保存→DB登録→Queue送信、失敗時の補償処理、アップロード監査
 - 完了条件: 正常系・各拒否・補償処理の単体/結合テスト
 
-### T10 [ ] 初期画面(アップロードUIと所有資料一覧)
+### T10 [x] 初期画面(アップロードUIと所有資料一覧)
+- 実装メモ: `app/routes/app.tsx` にドロップ領域・1ファイル制限・警告表示・カード一覧(20件ずつcursor追加読込)を実装。loaderは`requireUser`の`oid`だけで`listDocumentsByOwner`を呼び、cursorはZod strictで検証して所有者条件を迂回できないようにした。日時のJST整形は`app/lib/format/document-view.ts`、`X-File-Name`のbase64urlは`app/lib/upload/file-name-header.ts`。`tests/setup.ts`に`afterEach(cleanup)`を明示登録(`globals: false`のためauto-cleanupが効いていなかった)
 - 設計: §5.2, §5.3, §13
 - 依存: T09
 - 内容: ドロップ領域とファイル選択、1ファイル制限、警告表示、自分の資料だけを新しい順に20件ずつ表示するカード一覧、日時はJST表示
 - 完了条件: route/コンポーネントの単体テスト。他人の資料が出ないことをテスト
 
-### T11 [ ] 表示grantの署名・検証 🔒
+### T11 [x] 表示grantの署名・検証 🔒
+- 実装メモ: 署名・検証の実処理を `services/shared/grant.ts`(環境変数を読まない純粋関数)に集約し、Webは `app/lib/grant.server.ts` から署名のみ利用。`context.header.payload` の3セグメントをdomain separation付きでEd25519署名し、`kid`も署名対象に含める。検証は 形式→header→鍵解決→署名→payload→期限→対象 の順で、署名が通るまでpayloadを信用しない。未知keyId・`exp`超過・`exp-iat>maxAge`はfail closed(時計ずれは未来方向の`iat`に5秒のみ)
 - 設計: §7.2, §9.5
 - 依存: T02
 - 内容: Ed25519、60秒有効、nonce、`keyId`による鍵rotation。grantにBlobキーやファイル名を含めない
 - 完了条件: 正常・期限切れ・改ざん・対象不一致・未知keyIdの単体テスト
 
-### T12 [ ] HTML表示サービス(Display) 🔒
+### T12 [x] HTML表示サービス(Display) 🔒
+- 実装メモ: `services/display/{index,server,headers,dependencies}.ts` にNode.js標準HTTPサーバーで実装。`GET /health`・`POST /display` のみ公開し、Origin完全一致・body 8KBのstreaming打ち切り・クエリ文字列拒否・Cookie不使用で入口を絞る。grant検証(`result.valid`を明示判定)→DBで`active`再確認→Blob取得→閲覧監査INSERT→HTML返却の順で、監査保存に失敗したらHTMLを返さない。CSPは設計§9.2の12ディレクティブを記載順・記載値のまま実装し、`frame-ancestors`は`APP_ORIGIN`限定。grant検証失敗は監査を作らず運用ログのみ(Q-021)。あわせてDB・ログの実処理を `services/shared/{db,log}` へ移してDisplayから再利用可能にし(Q-005)、Dockerfileに`build:services`を追加した(Q-002)
 - 設計: §7.2, §9.2, §10.3
 - 依存: T04, T05, T11
 - 内容: Node.js標準HTTPサーバー、`GET /health` と `POST /display` のみ、POST body 8KB上限、Origin検証、DBで `active` を再確認、閲覧監査を保存してから返す、CSPとsandboxのレスポンスヘッダー。grantとbodyをログに出さない
 - 完了条件: 単体/結合テスト(grant再利用、期限切れ、削除直後の拒否、CSPヘッダー)
 
-### T13 [ ] 資料表示画面 `/documents/:documentId`
+### T13 [x] 資料表示画面 `/documents/:documentId`
+- 実装メモ: `app/routes/documents.$documentId.tsx` に実装。`requireUser`の既存`returnTo`(自身のpath+search)で同一URLへ戻し、`documentId`はZodの`z.uuid()`でDBアクセス前に検証、認可は`assertCanViewDocument`(所有者以外も`active`なら閲覧可・削除済みと未存在は同じ404)。grantはloader戻り値からhidden formのPOST bodyだけで`DISPLAY_ORIGIN/display`(クエリ無し)へ送り、URL・`<a href>`・ログには出さない。iframeのsandboxは`allow-popups allow-popups-to-escape-sandbox`のみ。期限切れ対策の`grantExpiresAt`と再取得導線はQ-024、タイトル表示はQ-025
 - 設計: §5.4, §7.2, §9.2, §13
 - 依存: T11, T12
 - 内容: 未ログイン時は同じURLへ戻る、hidden formでgrantをiframeへPOST、iframe sandbox、URLコピー、初期画面へ戻る
 - 完了条件: route単体テスト
 
-### T14 [ ] 削除(所有者・管理者) 🔒
+### T14 [x] 削除(所有者・管理者) 🔒
+- 実装メモ: `app/lib/documents/delete.server.ts`(処理本体・依存注入)と `app/routes/documents.$documentId.delete.tsx`(確認画面loader + 削除action)に実装。§10.4の順で`requireUser`→`assertSameOrigin`→Zod(`z.uuid()`)→**transaction内で資料を読み直した直後**に`requireDocumentDeletionScope`→owner/adminのrepository関数→同一txで削除監査(監査失敗はrollback)。Blob削除はcommit後で、HTML・プレビューの両方が成功したときだけ`markBlobCleanupCompleted`を呼び、失敗時は`blob_cleanup_pending`を立てたまま運用ログへ記録(再試行はT19)。初期画面の削除ボタンは確認画面へのGET遷移に変更(§5.5)。監査`action`は削除を一律`delete`に統一(Q-026)、未存在の拒否は`document_id=null`(Q-027)、確認画面の拒否は無監査(Q-028)、成功後は`/app`へ303(Q-029)
 - 設計: §5.5, §10.4, §11, §12.1
 - 依存: T09
 - 内容: 確認画面、`active→deleted`、機微項目の消去、Blob削除失敗時の `blob_cleanup_pending`、削除監査、一般ユーザーによる他人の資料の削除拒否
 - 完了条件: 認可・状態遷移・補償の単体/結合テスト
 
-### T15 [ ] プレビュー状態 resource route
+### T15 [x] プレビュー状態 resource route
+- 実装メモ: `app/routes/documents.$documentId.preview-status.ts` にloaderのみのresource routeを追加。`requireUser`→`z.uuid()`(DB到達前)→`findDocumentById`→`assertCanViewDocument`の順で、削除済み・未存在・非UUIDは同じ404。応答は`{previewStatus}`だけで`securityHeaders()`(`Cache-Control: no-store`)付き。初期画面は`pending`の資料があるときだけ5秒間隔・最大24回ポーリングし、状態が確定したらtimerとfetchを後片付けして止める(Q-031)。`ready`の実画像配信経路は§13に無いため範囲外(Q-030)、この経路は監査しない(Q-032)
 - 設計: §5.3, §13
 - 依存: T09
 - 内容: `/documents/:documentId/preview-status` と、カードでの処理中・失敗画像の切り替え
@@ -108,13 +123,15 @@
 
 ## Phase 2: 管理機能
 
-### T16 [ ] 管理画面 `/admin/documents` 🔒
+### T16 [x] 管理画面 `/admin/documents` 🔒
+- 実装メモ: `app/lib/admin/document-search.server.ts`(認可・Zod検証・監査)と `app/routes/admin.documents.tsx` に実装。loader冒頭の`requireAdmin`(roles claim完全一致、`oid`基準)を通るまで検索SQLを1回も実行せず、検索条件はstrict Zodで検証してからプレースホルダとLIKEエスケープ付きで`searchDocumentsForAdmin`へ渡す。検索と`admin_operation`監査は同一transactionで、監査・運用ログには検索条件そのもの(メール・ファイル名)を保存しない。JST入力は`created_at >= from`/`created_at < to`に合わせ上限を1分進めた排他的上限へ変換。強制削除は持たずT14の確認画面へ導線を出すだけ(Q-033〜Q-036)
 - 設計: §5.6, §4.2
 - 依存: T10, T14
 - 内容: 資料ID・オーナーのメール・元ファイル名・日時で検索、閲覧、強制削除。管理操作の監査
 - 完了条件: 一般ユーザーの拒否を含む単体テスト
 
-### T17 [ ] 監査履歴画面 `/admin/audit` 🔒
+### T17 [x] 監査履歴画面 `/admin/audit` 🔒
+- 実装メモ: `app/lib/admin/audit-search.server.ts` と `app/routes/admin.audit.tsx` に実装(T16と同じ構造)。`requireAdmin`(App Role・`oid`基準)を通るまで検索SQLを実行せず、日時・利用者(メール部分一致/`actor_subject_id`完全一致)・資料ID・`action`・`result` をstrict Zod(INSERTと同じenum)で検証してからプレースホルダで`searchAuditEvents`へ渡す。追加したのはSELECTのみで追記専用性は不変(既存GRANT・indexで足りたためmigrationなし)。閲覧自体を`admin_operation`として検索と同一transactionで監査し、保存失敗時は結果を返さない。`actor_email_at_event`・groups・rolesは運用ログへ出さない。cursorは`to_char`のマイクロ秒精度でkeysetの取りこぼしを回避(Q-038)。JST変換などT16との共通処理は `app/lib/admin/search-criteria.server.ts` へ集約(Q-037〜Q-039)
 - 設計: §5.7, §15
 - 依存: T04, T16
 - 内容: 日時・利用者・資料ID・操作・結果で検索。監査履歴の閲覧自体も監査する
@@ -122,30 +139,48 @@
 
 ## Phase 3: 非同期処理
 
-### T18 [ ] プレビュー生成ワーカー(ローカル実行まで) 🔒
+### T18 [x] プレビュー生成ワーカー(ローカル実行まで) 🔒
+- 実装メモ: `services/preview/{index,worker,capture,dependencies,env}.ts` に実装。1実行1メッセージで、受信→検証→`dequeueCount`判定→`active`/`pending`確認→Blob取得→撮影→保存→`ready`更新+監査(同一transaction)→メッセージ削除の順に進め、失敗は一時障害だけ3回まで再試行し、上限byte数超過などの決定的失敗は1回目で`failed`にする(Q-042〜Q-044)。撮影は`playwright-core`の動的importで、JavaScript無効・`route`abort・`offline`・起動引数の4重で外部通信を止め、Chromium sandboxは有効のまま(`chromiumSandbox: true`+`assertSandboxArguments`のfail closed)、1280x720 JPEGを品質を下げながら1MB以下に収める(Q-045、Q-046)。処理上限30秒の`AbortSignal`を全依存へ伝播させ、期限切れ後の`failed`・監査・後始末だけは独立したfinalize signalで必ず書き切る(Q-050)。`updateDocumentPreviewStatus`は`failed`への更新を`preview_status = 'pending'`の資料に限定し、メッセージ削除失敗から再配信が続いても`ready`を`failed`へ上書きしない(Q-051)。撮影中に資料が削除された場合は保存済みプレビューを消す(Q-048)。監査の操作者は同じ資料のアップロード監査から引き継ぎ、`action`は`upload`にした(Q-040、Q-041)。非rootの専用image `Dockerfile.preview` を追加(browser binaryはPlaywright公式imageから、本番依存は増やしていない)
 - 設計: §7.5
 - 依存: T05, T12
 - 内容: 1実行1メッセージ、`dequeueCount` 最大3回、JavaScript無効・外部通信なし・Chromium sandbox有効のPlaywright撮影、1280x720 JPEG・1MB以下、失敗時 `failed` と監査。専用Dockerfileを作成する(Container Appsでのsecurity spikeは対象外)
 - 完了条件: Azuriteでの結合テスト(重複配信・再試行・timeout)
 
-### T19 [ ] 定期保守Job
+### T19 [x] 定期保守Job
+- 実装メモ: `services/maintenance/{index,job,dependencies,log,env}.ts` と purge専用の `services/shared/db/maintenance.ts` に実装。1実行で「`blob_cleanup_pending` の冪等な再試行」「監査の1年purge」「削除済み資料メタデータの1年purge」「孤児Blob掃除」「`upload_attempts` の古い行purge」を順に行い、各処理は独立にtry/catchして部分失敗でも他を止めず、件数を運用ログへ残す(失敗が1件でもあれば終了コード1)。資料purgeは `status='deleted'` ∧ `blob_cleanup_pending=false` ∧ `deleted_at <= now()-1年` ∧ 参照監査なし のANDで、設計§7.7どおりBlob削除未完了はpurgeしない。監査の追記専用性はruntime roleの権限を一切変えずに維持し、保守role `siryou_mite_maintenance` 専用のDELETE GRANT + trigger条件(UPDATEは全role禁止、DELETEは `retain_until` 経過後かつ保守roleのみ、`search_path` は `pg_catalog, pg_temp` へ固定)で1年purgeだけを通す(Q-052、Q-053)。孤児Blobは「キーが導出結果と完全一致」「`lastModified` が猶予(既定24h・最小1h)より古い」「DBに行が無い」の3条件すべてを満たす場合だけ削除し、アップロードのBlob保存→DB登録の窓を消さない(Q-054)。keyset cursorは `deleted_at::text` でマイクロ秒精度を保ち無限ループを避ける(Q-055〜Q-057)
 - 設計: §7.7, §16
 - 依存: T14
-- 内容: `blob_cleanup_pending` の冪等な再試行、削除済み資料と監査の1年経過後のpurge(Blob削除未完了はpurgeしない)
+- 内容: `blob_cleanup_pending` の冪等な再試行、削除済み資料と監査の1年経過後のpurge(Blob削除未完了はpurgeしない)。あわせてT09でBlob削除の補償自体が失敗した場合の孤児Blob(DBに行が無く回収経路が無い)の掃除と、T08で追加した `upload_attempts` の古い行(`finished_at` または `expires_at` が十分過去)をpurgeする(Q-011。runtime roleへのDELETE権限のGRANTもこのタスクのmigrationで追加する)
 - 完了条件: 結合テスト
 
 ## Phase 4: 仕上げ
 
-### T20 [ ] E2Eテスト
+### T20 [x] E2Eテスト
+- 実装メモ: `playwright.config.ts`の`webServer`をWeb・Displayの配列にし、`AUTH_MODE=easyauth`・Ed25519鍵(config評価時に1回だけ生成しWeb=秘密鍵/Display=公開鍵として渡す)・Azurite接続文字列・DB接続文字列等をdevcontainerの値から引き継いで渡す。`globalSetup`(`tests/e2e/global-setup.ts`)で`db:migrate`とE2E専用container/queue(`documents-e2e`/`preview-generation-e2e`)の`createIfNotExists`を行う。認証は`tests/e2e/helpers/principal.ts`が組み立てる`X-MS-CLIENT-PRINCIPAL`のbase64 JSONをPlaywrightの`extraHTTPHeaders`で送るだけで、アプリ・serviceのコードは一切変更していない。テスト間の分離は`oid`をテストごとにランダムなUUIDにする方式(所有者・監査行が自然に分かれる)で行い、DBの破壊的クリーンアップは行っていない(監査の追記専用trigger・`documents`とのFKにより、アップロード監査のある資料行は物理削除できないため。Q-060)。プレビュー生成(timeout・再試行・代替画像)はPreview Job(別コンテナ・Chromium)が必要なためE2E対象外(Q-058)、`/.auth/me`と実Entra IDログインもEasy Auth platform機能のため対象外とし、複数所属コードの一致は監査履歴画面での確認で代替した(Q-059)。E2E専用ポートは3900/3910(開発サーバーと`.env.example`の`DISPLAY_ORIGIN`に衝突させない)。CSPは設計§9.2の12ディレクティブを実装からimportせず literal で完全一致検証し、target省略の絶対リンクが確認画面を経由せずiframe内で遷移することも検証する。CIは`.github/`がエージェント対象外のため未変更で、必要な確定差分(service container・接続文字列・`AUTH_MODE`上書き削除)はQ-061に記録した
 - 設計: §18.3
 - 依存: T10, T13, T14, T16, T17
 - 内容: Easy Authのprincipal headerをfixtureで再現する。本番で有効になり得る認証bypassは作らない
 - 完了条件: `npm run test:e2e` 成功
 
-### T21 [ ] ドキュメント整合と引き継ぎ
+### T22 [x] 資料一覧cursorのミリ秒精度による取りこぼしの修正
+- 実装メモ: `documentColumns` に `to_char(created_at AT TIME ZONE 'UTC', ...US"Z"')` のcursor専用列 `created_at_iso` を足し、`listDocumentsByOwner`・`searchDocumentsForAdmin` の `nextCursor` をこの値から作る(T17のaudit側と同じ式・命名・Zod検証)。cursor比較は `(created_at, id) < ($n::timestamptz, $m::uuid)` でマイクロ秒精度を保ち、`owner_subject_id` での絞り込みと `requireAdmin` より前にSQLを実行しない性質は不変。修正前コードでは新しい結合テスト2本が実際に落ちることをレビューで確認済み。旧ミリ秒精度cursorは丸めが切り捨て方向で重複・無限ループを起こさないため明示的拒否は入れていない(Q-062)
+- 設計: §5.2, §5.6
+- 依存: T17
+- 内容: `services/shared/db/documents.ts` の `encodeDocumentCursor` は `pg` が返す `Date`(ミリ秒精度)由来のため、`created_at` の小数秒が切り捨てられ、同一ミリ秒の資料がページ境界にあると次ページで取りこぼされる(T17のレビューで実在を確認。丸めは切り捨て方向のため重複は起きず欠落のみ)。T17でaudit側に入れた対策と同じく、`documentColumns` に `to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')` のcursor専用列を足してマイクロ秒精度で往復させる。影響は `/app` の一覧(T10)と `/admin/documents` の検索(T16)
+- 完了条件: 同一ミリ秒に複数件ある場合でも重複・欠落なくページングできることを結合テストで確認(Q-038)
+
+### T21 [x] ドキュメント整合と引き継ぎ
+- 実装メモ: `README.md` をテンプレート汎用文面から「資料みて！」固有の説明(概要・4コンポーネント構成・セットアップ・Display/Preview/Maintenanceの起動方法・テスト実行方法)へ書き換えた。`docs/ARCHITECTURE.md`・`docs/OPERATIONS.md` は各タスクの実装時点で既に実装へ合わせて更新済みだったため、Blobキー(`preview/{id}/preview.jpg`)とQueueメッセージ形の追記、`.env.example`の基本変数(`NODE_ENV`・`PORT`・`APP_NAME`・`APP_ORIGIN`・`AUTH_MODE`・`SESSION_SECRET`・`SESSION_MAX_AGE_SECONDS`・`ENTRA_TENANT_ID`)をWeb環境変数表へ追加する差分に留めた。`docs/agent/QUESTIONS.md`(Q-001〜Q-062、Q-002以外未回答)を分類・要約し、production依存の追加理由(`docs/agent/DEPENDENCIES.md`要約)、動作確認結果、エージェント対象外の残作業とあわせて `docs/agent/HANDOFF.md` を新規作成した。`app/root.tsx`の`<title>`が`APP_NAME`環境変数を反映していない(静的文字列のまま)食い違いを見つけたが、コードは変更せずHANDOFF.mdの「既知の制約」に記録した
 - 依存: T20
 - 内容: `README.md`、`docs/ARCHITECTURE.md`、`docs/OPERATIONS.md` を実装に合わせて更新し、PR本文の下書きを `docs/agent/HANDOFF.md` にまとめる
 - 完了条件: `npm run verify` と `npm run test:e2e` 成功
+
+### T23 [x] 🔒 プレビュー画像の配信経路
+- 実装メモ: `app/lib/documents/preview-image.server.ts`(依存注入の`handlePreviewImageRequest`)と `app/routes/documents.$documentId.preview.ts` に実装。preview-statusと同じ順(`requireUser`→`z.uuid()`→`findDocumentById`→`assertCanViewDocument`)で、非UUID・未存在・削除済み・`ready`以外・BlobNotFoundはすべて同じ本文の404、その他のBlob失敗とJPEG先頭マーカー不一致は503(fail closed、運用ログは分類のみ、監査なし)。Blob取得はtimeout 5秒+`request.signal`。応答は`securityHeaders()`(no-store・nosniff)+`image/jpeg`・`Content-Disposition: inline`・`Cross-Origin-Resource-Policy: same-origin`。カードは`previewImageSrc(documentId, status)`で`ready`のときだけこの経路を使い、読み込み失敗時は代替画像へ切り替える。reviewerのSHOULD_FIX(hydration前の読み込み失敗で`onError`が発火しない、`data-preview-fallback`の印がsrc変更後も残る)は`PreviewImage`コンポーネント(`app/lib/format/preview-image.tsx`)で失敗を失敗したsrcにひも付けて状態で持つ方式に置き換えて対応済み
+- 設計: §5.2, §5.3, §7.3, §9.1, §13, §14
+- 依存: T15, T18
+- 内容: `ready`の資料のプレビュー画像(`preview/{id}/preview.jpg`)を、Blobを公開せず認証付きresource route `GET /documents/:documentId/preview` で中継して返す(Q-030の回答)。認可は`/documents/:documentId/preview-status`と同じ(`requireUser`→`z.uuid()`→`findDocumentById`→`assertCanViewDocument`、削除済み・未存在・非UUIDは同じ404)。`ready`でない資料は404。初期画面と管理画面のカードは`ready`のときだけこの経路を`<img src>`に使い、ポーリングで`ready`になったら差し替える。Blob取得にはtimeoutを付け、失敗時は画像を返さず運用ログへ分類だけを記録する(監査はしない。Q-032と同じ考え方)
+- 完了条件: 認可・404の統一・`ready`以外の拒否・応答ヘッダー(`Content-Type: image/jpeg`、`X-Content-Type-Options: nosniff`、キャッシュ方針)の単体テスト、Azuriteでの結合テスト、`npm run verify` 成功
 
 ## エージェントの対象外(人が対応)
 

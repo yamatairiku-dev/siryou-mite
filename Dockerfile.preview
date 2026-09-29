@@ -1,0 +1,52 @@
+# Preview Job(プレビュー生成ワーカー)専用image。
+#
+# 設計: docs/APPLICATION_DESIGN.md §7.5, §7.6
+#   - Chromiumを含む専用Dockerfileと専用imageを使う(Web・Display・Migration・
+#     Maintenanceが使うルートの`Dockerfile`とは別のimage。imageは合計2種類)
+#   - Playwright公式Ubuntu imageをPlaywright versionと一致させて固定する
+#   - 非rootで実行し、Chromium sandboxを有効にしたまま起動する
+#
+# base imageのtagは`package.json`の`@playwright/test`(1.61.1)と必ず一致させる。
+# 一致していないとimage内のbrowser buildとPlaywright本体の対応が崩れる。
+# base imageが同梱するNode.jsは`package.json`の`engines`(>=24.14.0)を満たす必要がある。
+# 満たさない場合は、このimageへNode.js 24を追加導入する手順をここへ足す。
+
+FROM node:24.14-bookworm-slim AS dependencies
+WORKDIR /app
+COPY package.json package-lock.json ./
+# browser binaryはPlaywright公式imageが持つため、npm installでは取得しない。
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+RUN npm ci
+
+FROM node:24.14-bookworm-slim AS build
+WORKDIR /app
+COPY --from=dependencies /app/node_modules ./node_modules
+COPY . .
+# Preview JobはReact Routerのbuild成果物(build/client, build/server)を使わないため、
+# services(build/services)だけをbuildする。
+RUN npm run build:services
+
+FROM node:24.14-bookworm-slim AS production-dependencies
+WORKDIR /app
+COPY package.json package-lock.json ./
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+RUN npm ci --omit=dev
+
+FROM mcr.microsoft.com/playwright:v1.61.1-noble
+ENV NODE_ENV=production
+# browserはbase imageが配置した場所(/ms-playwright)をそのまま使う。
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY --from=production-dependencies /app/node_modules ./node_modules
+# `playwright-core`はbrowserをダウンロードせず、base imageのbrowserを起動するためだけに
+# 使う。version は package-lock.json が `@playwright/test` 経由で固定している。
+COPY --from=dependencies /app/node_modules/playwright-core ./node_modules/playwright-core
+COPY --from=build /app/build/services ./build/services
+# base imageに用意されている非root利用者で実行する(設計 §7.5「ワーカーは非root」)。
+RUN chown -R pwuser:pwuser /app
+USER pwuser
+# Chromium sandboxを有効にしたまま起動する(`--no-sandbox`は使わない)。
+# 読み取り専用filesystem・CPU/メモリ上限・timeoutはContainer Apps Job側で設定する
+# (docs/OPERATIONS.md)。Chromiumは書き込み可能な/tmpを必要とする。
+CMD ["node", "build/services/preview/index.js"]

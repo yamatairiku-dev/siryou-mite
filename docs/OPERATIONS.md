@@ -81,6 +81,125 @@ App ServiceまたはContainer AppsのKey Vault参照で渡します。`SESSION_S
 
 Easy Auth providerの証明書・secret管理方式をAzure側で変更した場合は、基盤手順を別途更新する。
 
+## 環境変数
+
+環境変数はZodで検証します(`app/lib/env.server.ts`がWeb用、`services/display/env.ts`・
+`services/preview/env.ts`・`services/maintenance/env.ts`がDisplay・Preview Job・
+Maintenance Job用)。`services/`配下は`app/`をimportせず、共通の検証ロジックだけを
+`services/shared/env.ts`へ切り出しています。不正な値がある場合はプロセス起動時に
+例外で停止します(fail closed)。
+
+### Web(App Service)
+
+| 変数 | 内容 | 本番での扱い |
+|---|---|---|
+| `NODE_ENV` | 実行環境 | 本番・stagingは`production`を必須設定(fail closedの本番制約が働く条件) |
+| `PORT` | Webが待受けるport(既定3000) | Container/App Serviceの設定に合わせる |
+| `APP_NAME` | 画面タイトル等に表示するアプリ名 | 既定値は`資料みて！`。検証環境などで見分けたい場合だけ変更する |
+| `APP_ORIGIN` | Webのオリジン | 同一オリジン検証(`assertSameOrigin`)とEasy Auth callbackの基準になる値と一致させる |
+| `AUTH_MODE` | 認証方式(`dev`/`easyauth`) | `NODE_ENV=production`のときは`easyauth`必須(`dev`は起動時のZod検証で拒否される) |
+| `SESSION_SECRET` | ローカル`AUTH_MODE=dev`専用のセッション署名鍵 | 本番(`AUTH_MODE=easyauth`)では設定しない |
+| `SESSION_MAX_AGE_SECONDS` | `AUTH_MODE=dev`セッションの有効期間 | 同上、本番では未使用 |
+| `ENTRA_TENANT_ID` | Easy Authと一致させるEntra ID tenant | `AUTH_MODE=easyauth`のとき必須。principalの`tid`照合に使う |
+| `DATABASE_URL` | PostgreSQL接続文字列 | Managed IdentityのEntra ID access tokenを`pg`のpasswordとして使う。値そのものはrepositoryへ保存せず、Key Vault参照で渡す |
+| `DISPLAY_ORIGIN` | Display(HTML表示サービス)のオリジン | Web・Displayで一致させる |
+| `AZURE_STORAGE_CONNECTION_STRING` | ローカル・開発用Blob/Queue接続文字列 | 本番では設定禁止(設定するとZod検証で拒否) |
+| `AZURE_STORAGE_ACCOUNT_NAME` | Storageアカウント名(Managed Identity用) | 本番で必須。`AZURE_STORAGE_CONNECTION_STRING`とは同時指定不可 |
+| `AZURE_STORAGE_CONTAINER` | HTML・プレビューを保存するcontainer名(既定`documents`) | 環境間で共有しない値へ変更可 |
+| `AZURE_STORAGE_QUEUE_NAME` | プレビュー生成メッセージのqueue名(既定`preview-generation`) | 同上 |
+| `GRANT_SIGNING_KEY_ID` | 表示grant署名鍵の`keyId` | Key Vault参照。rotation時に新しい値へ変更する |
+| `GRANT_SIGNING_PRIVATE_KEY` | 表示grant署名用Ed25519秘密鍵(PEM) | Key Vault参照。Webだけが秘密鍵を持つ |
+| `GRANT_TTL_SECONDS` | 表示grantの有効期間(既定60秒、最大120秒) | 既定値からむやみに延長しない |
+| `LOG_HMAC_KEY` | ログ記録用HMAC鍵(base64、32byte以上) | Key Vault参照。ID等をpseudonymize化する用途に限定する |
+| `MAX_HTML_UPLOAD_BYTES` ほか§6.1の上限値 | アップロードサイズ・件数・容量・頻度・同時実行の上限 | 既定値は設計の規定値(10MB、100件、500MB、50GB／40GB警告、1分5回、同時1件)と一致 |
+
+`SESSION_SECRET`はlocal開発の`AUTH_MODE=dev`専用で、本番(`AUTH_MODE=easyauth`)では
+設定しません。
+
+### コンテナimageと起動command
+
+Web・Display・Migration Job・Maintenance Jobは**同じNode.js image**を使い、起動command
+だけを変えます(設計 §7.6)。Dockerfileのbuild stageは`npm run build`(Web)に続けて
+`npm run build:services`を実行し、`build/client`・`build/server`・`build/services`を
+同じimageへ入れます。コンテナは非root(`USER node`)のまま変更しません。
+
+| 実行単位 | 起動command |
+|---|---|
+| Web(App Service) | `node node_modules/@react-router/serve/bin.cjs ./build/server/index.js`(imageの既定CMD) |
+| Display(Container Apps) | `node build/services/display/index.js` |
+| Migration Job | `npm run db:migrate` |
+| Maintenance Job | `node build/services/maintenance/index.js` |
+
+DisplayはWebと同じ`/health`(`GET`のみ)を持つため、imageのHEALTHCHECKは両方で使えます。
+Displayは`SIGTERM`・`SIGINT`で待受けを止め、DB接続を閉じてから終了します(猶予10秒)。
+
+#### Preview Job専用image(`Dockerfile.preview`)
+
+Preview JobだけはChromiumを含む専用image(`Dockerfile.preview`)を使います(設計 §7.6。
+imageは合計2種類)。起動commandは`node build/services/preview/index.js`です。
+
+- base imageは`mcr.microsoft.com/playwright:v1.61.1-noble`で、tagは`package.json`の
+  `@playwright/test`のversionと**必ず一致**させます。`@playwright/test`を更新するときは
+  同じPRでbase imageのtagも上げます(不一致だとbrowserとPlaywright本体の対応が崩れます)。
+- 非rootの`pwuser`で実行します(設計 §7.5「ワーカーは非root」)。
+- browser binaryはbase imageの`/ms-playwright`を使い、`npm ci`時は
+  `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`でダウンロードしません。本番依存(`npm ci --omit=dev`)に
+  加えて`node_modules/playwright-core`だけをdev install stageからコピーします。
+- Chromium sandboxを有効にしたまま起動します(`--no-sandbox`は使いません)。Container Apps
+  Jobの設定でsandboxが起動できない場合でも、sandboxを無効にする回避はしません(設計 §7.5)。
+- Container Apps Job側では**読み取り専用filesystem**、1 vCPU・2GB、最大2件並列、
+  `replicaTimeout`はJob実行上限(45秒)に合わせます。Chromiumは書き込み可能な`/tmp`を
+  必要とするため、`/tmp`だけをemptyDir相当の書き込み可能volumeにします。
+- 再試行はStorage Queueの再配信で行うため、Job側の再試行(`replicaRetryLimit`)は0にします。
+  ワーカーは再試行に回した実行だけ終了コード1で終わります(監視用)。
+
+### Display / Preview Job / Maintenance Job
+
+Display、Preview Job、Maintenance Jobは`DATABASE_URL`、Storage接続設定
+(`AZURE_STORAGE_CONNECTION_STRING`または`AZURE_STORAGE_ACCOUNT_NAME`、
+`AZURE_STORAGE_CONTAINER`)、`LOG_HMAC_KEY`を共通で必要とします。本番での
+Managed Identity必須・接続文字列禁止はWebと同じ制約です。
+
+| 変数 | 対象 | 内容 |
+|---|---|---|
+| `PORT` | Display | Displayが待受けるport(既定8080、Web・Migration・Maintenanceと同じNode.js imageを使う) |
+| `APP_ORIGIN` | Display | `POST /display`で許可する唯一のOrigin(Webのオリジン)。scheme+host+portのみ許可 |
+| `GRANT_VERIFICATION_KEYS` | Display | 表示grant検証用のEd25519公開鍵(PEM)を`keyId`付きJSON配列で保持する。Displayは公開鍵だけを持ち、新旧`keyId`を併用してrotationできる |
+| `GRANT_MAX_AGE_SECONDS` | Display | 受け付けるgrantの最大有効期間(既定60秒、最大120秒) |
+| `DISPLAY_MAX_POST_BODY_BYTES` | Display | hidden formのPOST body上限(既定8KB、最大16KB) |
+| `AZURE_STORAGE_QUEUE_NAME` | Preview | プレビュー生成メッセージのqueue名 |
+| `QUEUE_VISIBILITY_TIMEOUT_SECONDS` | Preview | メッセージのvisibility timeout(既定60秒) |
+| `QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS` | Preview | 1メッセージの処理上限(既定30秒) |
+| `PREVIEW_JOB_MAX_RUNTIME_SECONDS` | Preview | Job実行上限(既定45秒) |
+| `QUEUE_MAX_DEQUEUE_COUNT` | Preview | `dequeueCount`による最大試行回数(既定3回) |
+| `MAX_PREVIEW_IMAGE_BYTES` | Preview | プレビュー画像1件あたりの上限(既定1MB) |
+| `MAINTENANCE_JOB_MAX_RUNTIME_SECONDS` | Maintenance | Job実行上限(既定900秒)。超えたら新しいバッチを始めずに終了する |
+| `MAINTENANCE_BATCH_SIZE` | Maintenance | DBの抽出・削除1回あたりの件数(既定500) |
+| `MAINTENANCE_BLOB_LIST_PAGE_SIZE` | Maintenance | Blob一覧1ページの件数(既定200) |
+| `MAINTENANCE_ORPHAN_BLOB_GRACE_HOURS` | Maintenance | 孤児Blobと判定するまでの猶予(既定24時間、最小1時間) |
+| `MAINTENANCE_UPLOAD_ATTEMPT_RETENTION_DAYS` | Maintenance | `upload_attempts`の古い行を残す日数(既定7日) |
+
+Preview Jobは上記に加えて、1実行で1メッセージだけを処理し、`dequeueCount`が
+`QUEUE_MAX_DEQUEUE_COUNT`に達した失敗でプレビュー状態を`failed`にして監査を残します
+(設計 §7.5)。`QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS`は
+`QUEUE_VISIBILITY_TIMEOUT_SECONDS`以下、`PREVIEW_JOB_MAX_RUNTIME_SECONDS`は
+`QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS`以上である必要があり、満たさない場合は
+起動時の環境変数検証で失敗します。
+
+Maintenance Jobは上記に加えて、**保守専用のDB role**(`siryou_mite_maintenance`)の
+資格情報で`DATABASE_URL`を設定します。runtime role(`siryou_mite_runtime`)には
+purge用のDELETE権限を与えていないため、runtime roleの接続では1年経過後のpurge
+(設計 §16)が失敗します。保持期間(1年)は設計値のため環境変数にしていません。
+
+各サービスのManaged Identityは用途別に分離し(設計 §7.4)、DB roleとStorageロールは
+最小権限にします。Maintenance JobのStorage権限はBlobの一覧・削除が必要です
+(HTML・プレビューの削除と孤児Blobの掃除)。
+
+`NODE_ENV`はWeb・Display・Preview・Maintenanceのどれも既定値`development`で、明示的に
+設定しない限り本番制約(`AZURE_STORAGE_CONNECTION_STRING`禁止・`AZURE_STORAGE_ACCOUNT_NAME`
+必須、Webは`AUTH_MODE=easyauth`必須)が働きません。本番・stagingを問わず、Azure上で
+稼働させる全プロセスへ`NODE_ENV=production`を必須で設定します。
+
 ## Easy Auth・Entra ID設定変更
 
 本番は`AUTH_MODE=easyauth`とし、`ENTRA_TENANT_ID`をEasy Authのsingle-tenant issuerと
@@ -91,6 +210,84 @@ App Roleまたは所属グループの割り当てを変更した場合は、対
 `/.auth/me`のclaimsとアプリ画面を確認します。確認時にprincipal、token、Cookie全文を
 チケットやログへ貼り付けず、claim typeとマスキングした値だけを共有します。緊急遮断は
 Entra IDの割り当て解除・アカウント制御とセッション失効手順を組み合わせます。
+
+## DBマイグレーション
+
+`migrations/`配下のSQL migrationを`node-pg-migrate`で適用します。forward-onlyとし、
+自動down migrationは行いません(破壊的変更は新しいmigrationファイルを追加する2段階
+変更にします、設計 §7.4)。
+
+- ローカル・devcontainer: `npm run db:migrate`(`.devcontainer/docker-compose.yml`が
+  設定する`DATABASE_URL`を使い、`postgres`serviceの`public`schemaへ適用する)
+- 新しいmigrationファイルの雛形作成: `npm run db:migrate:create -- <名前>`
+  (SQL形式で`migrations/`直下に作成される)
+- production: 専用Managed IdentityのMigration Jobがdeploy前に1回実行する
+  (runtime identityにはDDL権限を与えない、設計 §7.4)。Migration Job用の
+  `DATABASE_URL`はManaged IdentityのEntra ID access tokenをpasswordとして使う
+
+`documents`・`audit_events`のrole権限分離(設計 §7.4, §12.2):
+
+- runtime用DB role(`siryou_mite_runtime`という名前を仮定)には、`documents`へ
+  SELECT/INSERT/UPDATEだけ、`audit_events`へSELECT/INSERTだけを与える
+  (`restrict-runtime-role-privileges` migration)。DELETEはどちらにも与えない
+  (削除は`documents.status`の更新で表すsoft deleteのため)
+- このroleが存在しない環境(ローカル・CI)ではmigrationは何もせず成功する。
+  Managed Identityと対応付ける実際のrole作成・用途別分割はIaC(Bicep)側の
+  別タスクで行う
+- `audit_events`は追記専用で、`BEFORE UPDATE OR DELETE` triggerがDB role設定に
+  関わらずUPDATEを拒否する。DELETEは設計 §16の1年経過後の自動削除だけを通すため、
+  `add-maintenance-role-and-purge-support` migrationで「`retain_until`を過ぎた行」
+  かつ「保守role(`siryou_mite_maintenance`)またはテーブル所有者からの削除」に限って
+  許可する。runtime roleにはDELETEをGRANTしないため、Web・Display・Previewの
+  接続からは引き続き削除できない
+- 保守role(`siryou_mite_maintenance`)には`documents`へSELECT/UPDATE/DELETE、
+  `audit_events`・`upload_attempts`へSELECT/DELETEだけを与える(監査へのINSERT・
+  UPDATEは与えない)。runtime roleと同じく、roleが存在しない環境では
+  migrationは何もせず成功する
+
+結合テスト`npm run test:integration`(`tests/integration/`)は、ローカルPostgreSQLへ
+専用schemaを作ってmigrationを適用し、テーブル・制約・indexと追記専用の拒否動作を
+検証します。`npm run test`・`npm run verify`には含まれないため、CIへ組み込む場合は
+別途PostgreSQL service containerの起動が必要です。
+
+定期保守Jobの結合テスト(`tests/integration/maintenance-job.test.ts`)は、テスト専用
+schemaのPostgreSQLとAzuriteに対して本番と同じ組み立て(`createMaintenanceRuntime`)で
+Jobを動かし、Blob削除再試行の冪等性、`blob_cleanup_pending`と1年未満の資料・監査を
+purgeしないこと、孤児Blob掃除が猶予内のBlobと想定外のキーに触らないこと、
+`upload_attempts`のpurge、そしてruntime roleが`audit_events`をDELETEできないままで
+あることを検証します(設計 §7.7, §16, §18.2)。roleごとの挙動は、テスト用に作った
+`siryou_mite_runtime`/`siryou_mite_maintenance` roleへ`SET ROLE`して確認します。
+
+Display(HTML表示サービス)の結合テスト(`tests/integration/display-service.test.ts`)は、
+テスト専用schemaのPostgreSQLとAzuriteに対して本番と同じ組み立てでDisplayを起動し、
+表示grantの正常系・60秒以内の再利用・期限切れ・削除直後の拒否・CSPヘッダーを検証します
+(設計 §18.2)。
+
+同じ結合テスト(`tests/integration/blob-queue.test.ts`)はAzuriteへも接続し、
+専用container/queueを作ってBlob/Queue操作(保存・取得・削除、送受信、timeout)を
+検証します(設計 §7.3, §7.5, §18.2)。`AZURE_STORAGE_CONNECTION_STRING`は
+devcontainerの`docker-compose.yml`がAzurite(`azurite:10000`/`10001`)向けの値を
+供給し、`tests/integration/helpers/env.ts`はダミー値で上書きしません(実接続文字列が
+無いとテストは失敗します)。`tests/integration/helpers/storage.ts`の
+`assertLocalStorageConnection`が接続先host(`azurite`/`localhost`/`127.0.0.1`以外)を
+検査し、ローカルのAzurite以外を指す接続文字列ではcontainer/queueの作成・削除が
+実行される前に例外で止めます(本番Azure Storageへ結合テストが接続しないためのガード)。
+CIへ組み込む場合はPostgreSQLと同様に、Azuriteのservice container起動と
+`AZURE_STORAGE_CONNECTION_STRING`(Azuriteのホスト名を指す接続文字列)の設定が
+別途必要です。
+
+Preview Job(プレビュー生成ワーカー)の結合テストは2本あります。
+`tests/integration/preview-worker.test.ts`は、テスト専用schemaのPostgreSQLとAzuriteに
+対して本番と同じ組み立て(`createPreviewRuntime`)でワーカーを動かし、重複配信・
+再試行(`dequeueCount` 1→2→3)・処理上限(timeout)・削除済み資料・不正メッセージの
+扱いを検証します(撮影だけは固定JPEGへ差し替えます)。
+`tests/integration/preview-capture.test.ts`は**実際のChromium**を起動し、sandbox有効の
+まま1280x720のJPEGを撮影できること、HTMLが参照する外部URLへ1件も接続しないこと
+(ローカルHTTPサーバーで観測)、JavaScriptが実行されないこと、上限byte数に収まらない
+場合に失敗することを検証します。このテストにはPlaywrightのbrowser binaryが必要で、
+devcontainerには導入済みです。CIで実行する場合は
+`npx playwright install --with-deps chromium`(`@playwright/test`と同じversion)が
+必要です。
 
 ## バックアップ
 
@@ -118,8 +315,44 @@ Entra IDの割り当て解除・アカウント制御とセッション失効手
 
 ## 定期Job
 
-- Preview Jobは1実行1メッセージ、最大3回試行する
+- Preview Jobは1実行1メッセージ、最大3回試行する(`dequeueCount`で判定し、3回目の
+  失敗でプレビュー状態を`failed`にして監査を保存してからメッセージを削除する)
+- Preview Jobは専用image(`Dockerfile.preview`)で動き、Chromium sandbox有効・
+  JavaScript無効・外部ネットワーク接続なしで撮影する
 - Migration Jobはdeploy前に1回実行し、失敗時はrevisionを更新しない
-- Maintenance Jobは毎日UTC 18:00（JST 03:00）に実行する
-- Maintenance JobはBlob削除再試行と、1年経過した監査・削除済みmetadataのpurgeを行う
+- Maintenance Jobは毎日UTC 18:00（JST 03:00）に実行し、並列実行しない
+  (`parallelism: 1`。同時に2つ動いても結果は壊れないが、無駄な競合を避ける)
+- Maintenance Jobは1回の実行で次の5つを順に行う(1つが失敗しても残りは実行する)
+  1. `blob_cleanup_pending`の資料のHTML・プレビューBlobを冪等に再試行削除する
+  2. `retain_until`(記録から1年)を過ぎた監査履歴をpurgeする
+  3. 1年経過した削除済み資料の最小メタデータをpurgeする
+  4. DBに行が無い孤児Blobを、最終更新から猶予(既定24時間)を過ぎたものだけ削除する
+  5. `upload_attempts`の古い行(既定7日より前)をpurgeする
 - `blob_cleanup_pending`の資料metadataはBlob削除完了までpurgeしない
+- 監査が残っている資料メタデータはpurgeしない(監査のFK)。監査が先にpurgeされた
+  次回以降の実行で対象になる
+- 処理ごとに`{"event":"maintenance_task_finished","task":...,"examined":...,
+  "succeeded":...,"failed":...}`を1行のJSONで出力する。1件でも失敗があれば
+  終了コード1で終わる(設計 §17「Maintenance Jobの失敗」の監視対象)。件数は途中で
+  例外が出た場合もそこまでの実績を保つ
+- Blobは削除できたのに`blob_cleanup_pending`を下ろせなかった場合は
+  `maintenance_blob_cleanup_flag_unchanged`(`errorCategory: database_failed`)を
+  出力する。その資料は翌日以降も再試行対象として残るため、継続して出る場合は調査する
+- Job実行上限(既定900秒)を超えると新しいバッチを始めずに終了する。すべての処理は
+  冪等なので、残りは翌日の実行が続きから処理する
+
+## ローカル開発環境のデータ
+
+E2E(`npm run test:e2e`)はテストが作った資料・監査行・Blobを削除しません。監査履歴は
+追記専用で、アップロード監査が残る資料行も物理削除できないためです。テストごとに
+ランダムな利用者を使うので結果には影響しませんが、繰り返し実行するとdevcontainerの
+PostgreSQLとAzuriteのデータが増え続けます。
+
+データを作り直す場合は、devcontainerの外(ホスト側)で次を実行してvolumeを削除し、
+devcontainerを再起動してから`npm run db:migrate`を実行します。ローカルのデータはすべて
+消えます。
+
+```sh
+docker compose -f .devcontainer/docker-compose.yml down
+docker volume rm siryou-mite-local_postgres_data siryou-mite-local_azurite_data
+```

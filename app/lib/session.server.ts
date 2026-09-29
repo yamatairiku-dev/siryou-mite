@@ -1,5 +1,6 @@
 import { createCookieSessionStorage, redirect } from "react-router";
 import { parseEasyAuthPrincipal } from "~/lib/auth/easy-auth.server";
+import { hasAppAccessRole } from "~/lib/auth/roles.server";
 import { env } from "~/lib/env.server";
 
 export type AppUser = {
@@ -22,8 +23,11 @@ type FlashData = {
 export async function getUser(request: Request): Promise<AppUser | null> {
   if (env.AUTH_MODE === "easyauth") {
     const principal = request.headers.get("X-MS-CLIENT-PRINCIPAL");
+    // 構成値が無い場合は`parseEasyAuthPrincipal`が例外を投げる(空文字のtenantと
+    // 一致してしまう経路を作らない)。`env`側でも`AUTH_MODE=easyauth`のときは
+    // `ENTRA_TENANT_ID`必須としている(設計 §4.1, §7.1.1)。
     return principal
-      ? parseEasyAuthPrincipal(principal, env.ENTRA_TENANT_ID ?? "")
+      ? parseEasyAuthPrincipal(principal, env.ENTRA_TENANT_ID)
       : null;
   }
 
@@ -40,7 +44,9 @@ export async function requireUser(request: Request): Promise<AppUser> {
     const returnTo = `${target.pathname}${target.search}`;
     throw redirect(`/auth/login?returnTo=${encodeURIComponent(returnTo)}`);
   }
-  if (!user.roles.some((role) => role === "User" || role === "Admin")) {
+  // App Roleが無い、または所属が取得できない場合はfail closedで拒否する
+  // (設計 §4.1, §7.1)。`Admin`は`User`との二重割り当て無しで一般機能を使える。
+  if (!hasAppAccessRole(user)) {
     throw new Response("このアプリを利用する権限がありません", { status: 403 });
   }
   if (user.groups.length === 0) {

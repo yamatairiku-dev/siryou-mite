@@ -9,6 +9,7 @@ import {
   useLoaderData,
 } from "react-router";
 import type { Route } from "./+types/root";
+import { DEFAULT_APP_NAME } from "~/lib/app-name";
 import { env } from "~/lib/env.server";
 import { securityHeaders } from "~/lib/security.server";
 import { getUser } from "~/lib/session.server";
@@ -29,11 +30,12 @@ export const links: Route.LinksFunction = () => [
   { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
 ];
 
-export const meta: Route.MetaFunction = () => [
-  { title: "社内Webアプリ" },
+// loaderが失敗したエラー画面ではloaderDataが無いため、既定のアプリ名へ戻す。
+export const meta: Route.MetaFunction = ({ loaderData }) => [
+  { title: loaderData?.appName ?? DEFAULT_APP_NAME },
   {
     name: "description",
-    content: "React Router Framework Mode社内標準テンプレート",
+    content: "HTML資料をアップロードし、社内で安全に共有するアプリ",
   },
 ];
 
@@ -44,7 +46,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
-        <Links />
+        {/* stylesheetは`style-src 'self'`で許可しており、nonceは要らない。既定の
+            `<ServerRouter nonce>`を付けると、ブラウザがnonce属性を空にするため
+            hydrationの属性不一致になる。 */}
+        <Links nonce="" />
       </head>
       <body>
         {children}

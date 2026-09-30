@@ -138,9 +138,14 @@ Displayは`SIGTERM`・`SIGINT`で待受けを止め、DB接続を閉じてから
 Preview JobだけはChromiumを含む専用image(`Dockerfile.preview`)を使います(設計 §7.6。
 imageは合計2種類)。起動commandは`node build/services/preview/index.js`です。
 
-- base imageは`mcr.microsoft.com/playwright:v1.61.1-noble`で、tagは`package.json`の
+- base imageは`mcr.microsoft.com/playwright:v1.63.0-noble`で、tagは`package.json`の
   `@playwright/test`のversionと**必ず一致**させます。`@playwright/test`を更新するときは
-  同じPRでbase imageのtagも上げます(不一致だとbrowserとPlaywright本体の対応が崩れます)。
+  同じPRでbase imageのtagも上げます(不一致だとPreview Jobの起動時にbrowserが見つからず
+  失敗します)。一致は単体テスト(`tests/unit/services/preview-image-version.test.ts`)が
+  CIで確認するため、Dependabotが`@playwright/test`だけを上げたPRはCIが失敗します。
+- ローカルのDocker(既定のseccomp profile)では、Chromium sandbox有効のままだと
+  `No usable sandbox!`で起動できません(2026-09-30に確認。`--security-opt seccomp=unconfined`
+  なら起動する)。Container Apps上でsandboxが使えるかは設計 §21のsecurity spikeで確認します。
 - 非rootの`pwuser`で実行します(設計 §7.5「ワーカーは非root」)。
 - browser binaryはbase imageの`/ms-playwright`を使い、`npm ci`時は
   `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`でダウンロードしません。本番依存(`npm ci --omit=dev`)に

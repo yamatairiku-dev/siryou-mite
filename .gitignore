@@ -12,3 +12,8 @@ test-results/
 .agent-logs/
 .claude/settings.local.json
 .claude/worktrees/
+
+# Bicepのbuild成果物(ARM JSON)はcommitしない
+infra/main.json
+infra/modules/*.json
+infra/parameters/*.json

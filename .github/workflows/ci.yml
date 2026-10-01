@@ -83,3 +83,32 @@ jobs:
             coverage/
             playwright-report/
           retention-days: 14
+
+  # Bicepの構文・型・lintの検証(設計 §19.3「PRではBicep validation」)。Azureへは接続しない。
+  bicep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Bicep CLI
+        run: az bicep install
+
+      - name: Build and lint
+        run: |
+          az bicep build --file infra/main.bicep --stdout > /dev/null
+          az bicep lint --file infra/main.bicep
+
+      # parameter fileは実値を環境変数から読むため、検証用のダミー値を渡す(秘密値ではない)。
+      - name: Build staging parameters
+        env:
+          SIRYOU_TENANT_ID: 00000000-0000-0000-0000-000000000000
+          SIRYOU_ENTRA_CLIENT_ID: 00000000-0000-0000-0000-000000000001
+          SIRYOU_ALLOWED_IP_RANGES: 203.0.113.10/32
+          SIRYOU_ALERT_EMAIL: ops@example.com
+          SIRYOU_GRANT_KEY_ID: ci-dummy
+          SIRYOU_GRANT_PRIVATE_KEY: ci-dummy
+          SIRYOU_GRANT_VERIFICATION_KEYS: "[]"
+          SIRYOU_LOG_HMAC_KEY: ci-dummy
+        run: az bicep build-params --file infra/parameters/staging.bicepparam --stdout > /dev/null

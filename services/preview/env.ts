@@ -8,7 +8,7 @@ import { poolSettings } from "../shared/db/pool.js";
 import {
   commonEnvShape,
   formatZodError,
-  validateStorageConfig,
+  validateCommonConfig,
 } from "../shared/env.js";
 import { PREVIEW_FINALIZE_TIMEOUT_MS } from "./worker.js";
 
@@ -62,7 +62,7 @@ const schema = z
       .default(1 * 1024 * 1024),
   })
   .superRefine((value, context) => {
-    validateStorageConfig(value, context);
+    validateCommonConfig(value, context);
 
     // 処理上限そのものではなく、「処理上限 + 後始末」がvisibility timeoutと
     // Job実行上限に収まることを検証する(設計 §7.5)。等号を許して

@@ -425,6 +425,12 @@ Azure Database for PostgreSQL Flexible Serverを使い、資料メタデータ�
   access tokenを`pg`のpasswordとして接続する。DB roleは用途別に最小権限とする。
 - マイグレーションは`node-pg-migrate`を使い、専用Managed IdentityのMigration Jobが
   デプロイ前に1回実行する。runtime identityにはDDL権限を与えない。
+- 各Managed IdentityのDB role作成と最小権限の付与は、PostgreSQLのEntra管理者にした専用
+  Managed IdentityのDB初期設定Jobが冪等に行う。テーブル単位の権限はmigrationが用途別の
+  まとめ役role(`siryou_mite_runtime`・`siryou_mite_maintenance`)へ与えるため、DB初期設定Jobを
+  Migration Jobより先に実行する。
+- access tokenは約1時間で失効するため接続文字列へ入れず、接続ごとに取得して使う。
+  Azure上の全実行単位でManaged Identity接続を必須とし、passwordを接続文字列へ書かない。
 - productionのマイグレーションはforward-onlyかつ新旧アプリに対して互換にし、
   破壊的変更は複数リリースへ分け、自動down migrationは行わない。
 
@@ -456,14 +462,14 @@ Azure Database for PostgreSQL Flexible Serverを使い、資料メタデータ�
 - WebはLinux App Service、DisplayはContainer Appsで、同じNode.js用Docker imageを
   異なるcommandとManaged Identityで使う。
 - Preview JobはChromiumを含む専用Dockerfileと専用imageを使う。
-- Migration JobとMaintenance JobはWeb・Displayと同じNode.js imageを使う。
-- 5つのAzure実行単位に対し、コンテナimageは2種類だけとする。
+- Migration Job、Maintenance Job、DB初期設定JobはWeb・Displayと同じNode.js imageを使う。
+- 6つのAzure実行単位に対し、コンテナimageは2種類だけとする。
 - production WebはApp Service Plan上で常時起動し、production Displayは0.5 vCPU、
   1GB、最小1・最大3レプリカとする。
 - staging WebもEasy Authの結合試験が可能なApp Serviceとして常時起動する。
   staging Displayは最小0レプリカとする。
 - Preview Jobは1 vCPU、2GB、最大2件並列とする。
-- Migration・Maintenance Jobは0.5 vCPU、1GB、並列実行しない。
+- Migration・Maintenance・DB初期設定Jobは0.5 vCPU、1GB、並列実行しない。
 - App Service PlanとContainer Apps Environmentのゾーン冗長はproduction、stagingとも
   使用しない。
 

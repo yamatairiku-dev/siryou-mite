@@ -9,7 +9,7 @@ import {
   ed25519PublicKeyPemSchema,
   formatZodError,
   originSchema,
-  validateStorageConfig,
+  validateCommonConfig,
 } from "../shared/env.js";
 
 const grantVerificationKeySchema = z.object({
@@ -57,7 +57,7 @@ const schema = z
       .max(16 * 1024)
       .default(8 * 1024),
   })
-  .superRefine(validateStorageConfig);
+  .superRefine(validateCommonConfig);
 
 export type DisplayEnvironment = z.infer<typeof schema>;
 

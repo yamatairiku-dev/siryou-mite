@@ -80,3 +80,21 @@ export function createOperationLogger(logHmacKeyBase64: string): OperationLogger
 
   return { pseudonymizeSubjectId, logOperationEvent };
 }
+
+/**
+ * Jobの失敗ログに残す分類。例外のmessage・stack・接続情報(SQLや接続文字列を含み得る)は
+ * 出さず、例外の種類とPostgreSQLのエラーコード(SQLSTATE)等の短いcodeだけを返す。
+ */
+export function describeFailure(error: unknown): {
+  errorName: string;
+  errorCode?: string;
+} {
+  const errorName = error instanceof Error ? error.name : "unknown";
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? (error as { code?: unknown }).code
+      : undefined;
+  return typeof code === "string" && /^[A-Z0-9_]{1,40}$/.test(code)
+    ? { errorName, errorCode: code }
+    : { errorName };
+}

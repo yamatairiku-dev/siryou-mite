@@ -17,7 +17,7 @@ import { z } from "zod";
 import {
   commonEnvShape,
   formatZodError,
-  validateStorageConfig,
+  validateCommonConfig,
 } from "../shared/env.js";
 
 /** 1日1回の実行で処理しきれる範囲に収めるためのJob実行上限の既定値(秒)。 */
@@ -74,7 +74,7 @@ const schema = z
       .max(365)
       .default(7),
   })
-  .superRefine(validateStorageConfig);
+  .superRefine(validateCommonConfig);
 
 export type MaintenanceEnvironment = z.infer<typeof schema>;
 

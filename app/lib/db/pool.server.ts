@@ -19,6 +19,7 @@ import {
   withTransactionOn,
   type Queryable,
 } from "../../../services/shared/db/pool";
+import { databasePasswordOption } from "../../../services/shared/db/entra-auth";
 
 export { poolSettings, runInTransaction } from "../../../services/shared/db/pool";
 export type { DatabasePoolConfig, Queryable } from "../../../services/shared/db/pool";
@@ -40,6 +41,7 @@ export function getPool(): Pool {
       // 本番(Azure Database for PostgreSQL)はTLS必須。ローカル・CIのPostgreSQLは
       // TLSを持たないためTLSを要求しない。
       requireTls: env.NODE_ENV === "production",
+      ...databasePasswordOption(env.DATABASE_AUTH),
     });
   }
   return pool;

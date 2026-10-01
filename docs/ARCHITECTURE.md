@@ -160,7 +160,14 @@ object IDで作り、`siryou_mite_runtime`・`siryou_mite_maintenance`(login不�
 テーブル単位の権限はmigrationがまとめ役roleへ与えるため、DB初期設定JobをMigration Jobより先に
 実行します(逆順を検出した場合は失敗にします)。
 
-Infrastructure as CodeはBicep、CI/CDはGitHub ActionsのOIDCを使います。GitHub-hosted
+Infrastructure as Codeは`infra/`のBicepです。`main.bicep`がモジュール(`infra/modules/`:
+network・monitoring・identities・storage・keyvault・postgres・registry・web・container-apps)を
+組み合わせ、環境ごとの値は`infra/parameters/<環境>.bicepparam`で切り替えます。実値(tenant・
+client ID、許可IP、通知先、鍵)はparameter fileへ書かず、デプロイ時の環境変数から読みます。
+鍵は`infra/scripts/generate-keys.mjs`で生成し、Entraのアプリ登録の定義は`infra/entra/`に
+置きます。CIの`bicep` jobがbuild・lint・parameterのbuildを検証します。
+
+CI/CDはGitHub ActionsのOIDCを使います。GitHub-hosted
 runnerからprivate data planeへ直接接続せず、migrationとsmoke testはVNet内の
 Container Apps Jobとして実行します。production DB migrationはforward-onlyかつ
 新旧applicationに互換とし、application rollback時にdown migrationは行いません。

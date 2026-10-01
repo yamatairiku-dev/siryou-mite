@@ -496,6 +496,16 @@ Maintenance Jobを毎日UTC 18:00（JST 03:00）に実行する。Blob削除失�
 - WebとDisplayには会社の異なるカスタムドメインを使う。正式なホスト名と証明書は
   環境別Bicepパラメーターとし、リポジトリへ実値を保存しない。
 
+最初の検証環境(staging)は、会社の正式なテナントとは別の開発用テナントに作る。社内
+ネットワークが無いため、次の点だけ上記と異なる(手順と未検証点は`docs/OPERATIONS.md`)。
+
+- WebとDisplayは公開エンドポイントにし、許可したIPアドレスからだけ受け付ける。
+  ホスト名はAzure既定のもの(`*.azurewebsites.net`、`*.azurecontainerapps.io`)を使う
+- VNet、サブネット、Private DNSゾーンはBicepで新規作成する。新しいVNetには既定の
+  外向き通信が無いため、Web(VNet統合)とContainer Apps環境のサブネットにNAT Gatewayを付け、
+  Container Apps環境のサブネットはNSGでインターネットへの通信を拒否する
+- PostgreSQL、Storage、Key Vaultのprivate endpoint限定とManaged Identity接続は設計どおり
+
 ## 9. セキュリティ設計
 
 ### 9.1 信頼境界
@@ -902,7 +912,8 @@ productionで有効になり得る認証bypassやテスト専用ログインrout
 
 Bicepを`infra/main.bicep`から開始し、network、App Service、Easy Auth
 `authsettingsV2`、Container Apps、PostgreSQL、Storage、Key Vault、monitoringを
-module分割する。stagingとproductionは環境別parameter fileで同じmoduleを再利用する。
+module分割する(`infra/modules/`)。Container Appsの作成時にイメージを取得できる必要が
+あるため、基盤(ACRを含む)とアプリ・Jobの2段階でデプロイする。stagingとproductionは環境別parameter fileで同じmoduleを再利用する。
 秘密値、tenant・client IDの実値、正式ホスト名、通知先メールアドレスはrepositoryへ
 保存しない。
 

@@ -1,0 +1,16 @@
+[
+  {
+    "allowedMemberTypes": ["User"],
+    "description": "資料のアップロード・閲覧・自分の資料の削除ができる",
+    "displayName": "User",
+    "isEnabled": true,
+    "value": "User"
+  },
+  {
+    "allowedMemberTypes": ["User"],
+    "description": "管理画面・監査履歴の閲覧と強制削除ができる",
+    "displayName": "Admin",
+    "isEnabled": true,
+    "value": "Admin"
+  }
+]

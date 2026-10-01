@@ -148,6 +148,18 @@ WebだけをLinux App Serviceで実行し、Easy Authを有効にします。プ
 - applicationとdata planeはprivate networkへ限定する
 - ACRだけはGitHub-hosted runnerのpush用に認証付きpublic endpointを使う
 
+PostgreSQLへのManaged Identity接続は`services/shared/db/entra-auth.ts`が担います。Entra IDの
+access token(約1時間で失効)を固定の接続文字列へ入れず、`pg`が接続を張るたびに呼ぶ
+password関数として渡し、有効期限の5分前まで同じtokenを使い回します(`DATABASE_AUTH=entra`。
+本番は環境変数のZod検証でこれを必須にし、接続文字列へのpassword記載を拒否します)。
+
+Managed Identityごとの DB role は、PostgreSQLのEntra管理者に設定した専用identityで動く
+DB初期設定Job(`services/db-bootstrap/`)が冪等に作ります。各identityのEntra principalを
+object IDで作り、`siryou_mite_runtime`・`siryou_mite_maintenance`(login不可のまとめ役role)
+のmemberにし、業務DBの作成とMigration Jobのidentityへの`public` schemaのCREATE付与を行います。
+テーブル単位の権限はmigrationがまとめ役roleへ与えるため、DB初期設定JobをMigration Jobより先に
+実行します(逆順を検出した場合は失敗にします)。
+
 Infrastructure as CodeはBicep、CI/CDはGitHub ActionsのOIDCを使います。GitHub-hosted
 runnerからprivate data planeへ直接接続せず、migrationとsmoke testはVNet内の
 Container Apps Jobとして実行します。production DB migrationはforward-onlyかつ
@@ -156,8 +168,10 @@ Container Apps Jobとして実行します。production DB migrationはforward-o
 
 ## DBマイグレーション(`migrations/`)
 
-`migrations/`配下に`node-pg-migrate`用のSQL形式migrationを置き、`npm run db:migrate`
-(`node-pg-migrate up`)で`public`schemaへ適用します。forward-onlyとし、
+`migrations/`配下に`node-pg-migrate`用のSQL形式migrationを置き、ローカルでは`npm run db:migrate`
+(`node-pg-migrate up`)、Azure上ではMigration Job(`node build/services/migrate/index.js`。
+Managed Identityのtokenで接続するためCLIではなくrunnerを直接呼び、オプションはCLIの既定値と
+揃える)で`public`schemaへ適用します。Node.js imageには`migrations/`を含めます。forward-onlyとし、
 `-- Down Migration`セクションは書きません(node-pg-migrateはセクションが無い
 migrationを`down`実行不可として扱うため、誤ってdown migrationを実行することを
 防げます)。破壊的変更が必要な場合は新しいmigrationファイルを追加し、複数リリースへ
@@ -310,7 +324,7 @@ DBはWebだけでなくDisplay(閲覧監査と`active`再確認)・Preview・Mai
 
 ## ディレクトリ構成とTypeScript build(Web / Display / Preview / Maintenance)
 
-5つのAzure実行単位（Web、Display、Preview Job、Migration Job、Maintenance Job）のうち、
+6つのAzure実行単位（Web、Display、Preview Job、Migration Job、Maintenance Job、DB初期設定Job）のうち、
 React Router Web以外はReact Routerに依存しない独立したNode.jsスクリプトとして実装します。
 これらは`app/`とは別のtree（`services/`）に置き、build成果物も分離します。
 
@@ -341,8 +355,14 @@ services/
   maintenance/dependencies.ts MaintenanceのDB・Blobクライアント組み立て
   maintenance/log.ts      保守処理の件数つき運用ログ(1行1event JSON)
   maintenance/env.ts      Maintenance Job用環境変数schema
+  migrate/index.ts        Migration Jobのエントリーポイント(node-pg-migrateのrunnerをManaged Identityで実行)
+  migrate/env.ts          Migration Job用環境変数schema
+  db-bootstrap/index.ts   DB初期設定Jobのエントリーポイント(管理用DBと業務DBへの接続)
+  db-bootstrap/job.ts     Managed IdentityのDB role作成と最小権限付与の手順(冪等)
+  db-bootstrap/env.ts     DB初期設定Job用環境変数schema(対象identityの一覧)
+  shared/db/entra-auth.ts Managed IdentityのEntra ID access tokenをpgのpasswordとして供給
 tsconfig.services.json    services/専用のTypeScript設定。build/services/へ出力
-Dockerfile                Web・Display・Migration・Maintenance共通のNode.js image
+Dockerfile                Web・Display・Migration・Maintenance・DB初期設定共通のNode.js image
 Dockerfile.preview        Preview Job専用image（Playwright公式Ubuntu image + Chromium）
 ```
 

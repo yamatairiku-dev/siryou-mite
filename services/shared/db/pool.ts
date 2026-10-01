@@ -60,6 +60,12 @@ export type DatabasePoolConfig = {
    * ローカル・CIのPostgreSQLはTLSを持たないため`false`にする。
    */
   requireTls: boolean;
+  /**
+   * 接続ごとにpasswordを返す関数。Managed Identityで接続する場合はEntra IDの
+   * access tokenを返す関数(`createEntraPasswordProvider`)を渡す。省略時は
+   * 接続文字列のpasswordを使う(ローカル・CI)。
+   */
+  password?: () => Promise<string>;
 };
 
 /**
@@ -76,6 +82,7 @@ export function createDatabasePool(config: DatabasePoolConfig): Pool {
     query_timeout: poolSettings.queryTimeoutMillis,
     application_name: config.applicationName,
     ...(config.requireTls ? { ssl: { rejectUnauthorized: true } } : {}),
+    ...(config.password ? { password: config.password } : {}),
   });
 
   // idle接続がサーバー側都合で切断された場合、listenerが無いとprocessごと

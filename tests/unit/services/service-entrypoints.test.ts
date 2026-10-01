@@ -50,4 +50,32 @@ describe("サービスのエントリーポイント", () => {
 
     logSpy.mockRestore();
   });
+
+  it("migrate はforward-onlyで1回適用することを説明し、importだけでは起動しない", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const service = await import("../../../services/migrate/index");
+
+    expect(service.SERVICE_NAME).toBe("migrate");
+    expect(service.describeService()).toContain("forward-only");
+
+    // 環境変数の検証もDB接続もimport時には行わない。
+    expect(logSpy).not.toHaveBeenCalled();
+
+    logSpy.mockRestore();
+  });
+
+  it("db-bootstrap は冪等なrole作成を説明し、importだけでは起動しない", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const service = await import("../../../services/db-bootstrap/index");
+
+    expect(service.SERVICE_NAME).toBe("db-bootstrap");
+    expect(service.describeService()).toContain("idempotently");
+
+    // 環境変数の検証もDB接続もimport時には行わない。
+    expect(logSpy).not.toHaveBeenCalled();
+
+    logSpy.mockRestore();
+  });
 });

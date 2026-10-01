@@ -86,6 +86,19 @@ describe("parseDisplayEnvironment", () => {
     ).toThrow("PEM形式のEd25519公開鍵");
   });
 
+  it("本番はDATABASE_AUTH=entraを必須にする(設計 §7.4)", () => {
+    const environment = { ...baseEnvironment };
+    delete environment.AZURE_STORAGE_CONNECTION_STRING;
+
+    expect(() =>
+      parseDisplayEnvironment({
+        ...environment,
+        NODE_ENV: "production",
+        AZURE_STORAGE_ACCOUNT_NAME: "storageaccount1",
+      }),
+    ).toThrow("本番環境では DATABASE_AUTH=entra が必須です");
+  });
+
   it("本番はManaged Identity用account名を受け付ける", () => {
     const environment = { ...baseEnvironment };
     delete environment.AZURE_STORAGE_CONNECTION_STRING;
@@ -95,6 +108,8 @@ describe("parseDisplayEnvironment", () => {
         ...environment,
         NODE_ENV: "production",
         AZURE_STORAGE_ACCOUNT_NAME: "storageaccount1",
+        DATABASE_URL: "postgres://id-siryou-mite@db.example.com:5432/siryou_mite",
+        DATABASE_AUTH: "entra",
       }),
     ).not.toThrow();
   });

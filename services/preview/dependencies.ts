@@ -24,6 +24,7 @@ import {
   updateDocumentPreviewStatus,
 } from "../shared/db/documents.js";
 import type { Queryable } from "../shared/db/pool.js";
+import { databasePasswordOption } from "../shared/db/entra-auth.js";
 import { createDatabasePool, withTransactionOn } from "../shared/db/pool.js";
 import { createOperationLogger, type OperationLogger } from "../shared/log.js";
 import {
@@ -85,6 +86,7 @@ export function createPreviewRuntime(
     applicationName: PREVIEW_APPLICATION_NAME,
     // 本番(Azure Database for PostgreSQL)はTLS必須。証明書検証は無効化しない。
     requireTls: env.NODE_ENV === "production",
+    ...databasePasswordOption(env.DATABASE_AUTH),
   });
 
   const storageConfig = resolveStorageConnectionConfig(env);

@@ -1,8 +1,14 @@
 // services/shared/env.ts と一部の検証ロジックが重複する。`services/`配下は`app/`を
 // importしない方針(docs/ARCHITECTURE.md)のため、意図した重複として個別に保守する。
+// DB認証方式の検証は本番のfail closed条件を食い違わせないよう、逆方向
+// (`app/` → `services/shared/`、制約に反しない)のimportで共有する。
 import { createPrivateKey } from "node:crypto";
 import { z } from "zod";
 import { DEFAULT_APP_NAME } from "~/lib/app-name";
+import {
+  databaseAuthSchema,
+  validateDatabaseConfig,
+} from "../../services/shared/env";
 
 const optionalNonEmptyString = z
   .string()
@@ -156,6 +162,8 @@ const schema = z
     // データベース(設計 §7.4)。Managed Identityのaccess tokenをpasswordとして
     // 使う場合でも、host・port・dbname・利用者名を含む接続文字列として扱う。
     DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/ }),
+    // `entra`ではManaged IdentityのEntra ID access tokenをpasswordとして使う。
+    DATABASE_AUTH: databaseAuthSchema,
 
     // HTML表示サービスのオリジン(設計 §7.2)。hidden formのPOST先として使う。
     DISPLAY_ORIGIN: originSchema(),
@@ -245,6 +253,8 @@ const schema = z
         message: "SESSION_SECRET は AUTH_MODE=dev のとき必須です",
       });
     }
+
+    validateDatabaseConfig(value, context);
 
     const hasConnectionString = Boolean(value.AZURE_STORAGE_CONNECTION_STRING);
     const hasAccountName = Boolean(value.AZURE_STORAGE_ACCOUNT_NAME);

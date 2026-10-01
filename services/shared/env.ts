@@ -80,6 +80,62 @@ export function ed25519PublicKeyPemSchema(label: string) {
 export const databaseUrlSchema = z.url({ protocol: /^postgres(ql)?$/ });
 
 /**
+ * PostgreSQLの認証方式(設計 §7.4)。`password`は接続文字列のpassword(ローカル・CI)、
+ * `entra`はManaged IdentityのEntra ID access tokenをpasswordとして使う。
+ */
+export const databaseAuthSchema = z.enum(["password", "entra"]).default("password");
+
+export type DatabaseAuthMode = z.infer<typeof databaseAuthSchema>;
+
+/**
+ * DB接続設定の組み合わせを検証する(設計 §7.4)。本番はManaged Identity必須とし、
+ * `entra`ではpasswordを接続文字列へ書かせない(固定passwordとの併用を防ぐ)。
+ * 接続文字列の値そのものはエラーメッセージへ含めない。
+ */
+export function validateDatabaseConfig(
+  value: {
+    NODE_ENV: NodeEnvValue;
+    DATABASE_URL: string;
+    DATABASE_AUTH: DatabaseAuthMode;
+  },
+  context: z.RefinementCtx,
+): void {
+  if (value.NODE_ENV === "production" && value.DATABASE_AUTH !== "entra") {
+    context.addIssue({
+      code: "custom",
+      path: ["DATABASE_AUTH"],
+      message: "本番環境では DATABASE_AUTH=entra が必須です(Managed Identityを使用してください)",
+    });
+  }
+
+  if (value.DATABASE_AUTH !== "entra") {
+    return;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(value.DATABASE_URL);
+  } catch {
+    return; // 形式不正は`databaseUrlSchema`が報告する。
+  }
+  if (url.password !== "") {
+    context.addIssue({
+      code: "custom",
+      path: ["DATABASE_URL"],
+      message: "DATABASE_AUTH=entra のとき DATABASE_URL にpasswordを含めないでください",
+    });
+  }
+  if (url.username === "") {
+    context.addIssue({
+      code: "custom",
+      path: ["DATABASE_URL"],
+      message:
+        "DATABASE_AUTH=entra のとき DATABASE_URL にManaged Identityの利用者名が必要です",
+    });
+  }
+}
+
+/**
  * origin(scheme://host[:port])だけを許可し、パス・クエリ・フラグメントを含む値や
  * 末尾スラッシュを拒否する。Displayの`APP_ORIGIN`(許可Origin)一致判定で
  * 事故らないよう、値は`URL#origin`で正規化する(設計 §7.2)。
@@ -196,6 +252,16 @@ export function validateStorageConfig(
   }
 }
 
+/** `commonEnvShape`を使うschemaの`superRefine`から呼ぶ、DBとStorageの共通検証。 */
+export function validateCommonConfig(
+  value: Parameters<typeof validateStorageConfig>[0] &
+    Parameters<typeof validateDatabaseConfig>[0],
+  context: z.RefinementCtx,
+): void {
+  validateDatabaseConfig(value, context);
+  validateStorageConfig(value, context);
+}
+
 /**
  * Display / Preview / Maintenance が共通で必要とする環境変数のshape。
  * `z.object({ ...commonEnvShape, ... })` で各サービス固有の項目と合成する。
@@ -203,6 +269,7 @@ export function validateStorageConfig(
 export const commonEnvShape = {
   NODE_ENV: nodeEnvSchema,
   DATABASE_URL: databaseUrlSchema,
+  DATABASE_AUTH: databaseAuthSchema,
   AZURE_STORAGE_CONNECTION_STRING: storageConnectionStringSchema,
   AZURE_STORAGE_ACCOUNT_NAME: storageAccountNameSchema,
   AZURE_STORAGE_CONTAINER: storageContainerSchema,

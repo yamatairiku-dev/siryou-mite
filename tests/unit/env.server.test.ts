@@ -29,6 +29,9 @@ const validEasyAuthEnvironment: NodeJS.ProcessEnv = {
   AUTH_MODE: "easyauth",
   ENTRA_TENANT_ID: "tenant-id",
   AZURE_STORAGE_ACCOUNT_NAME: "storageaccount1",
+  // 本番はManaged Identityで接続する(passwordは接続文字列へ書かない、設計 §7.4)。
+  DATABASE_URL: "postgres://id-siryou-mite-web@db.example.com:5432/siryou_mite",
+  DATABASE_AUTH: "entra",
 };
 delete validEasyAuthEnvironment.AZURE_STORAGE_CONNECTION_STRING;
 delete validEasyAuthEnvironment.SESSION_SECRET;
@@ -55,6 +58,44 @@ describe("parseEnvironment", () => {
     expect(parseEnvironment(validEasyAuthEnvironment).AUTH_MODE).toBe(
       "easyauth",
     );
+  });
+
+  it("本番はDATABASE_AUTH=entraを必須にする(設計 §7.4)", () => {
+    expect(() =>
+      parseEnvironment({
+        ...validEasyAuthEnvironment,
+        DATABASE_AUTH: "password",
+      }),
+    ).toThrow("本番環境では DATABASE_AUTH=entra が必須です");
+  });
+
+  it("DATABASE_AUTH=entraでDATABASE_URLにpasswordを含む場合は拒否し、値をメッセージへ出さない", () => {
+    let message = "";
+    try {
+      parseEnvironment({
+        ...validEasyAuthEnvironment,
+        DATABASE_URL:
+          "postgres://id-siryou-mite-web:leaked-secret@db.example.com:5432/siryou_mite",
+      });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+
+    expect(message).toContain("DATABASE_URL にpasswordを含めないでください");
+    expect(message).not.toContain("leaked-secret");
+  });
+
+  it("DATABASE_AUTH=entraでDATABASE_URLに利用者名が無い場合は拒否する", () => {
+    expect(() =>
+      parseEnvironment({
+        ...validEasyAuthEnvironment,
+        DATABASE_URL: "postgres://db.example.com:5432/siryou_mite",
+      }),
+    ).toThrow("Managed Identityの利用者名が必要です");
+  });
+
+  it("DATABASE_AUTHの既定値はpassword(ローカル・CI)", () => {
+    expect(parseEnvironment(baseEnvironment).DATABASE_AUTH).toBe("password");
   });
 
   it("Easy Authでtenantが未設定の場合は拒否する", () => {

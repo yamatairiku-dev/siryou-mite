@@ -101,7 +101,9 @@ Maintenance Job用)。`services/`配下は`app/`をimportせず、共通の検�
 | `SESSION_SECRET` | ローカル`AUTH_MODE=dev`専用のセッション署名鍵 | 本番(`AUTH_MODE=easyauth`)では設定しない |
 | `SESSION_MAX_AGE_SECONDS` | `AUTH_MODE=dev`セッションの有効期間 | 同上、本番では未使用 |
 | `ENTRA_TENANT_ID` | Easy Authと一致させるEntra ID tenant | `AUTH_MODE=easyauth`のとき必須。principalの`tid`照合に使う |
-| `DATABASE_URL` | PostgreSQL接続文字列 | Managed IdentityのEntra ID access tokenを`pg`のpasswordとして使う。値そのものはrepositoryへ保存せず、Key Vault参照で渡す |
+| `DATABASE_URL` | PostgreSQL接続文字列 | Azure上は`postgres://<Managed Identityの名前>@<server>.postgres.database.azure.com:5432/<DB名>`の形でpasswordを書かない(passwordを含めるとZod検証で拒否) |
+| `DATABASE_AUTH` | DB認証方式(`password`/`entra`、既定`password`) | 本番・stagingは`entra`必須(`NODE_ENV=production`で`password`はZod検証で拒否)。`entra`ではManaged IdentityのEntra ID access tokenを接続ごとに取得してpasswordに使う |
+| `AZURE_CLIENT_ID` | user-assigned Managed IdentityのclientId | DB・Storageへの接続に使うidentityを指定する(`DefaultAzureCredential`が読む)。実行単位ごとに別のidentityを設定する |
 | `DISPLAY_ORIGIN` | Display(HTML表示サービス)のオリジン | Web・Displayで一致させる |
 | `AZURE_STORAGE_CONNECTION_STRING` | ローカル・開発用Blob/Queue接続文字列 | 本番では設定禁止(設定するとZod検証で拒否) |
 | `AZURE_STORAGE_ACCOUNT_NAME` | Storageアカウント名(Managed Identity用) | 本番で必須。`AZURE_STORAGE_CONNECTION_STRING`とは同時指定不可 |
@@ -127,8 +129,9 @@ Web・Display・Migration Job・Maintenance Jobは**同じNode.js image**を使�
 |---|---|
 | Web(App Service) | `node node_modules/@react-router/serve/bin.cjs ./build/server/index.js`(imageの既定CMD) |
 | Display(Container Apps) | `node build/services/display/index.js` |
-| Migration Job | `npm run db:migrate` |
+| Migration Job | `node build/services/migrate/index.js` |
 | Maintenance Job | `node build/services/maintenance/index.js` |
+| DB初期設定Job | `node build/services/db-bootstrap/index.js` |
 
 DisplayはWebと同じ`/health`(`GET`のみ)を持つため、imageのHEALTHCHECKは両方で使えます。
 Displayは`SIGTERM`・`SIGINT`で待受けを止め、DB接続を閉じてから終了します(猶予10秒)。
@@ -160,10 +163,11 @@ imageは合計2種類)。起動commandは`node build/services/preview/index.js`�
 
 ### Display / Preview Job / Maintenance Job
 
-Display、Preview Job、Maintenance Jobは`DATABASE_URL`、Storage接続設定
+Display、Preview Job、Maintenance Jobは`DATABASE_URL`・`DATABASE_AUTH`、Storage接続設定
 (`AZURE_STORAGE_CONNECTION_STRING`または`AZURE_STORAGE_ACCOUNT_NAME`、
 `AZURE_STORAGE_CONTAINER`)、`LOG_HMAC_KEY`を共通で必要とします。本番での
-Managed Identity必須・接続文字列禁止はWebと同じ制約です。
+Managed Identity必須(`DATABASE_AUTH=entra`、`AZURE_CLIENT_ID`)・接続文字列禁止はWebと
+同じ制約です。
 
 | 変数 | 対象 | 内容 |
 |---|---|---|
@@ -226,9 +230,14 @@ Entra IDの割り当て解除・アカウント制御とセッション失効手
   設定する`DATABASE_URL`を使い、`postgres`serviceの`public`schemaへ適用する)
 - 新しいmigrationファイルの雛形作成: `npm run db:migrate:create -- <名前>`
   (SQL形式で`migrations/`直下に作成される)
-- production: 専用Managed IdentityのMigration Jobがdeploy前に1回実行する
-  (runtime identityにはDDL権限を与えない、設計 §7.4)。Migration Job用の
-  `DATABASE_URL`はManaged IdentityのEntra ID access tokenをpasswordとして使う
+- Azure(staging・production): 専用Managed IdentityのMigration Job
+  (`node build/services/migrate/index.js`)がdeploy前に1回実行する(runtime identityには
+  DDL権限を与えない、設計 §7.4)。`NODE_ENV=production`・`DATABASE_AUTH=entra`・
+  `AZURE_CLIENT_ID`(Migration用identity)を設定し、`DATABASE_URL`の利用者名をMigration用
+  identityの名前にする。オプションは`npm run db:migrate`(CLIの既定値)と同じで、
+  失敗時は例外の種類とSQLSTATEだけを`migrate_job_failed`として出力する
+- Azureでは**DB初期設定Jobを先に実行する**(次節)。roleが無い状態でmigrationを適用すると
+  GRANTが飛ばされたまま記録され、forward-onlyのため再適用されない
 
 `documents`・`audit_events`のrole権限分離(設計 §7.4, §12.2):
 
@@ -237,8 +246,7 @@ Entra IDの割り当て解除・アカウント制御とセッション失効手
   (`restrict-runtime-role-privileges` migration)。DELETEはどちらにも与えない
   (削除は`documents.status`の更新で表すsoft deleteのため)
 - このroleが存在しない環境(ローカル・CI)ではmigrationは何もせず成功する。
-  Managed Identityと対応付ける実際のrole作成・用途別分割はIaC(Bicep)側の
-  別タスクで行う
+  Azureでは、Managed Identityと対応付ける実際のrole作成をDB初期設定Job(次節)が行う
 - `audit_events`は追記専用で、`BEFORE UPDATE OR DELETE` triggerがDB role設定に
   関わらずUPDATEを拒否する。DELETEは設計 §16の1年経過後の自動削除だけを通すため、
   `add-maintenance-role-and-purge-support` migrationで「`retain_until`を過ぎた行」
@@ -249,6 +257,36 @@ Entra IDの割り当て解除・アカウント制御とセッション失効手
   `audit_events`・`upload_attempts`へSELECT/DELETEだけを与える(監査へのINSERT・
   UPDATEは与えない)。runtime roleと同じく、roleが存在しない環境では
   migrationは何もせず成功する
+
+### DB初期設定Job(`services/db-bootstrap/`)
+
+各実行単位のManaged IdentityをPostgreSQLの利用者(role)として登録し、最小権限を付ける
+Jobです。PostgreSQLはprivate endpointだけで公開するため、VNet内のContainer Apps Jobとして
+実行します。環境の構築時と、Managed Identityを追加・作り直したときに実行します(冪等)。
+
+1. 各Managed IdentityのEntra principalを`pgaadauth_create_principal_with_oid`で作る
+   (object IDで作るため、名前の付け替えに影響されない)
+2. login不可のまとめ役role `siryou_mite_runtime`・`siryou_mite_maintenance`を作り、
+   Web・Display・Previewのidentityをruntimeへ、Maintenanceのidentityをmaintenanceへ入れる
+3. 業務DBが無ければ作る(このJobのidentityが所有者になる)
+4. Migration Jobのidentityへ`public` schemaのUSAGE・CREATEを、まとめ役roleへUSAGEを与える
+5. まとめ役roleを今回新しく作ったのに業務DBがmigration済みなら、テーブル権限が欠けて
+   いるため失敗(`MigrationsAppliedBeforeRolesError`)にする
+
+| 変数 | 内容 |
+|---|---|
+| `NODE_ENV` | `production` |
+| `DATABASE_URL` | 業務DBの接続文字列。利用者名はPostgreSQLのEntra管理者にした、このJob専用のManaged Identityの名前 |
+| `DATABASE_AUTH` | `entra` |
+| `AZURE_CLIENT_ID` | このJob専用のManaged IdentityのclientId |
+| `DB_BOOTSTRAP_ADMIN_DATABASE` | principalを作る管理用DB(既定`postgres`) |
+| `DB_BOOTSTRAP_PRINCIPALS` | 対象identityのJSON配列。`[{"name":"<identity名>","objectId":"<principalId>","role":"runtime"\|"maintenance"\|"migration"}]`。`migration`はちょうど1つ |
+
+ログには役割と件数だけを出し、identity名・object ID・接続先は出しません。
+`pgaadauth_create_principal_with_oid`の動作はローカルで再現できないため、結合テスト
+(`tests/integration/db-bootstrap.test.ts`)は同名のstub関数で代替し、superuserでない
+管理者(CREATEROLE・CREATEDB)で「初期設定 → Migration Jobのidentityでmigration →
+用途別の権限確認 → 再実行」を確認しています。Azure上での動作はstagingで確認します。
 
 結合テスト`npm run test:integration`(`tests/integration/`)は、ローカルPostgreSQLへ
 専用schemaを作ってmigrationを適用し、テーブル・制約・indexと追記専用の拒否動作を

@@ -16,6 +16,7 @@ import type { Pool } from "pg";
 import { insertAuditEvent } from "../shared/db/audit-events.js";
 import { findDocumentById } from "../shared/db/documents.js";
 import { createDatabasePool } from "../shared/db/pool.js";
+import { databasePasswordOption } from "../shared/db/entra-auth.js";
 import { createOperationLogger } from "../shared/log.js";
 import {
   createBlobServiceClient,
@@ -45,6 +46,7 @@ export function createDisplayRuntime(env: DisplayEnvironment): DisplayRuntime {
     applicationName: DISPLAY_APPLICATION_NAME,
     // 本番(Azure Database for PostgreSQL)はTLS必須。証明書検証は無効化しない。
     requireTls: env.NODE_ENV === "production",
+    ...databasePasswordOption(env.DATABASE_AUTH),
   });
 
   const containerClient = getDocumentsContainerClient(

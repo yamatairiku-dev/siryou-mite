@@ -29,6 +29,7 @@ import {
   purgeOldUploadAttempts,
 } from "../shared/db/maintenance.js";
 import { createDatabasePool } from "../shared/db/pool.js";
+import { databasePasswordOption } from "../shared/db/entra-auth.js";
 import { createOperationLogger, type OperationLogger } from "../shared/log.js";
 import {
   createBlobServiceClient,
@@ -62,6 +63,7 @@ export function createMaintenanceRuntime(
     applicationName: MAINTENANCE_APPLICATION_NAME,
     // 本番(Azure Database for PostgreSQL)はTLS必須。証明書検証は無効化しない。
     requireTls: env.NODE_ENV === "production",
+    ...databasePasswordOption(env.DATABASE_AUTH),
   });
 
   const containerClient: ContainerClient = getDocumentsContainerClient(

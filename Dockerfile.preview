@@ -6,7 +6,9 @@
 #   - Playwright公式Ubuntu imageをPlaywright versionと一致させて固定する
 #   - 非rootで実行し、Chromium sandboxを有効にしたまま起動する
 #
-# base imageのtagは`package.json`の`@playwright/test`(1.61.1)と必ず一致させる。
+# base imageのtagは`package.json`の`@playwright/test`(1.63.0)と必ず一致させる。
+# 一致は `tests/unit/services/preview-image-version.test.ts` がCIで確認する
+# (Dependabotが`@playwright/test`だけを上げたPRはCIが失敗するので、このtagも上げる)。
 # 一致していないとimage内のbrowser buildとPlaywright本体の対応が崩れる。
 # base imageが同梱するNode.jsは`package.json`の`engines`(>=24.14.0)を満たす必要がある。
 # 満たさない場合は、このimageへNode.js 24を追加導入する手順をここへ足す。
@@ -32,7 +34,7 @@ COPY package.json package-lock.json ./
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN npm ci --omit=dev
 
-FROM mcr.microsoft.com/playwright:v1.61.1-noble
+FROM mcr.microsoft.com/playwright:v1.63.0-noble
 ENV NODE_ENV=production
 # browserはbase imageが配置した場所(/ms-playwright)をそのまま使う。
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright

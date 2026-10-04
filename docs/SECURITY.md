@@ -8,7 +8,7 @@
 4. cookie認証の更新処理は同一オリジンを検証する
 5. すべての外部入力を検証する
 6. 秘密情報をブラウザへ送らない
-7. productionではApp Service Easy Authを迂回できる経路と`AUTH_MODE=dev`を使用しない
+7. productionではContainer Apps Easy Authを迂回できる経路(WebでのDapr有効化を含む)と`AUTH_MODE=dev`を使用しない
 8. High/Critical脆弱性を放置しない
 
 ## シークレット

@@ -2,13 +2,13 @@
 
 ## 方針
 
-このアプリは、ブラウザ、App Service Easy Auth、React Router BFF、データサービスを
+このアプリは、ブラウザ、Container Apps Easy Auth、React Router BFF、データサービスを
 基本とします。初回表示はSSR、以後の画面遷移はクライアント側で行います。
 
 ```mermaid
 flowchart LR
   U["社内ユーザー"] --> B["ブラウザ<br>React UI"]
-  B --> EA["App Service Easy Auth"]
+  B --> EA["Container Apps Easy Auth"]
   EA --> E["Microsoft Entra ID"]
   EA -->|X-MS-CLIENT-PRINCIPAL| RR["React Router BFF<br>loader / action"]
   RR --> API["業務API・DB・SaaS"]
@@ -133,27 +133,33 @@ grantはアプリJavaScriptがhidden formのPOST bodyでiframeへ送り、URL、
 - 通常リンクはiframe内、`_blank`は新しいタブで開き、`_top`と`_parent`は無効化する
 - リンククリック単位の監査とリンク専用データモデルは設けない
 
-WebだけをLinux App Serviceで実行し、Easy Authを有効にします。プレビュー生成はChromiumを
-含む別imageのQueue駆動Container Apps Jobで最大3回試行し、JavaScriptと外部ネットワークを
-無効化します。Display、Migration、MaintenanceもContainer Appsで実行します。
+Web、Display、Preview、Migration、Maintenance、DB初期設定はすべて同じContainer Apps環境で
+実行します。WebだけEasy Auth(Container Appsの組み込み認証)を有効にします。プレビュー生成は
+Chromiumを含む別imageのQueue駆動Container Apps Jobで最大3回試行し、JavaScriptと外部
+ネットワークを無効化します。
 
-実行基盤を分ける理由は次のとおりです(設計 §7.1, §7.5, §7.6, §9.1)。
+実行単位ごとの使い方は次のとおりです(設計 §7.1, §7.5, §7.6, §9.1)。
 
 - Web: Entra IDのOIDCフローとセッションCookieをEasy Authへ任せ、アプリは
-  `X-MS-CLIENT-PRINCIPAL`を検証するだけにするため、App Serviceで実行する。このheaderは
-  Easy Authを迂回してWebへ到達できないことを前提に信頼するので、受信経路をApp Serviceに
-  限定する。Easy Auth設定(`authsettingsV2`)はBicepで管理する
+  `X-MS-CLIENT-PRINCIPAL`を検証するだけにする。このheaderはEasy Authを迂回してWebへ
+  到達できないことを前提に信頼するので、受信経路を環境のEnvoy proxyと各レプリカの認証
+  sidecarに限定し、sidecarを通らない経路になり得るDaprは有効にしない。Easy Auth設定
+  (`authConfigs`)はBicepで管理する
 - Display: アップロードされたHTMLを別オリジンで配信し、Easy AuthのCookieを受け取らず
-  表示grantだけで制御するため、Easy Authは不要。小さいHTTPサーバーを少ないレプリカで
-  動かし、stagingは0レプリカまで縮退できるContainer Appsで実行する
+  表示grantだけで制御するため、Easy Authは不要。stagingは0レプリカまで縮退する
 - Preview: Queueにメッセージがあるときだけ起動し、1実行1メッセージで使い捨てにし、
-  CPU・メモリ上限と読み取り専用filesystemを付けるため、Queue駆動のContainer Apps Jobで
-  実行する
+  CPU・メモリ上限と読み取り専用filesystemを付けたContainer Apps Jobで実行する
 - Migration・Maintenance・DB初期設定: 実行して終わる処理で、private endpointだけで公開する
   PostgreSQLへ届く必要があるため、VNet内のContainer Apps Jobで実行する
 
-実行基盤を分けてもcontainer imageはNode.js用とPreview用(Chromium入り)の2種類だけで、
-Node.js用imageをcommandとManaged Identityの違いでWeb・Display・各Jobに使い回します。
+以前はWebだけをApp Serviceで実行する設計でした。Container AppsにもApp Serviceと同じ
+Easy Authがあり、client secretなし・Token Store無効・除外pathという本アプリの構成をそのまま
+取れるため、運用・ネットワーク・デプロイ方法を1種類にまとめる目的でContainer Appsへ
+寄せました。信頼できないHTMLを描画するPreview Jobと同じ環境に置くことによる分離の弱さは
+受け入れ、Preview JobのChromium sandbox有効化を前提にしています(Q-064)。
+
+container imageはNode.js用とPreview用(Chromium入り)の2種類だけで、Node.js用imageを
+commandとManaged Identityの違いでWeb・Display・各Jobに使い回します。
 
 ## データとAzure境界
 

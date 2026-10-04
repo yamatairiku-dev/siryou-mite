@@ -135,7 +135,7 @@ curl --fail http://127.0.0.1:8080/health
 
 ## Easy AuthとEntra ID設定
 
-App Service Easy AuthでMicrosoft Entra ID providerを設定します。アプリ登録には
+Container AppsのEasy Auth(組み込み認証)でMicrosoft Entra ID providerを設定します。アプリ登録には
 `User`・`Admin` App Roleと、アプリへ割り当てた所属グループだけを返す`groups` claimを
 設定します。Graphを使用しないためToken Storeは無効にします。
 

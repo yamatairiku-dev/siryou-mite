@@ -2,7 +2,7 @@
 
 ## 1. 依頼概要
 
-社内Webアプリ「資料みて！」では、App Service Easy Authが検証した
+社内Webアプリ「資料みて！」では、Azure Container AppsのEasy Auth(組み込み認証)が検証した
 `X-MS-CLIENT-PRINCIPAL`から、サインイン利用者の所属コードを取得します。所属情報の
 発行元は、Easy Authで使用するEntra IDアプリ登録のIDトークンです。
 
@@ -18,7 +18,7 @@
 | 環境 | production / staging |
 | テナントID | 管理者確認用。リポジトリには記載しない |
 | アプリケーション（クライアント）ID | 管理者確認用。リポジトリには記載しない |
-| 認証方式 | App Service Easy Auth + Microsoft Entra ID |
+| 認証方式 | Azure Container Apps Easy Auth + Microsoft Entra ID |
 | 対象トークン | IDトークン |
 | 既存App Role | `User`、`Admin` |
 | 所属コード例 | `ZAA535-A`、`ZAA090-A` |
@@ -157,7 +157,7 @@
 
 ## 7. 参考資料
 
-- [Azure App Serviceの認証と認可](https://learn.microsoft.com/azure/app-service/overview-authentication-authorization)
-- [App ServiceでユーザーIDを扱う](https://learn.microsoft.com/azure/app-service/configure-authentication-user-identities)
+- [Azure Container Appsの認証と認可](https://learn.microsoft.com/azure/container-apps/authentication)
+- [Azure Container AppsでMicrosoft Entra IDの認証を有効にする](https://learn.microsoft.com/azure/container-apps/authentication-entra)
 - [Microsoft Entra IDでアプリケーションのグループクレームを構成する](https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/how-to-connect-fed-group-claims)
 - [IDトークン、アクセストークン、SAMLトークンのオプショナルクレームを構成する](https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims)

@@ -422,11 +422,14 @@
 - 影響範囲: `docs/RELEASE_CHECKLIST.md`(24行目付近)。stagingで最初に`/.auth/me`の応答を確認し、空なら確認手順を「アプリが受け取ったprincipalの所属コード・ロールを監査履歴で確認する」等へ置き換える(トークンストアを有効にする場合はStorageと秘密情報の扱いが増えるため別途判断)
 - 回答:
 
-### Q-064 [未回答] 基盤: WebをContainer Appsでなく App Service で実行する根拠が未記録
+### Q-064 [回答済] 基盤: WebをContainer Appsでなく App Service で実行する根拠が未記録
 - 状況: 設計§7.1・§7.6はWebをApp Service(Easy Auth)で実行すると決めているが、選定理由は記録されていない。公式ドキュメント(2026-10-04確認)では、Container Appsにも同じEasy Authがあり「App Serviceと同じ認証・認可の仕組みを使う」と明記され、本アプリが使う設定(`excludedPaths`、`RedirectToLoginPage`、トークンストア無効)も`Microsoft.App/containerApps/authConfigs`で指定できる。このため「Container AppsにはEasy Authが無い」は理由にならない。差として確認できたのは次の点(https://learn.microsoft.com/en-us/azure/container-apps/authentication 、https://learn.microsoft.com/en-us/azure/container-apps/token-store)
   1. Container Appsのドキュメントは対象を「external ingress-enabled container app」と書いている。ここでのexternal ingress(`external: true`)は「環境の外から受ける」という意味で、インターネット公開ではない。内部環境(internal environment)と組み合わせればVNetと社内ネットワークからだけ到達できるため、本番の「社内ネットワークからだけ到達可能」(設計§8)と両立する。ただし認証サイドカーはEntra IDのOIDCメタデータ・署名鍵を取りに外向き通信を行うため、Container Apps環境のサブネットのNSGでEntra ID宛てを許可する必要がある。これはVNet統合したApp Serviceでも同じで、Container Appsだけの不利ではない
   2. トークンストアはContainer AppsではBlobコンテナの設定が必要(Managed Identityでの接続はpreview)。本アプリは無効にしているため影響しない
   3. App Serviceのドキュメントにあるcookie認証POSTのCSRF自動防御は、Container Appsのページには記載が無い。アプリ側で`assertSameOrigin`を実装済みのため影響しない
+  4. client secretを設定しない場合はApp Serviceと同じくimplicit flowでIDトークンだけを受け取る(https://learn.microsoft.com/en-us/azure/container-apps/authentication-entra)。client secretを持たない現設計のまま使える
+  5. 同じ環境の他のアプリからWebを呼ぶ場合も、FQDN・アプリ名のどちらでも環境のEnvoy proxyを通り(「container apps never communicate directly with each other's pods. All traffic passes through the proxy layer」、https://learn.microsoft.com/en-us/azure/container-apps/connect-apps)、各replicaの認証sidecarを通ってからアプリへ届く。principal headerは外部から設定できない。したがって通常の呼び出しではEasy Authを迂回できない。文書で保証されていないのは次の2点: (a) Dapr service invocationは呼び出し先のDapr sidecarからアプリへ届くため認証sidecarを通らない可能性がある(本アプリはDaprを使わない)、(b) 同じ環境内のコンテナからWebのreplica IPへ直接接続できないことは明記されていない。(b)は同じ環境のワークロード(信頼できないHTMLを描画するPreview Jobを含む)が侵害された場合にだけ問題になる経路で、App Serviceより分離が弱い点
+  6. 料金(Japan East、Azure Retail Prices API、2026-10-04時点、1ドル150円): App Service B1 約2,100円/月(固定)、Container Apps 0.5 vCPU・1GiB・最小1レプリカでアイドル中心なら約1,800円/月、平日日中ずっと処理中でも約2,900円/月。本番でApp Serviceに上位SKUや受信用private endpointが要る場合はContainer Appsのほうが安い。決め手になる差ではない
 - 置いた仮定: App Serviceのまま変更しない。`docs/ARCHITECTURE.md`の「「資料みて！」固有の実行境界」には、設計書から読み取れる理由(Easy Authに任せる・principal headerの受信経路を限定する等)だけを書き、「Container Appsでは実現できない」とは書いていない
 - 影響範囲: `docs/ARCHITECTURE.md`。公式ドキュメントからは選定の決め手になる差は見つかっていない。当時の選定理由(運用実績、App Service Planの常時起動など)があれば追記し、無ければ「どちらでも実現できるが、設計時にApp Serviceを選んだ」と記録するか決める
-- 回答:
+- 回答: (2026-10-04 人の回答)WebもContainer Appsへ寄せ、Display・Preview・各Jobと同じContainer Apps環境で進める(5.(b)の分離の弱さは受け入れる)。WebではDaprを有効にしない。Preview JobのChromium sandbox有効化(設計§7.5のsecurity spike)はこの判断の前提とする。設計書(§7.1・§7.6・§8・§9.1)、`docs/ARCHITECTURE.md`、`docs/OPERATIONS.md`、`docs/RELEASE_CHECKLIST.md`、Bicep(`infra/modules/web.bicep`を`container-apps.bicep`へ統合し`authConfigs`を追加)の変更は別途行う

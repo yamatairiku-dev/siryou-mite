@@ -7,7 +7,7 @@
 | アプリ責任者 | 利用部門調整、リリース承認 |
 | 保守担当 | 更新、監視、一次障害対応 |
 | レビュー担当 | コード・セキュリティレビュー |
-| 基盤担当 | App Service Easy Auth、コンテナ、シークレット、ネットワーク |
+| 基盤担当 | Container Apps Easy Auth、コンテナ、シークレット、ネットワーク |
 
 兼務は可能ですが、リリース承認と実施は可能な限り別担当にします。
 
@@ -67,7 +67,7 @@ Azure Monitor Action Groupから運用担当者の共有メールアドレスへ
 ## シークレット更新
 
 対象はgrant署名用Ed25519鍵とログ用HMAC鍵です。環境ごとに別の値をKey Vaultへ保存し、
-App ServiceまたはContainer AppsのKey Vault参照で渡します。`SESSION_SECRET`はlocal開発
+Container AppsのKey Vault参照で渡します。`SESSION_SECRET`はlocal開発
 専用で、本番へ設定しません。Easy AuthでGraph Token Storeを使用しないため、このアプリが
 管理するEntra ID client secretはありません。
 
@@ -89,12 +89,12 @@ Maintenance Job用)。`services/`配下は`app/`をimportせず、共通の検�
 `services/shared/env.ts`へ切り出しています。不正な値がある場合はプロセス起動時に
 例外で停止します(fail closed)。
 
-### Web(App Service)
+### Web(Container Apps)
 
 | 変数 | 内容 | 本番での扱い |
 |---|---|---|
 | `NODE_ENV` | 実行環境 | 本番・stagingは`production`を必須設定(fail closedの本番制約が働く条件) |
-| `PORT` | Webが待受けるport(既定3000) | Container/App Serviceの設定に合わせる |
+| `PORT` | Webが待受けるport(既定3000) | Container Appsのingressの`targetPort`(8080)に合わせる |
 | `APP_NAME` | 画面タイトル等に表示するアプリ名 | 既定値は`資料みて！`。検証環境などで見分けたい場合だけ変更する |
 | `APP_ORIGIN` | Webのオリジン | 同一オリジン検証(`assertSameOrigin`)とEasy Auth callbackの基準になる値と一致させる |
 | `AUTH_MODE` | 認証方式(`dev`/`easyauth`) | `NODE_ENV=production`のときは`easyauth`必須(`dev`は起動時のZod検証で拒否される) |
@@ -127,7 +127,7 @@ Web・Display・Migration Job・Maintenance Jobは**同じNode.js image**を使�
 
 | 実行単位 | 起動command |
 |---|---|
-| Web(App Service) | `node node_modules/@react-router/serve/bin.cjs ./build/server/index.js`(imageの既定CMD) |
+| Web(Container Apps) | `node node_modules/@react-router/serve/bin.cjs ./build/server/index.js`(imageの既定CMD) |
 | Display(Container Apps) | `node build/services/display/index.js` |
 | Migration Job | `node build/services/migrate/index.js` |
 | Maintenance Job | `node build/services/maintenance/index.js` |
@@ -351,7 +351,7 @@ devcontainerには導入済みです。CIで実行する場合は
 - productionはGitHub Environmentの手動承認後に同じimage digestを昇格する
 - ACRは認証付きpublic endpoint、管理者account無効、runtimeは`AcrPull`を使う
 - production/non-productionのservice principalとfederated credentialを分離する
-- `authsettingsV2`をBicepでdeployし、Easy Authのtenant、audience、除外path、Token Storeが
+- Container Appsの`authConfigs`をBicepでdeployし、Easy Authのtenant、audience、除外path、Token Storeが
   設計値と一致することを確認する
 - staging smoke testでは`/health`が匿名で成功し、業務routeが未認証時にEntra IDへ遷移し、
   実ログイン後に`roles`と複数`groups`を取得できることを確認する
@@ -366,22 +366,22 @@ devcontainerには導入済みです。CIで実行する場合は
 ### 構成(設計 §7, §8 とstagingの差分)
 
 - 社内ネットワークが無いため、VNet・サブネット・Private DNSゾーンはこのBicepで新規作成する
-- Web(App Service)とDisplay(Container Apps)は公開エンドポイントにし、
-  `SIRYOU_ALLOWED_IP_RANGES`で許可したIPアドレスからだけ受け付ける(設計 §8 の「社内
-  ネットワークからだけ到達」の代わり)。ホスト名はAzure既定(`*.azurewebsites.net`・
-  `*.azurecontainerapps.io`)
+- Web・Display・各Jobは同じContainer Apps環境で動かす(設計 §7.6)。環境は内部環境にせず、
+  WebとDisplayを公開エンドポイントにし、`SIRYOU_ALLOWED_IP_RANGES`で許可したIPアドレス
+  からだけ受け付ける(設計 §8 の「社内ネットワークからだけ到達」の代わり)。ホスト名は
+  Azure既定(`*.azurecontainerapps.io`)
 - PostgreSQL・Storage(Blob・Queue)・Key Vaultはprivate endpointだけで公開し、
   public network accessは無効(設計どおり)。Storageのアカウントキーと
   PostgreSQLのpassword認証も無効にし、Managed Identityだけで接続する
 - Container Apps環境のサブネットはNSGでインターネットへの通信を拒否し、イメージの取得・
   Entra ID・監視に必要な宛先だけを許可する(設計 §8)。新しいVNetには既定の外向き通信が
-  無いため、外向き通信が要るサブネット(App ServiceのVNet統合・Container Apps)には
-  NAT Gatewayを付ける
+  無いため、Container Apps環境のサブネットにNAT Gatewayを付ける
 
 概算費用(Japan East、1ドル150円、2026-10時点の公開価格からの目安。正式な見積もりは
-設計 §21 の未決事項): App Service B1 約2,000円、PostgreSQL B1ms+32GB 約2,500円、
-private endpoint 4個 約4,400円、NAT Gateway+固定IP 約5,500円(+通信量)、
-ACR Basic 約750円、Log Analytics・Container Apps(従量)少額で、合計**月1.5万〜2万円程度**。
+設計 §21 の未決事項): Container AppsのWeb(0.5 vCPU・1GiB・最小1レプリカ)約1,800円、
+PostgreSQL B1ms+32GB 約2,500円、private endpoint 4個 約4,400円、NAT Gateway+固定IP
+約5,500円(+通信量)、ACR Basic 約750円、Log Analytics・Display・各Job(従量)少額で、
+合計**月1.5万〜2万円程度**。
 
 ### 0. 前提
 
@@ -394,7 +394,7 @@ az login --tenant <開発用テナントのID>
 az account set --subscription <サブスクリプションID>
 for ns in Microsoft.App Microsoft.ContainerRegistry Microsoft.DBforPostgreSQL \
   Microsoft.KeyVault Microsoft.Network Microsoft.OperationalInsights Microsoft.Storage \
-  Microsoft.Web Microsoft.ManagedIdentity Microsoft.Insights; do
+  Microsoft.ManagedIdentity Microsoft.Insights; do
   az provider register --namespace "$ns"
 done
 ```
@@ -502,19 +502,20 @@ az containerapp job execution list -g "$RG" -n caj-siryou-mite-stg-migrate \
 Bicepは構文・型・lintまで検証済み(CIの`bicep` job)で、Azureへのデプロイはまだ行っていない。
 次は構成上の前提で、実際の環境で確認する。
 
-1. App ServiceのKey Vault参照が、VNet統合(`vnetRouteAllEnabled`)とprivate endpoint経由で解決できる
-2. `vnetRouteAllEnabled`のまま、Easy AuthのEntra IDへの通信がNAT Gateway経由で成功する
-3. Container AppsのKey Vault参照(secret)がprivate endpoint経由で解決できる
-4. Preview JobのKEDA scaler(azure-queue、Managed Identity)がprivate endpointのみのQueueの長さを読める
-5. DB初期設定Jobの`pgaadauth_create_principal_with_oid`と、Entra管理者による業務DB作成・権限付与
-6. Container Apps環境のNSG(インターネット拒否)でイメージ取得・Managed Identityのtoken取得ができる
-7. Container Apps Job上でChromium sandboxが有効のまま起動できる(設計 §21 のsecurity spike)
-8. Container AppsはコンテナのファイルシステムをRead-onlyにする設定を持たないため、設計 §7.5
+1. WebのEasy Auth(認証sidecar)が、インターネットを拒否したContainer Apps環境のNSG
+   (`AzureActiveDirectory`サービスタグだけ許可)のままEntra IDのOIDCメタデータ・署名鍵を取得し、
+   ログインできる
+2. Container AppsのKey Vault参照(secret。Webのgrant署名鍵を含む)がprivate endpoint経由で解決できる
+3. Preview JobのKEDA scaler(azure-queue、Managed Identity)がprivate endpointのみのQueueの長さを読める
+4. DB初期設定Jobの`pgaadauth_create_principal_with_oid`と、Entra管理者による業務DB作成・権限付与
+5. Container Apps環境のNSG(インターネット拒否)でイメージ取得・Managed Identityのtoken取得ができる
+6. Container Apps Job上でChromium sandboxが有効のまま起動できる(設計 §21 のsecurity spike)
+7. Container AppsはコンテナのファイルシステムをRead-onlyにする設定を持たないため、設計 §7.5
    「読み取り専用filesystem」は満たせない(`/tmp`だけ書き込み可能にする構成は維持)
-9. Job失敗(Preview・Migration・Maintenance)の通知(設計 §17)は未作成。ログの形を確認してから
+8. Job失敗(Preview・Migration・Maintenance)の通知(設計 §17)は未作成。ログの形を確認してから
    Log Analyticsのアラートを追加する
-10. Key Vault(public network access無効・`bypass: None`)へ、デプロイ(ARM)で秘密値を
-    登録できる(秘密値の登録は管理プレーン経由のため可能な想定)
+9. Key Vault(public network access無効・`bypass: None`)へ、デプロイ(ARM)で秘密値を
+   登録できる(秘密値の登録は管理プレーン経由のため可能な想定)
 
 ## 定期Job
 

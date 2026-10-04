@@ -46,7 +46,7 @@ param grantVerificationKeys string
 @description('ログ記録用HMAC鍵(base64、32byte以上)')
 param logHmacKey string
 
-param appServicePlanSku string = 'B1'
+param webMinReplicas int = 1
 param postgresSkuName string = 'Standard_B1ms'
 param postgresSkuTier string = 'Burstable'
 param postgresStorageAutoGrow bool = false
@@ -172,8 +172,6 @@ module registry 'modules/registry.bicep' = {
 
 var appImage = '${registry.outputs.loginServer}/siryou-mite:${imageTag}'
 var previewImage = '${registry.outputs.loginServer}/siryou-mite-preview:${imageTag}'
-var webSiteName = 'app-${namePrefix}-${uniqueSuffix}'
-var appOrigin = 'https://${webSiteName}.azurewebsites.net'
 
 // Managed Identityの名前がPostgreSQLの利用者名になる(passwordは書かない。DATABASE_AUTH=entra)。
 func databaseUrl(identityName string, host string, database string) string =>
@@ -216,45 +214,25 @@ module containerApps 'modules/container-apps.bicep' = if (deployApps) {
     registryLoginServer: registry.outputs.loginServer
     appImage: appImage
     previewImage: previewImage
-    appOrigin: appOrigin
     allowedClientIpRanges: allowedClientIpRanges
+    webMinReplicas: webMinReplicas
     displayMinReplicas: displayMinReplicas
+    tenantId: tenantId
+    entraClientId: entraClientId
+    appName: appName
     databaseUrls: databaseUrls
     storageAccountName: storage.outputs.accountName
     storageContainerName: storage.outputs.containerName
     storageQueueName: storage.outputs.queueName
     logHmacKeySecretUri: keyVault.outputs.logHmacKeySecretUri
+    grantSigningKeyId: grantSigningKeyId
+    grantSigningPrivateKeySecretUri: keyVault.outputs.grantSigningPrivateKeySecretUri
     grantVerificationKeys: grantVerificationKeys
     dbBootstrapPrincipals: string(dbBootstrapPrincipals)
   }
 }
 
-module web 'modules/web.bicep' = if (deployApps) {
-  name: 'web'
-  params: {
-    siteName: webSiteName
-    namePrefix: namePrefix
-    location: location
-    tags: tags
-    appSubnetId: network.outputs.appSubnetId
-    logAnalyticsWorkspaceId: monitoring.outputs.logAnalyticsWorkspaceId
-    planSkuName: appServicePlanSku
-    allowedClientIpRanges: allowedClientIpRanges
-    identity: ids.web
-    containerImage: appImage
-    tenantId: tenantId
-    entraClientId: entraClientId
-    displayOrigin: deployApps ? containerApps!.outputs.displayOrigin : ''
-    databaseUrl: databaseUrls.web
-    storageAccountName: storage.outputs.accountName
-    storageContainerName: storage.outputs.containerName
-    storageQueueName: storage.outputs.queueName
-    grantSigningKeyId: grantSigningKeyId
-    grantSigningPrivateKeySecretUri: keyVault.outputs.grantSigningPrivateKeySecretUri
-    logHmacKeySecretUri: keyVault.outputs.logHmacKeySecretUri
-    appName: appName
-  }
-}
+var appOrigin = deployApps ? containerApps!.outputs.webOrigin : ''
 
 output registryName string = registry.outputs.registryName
 output registryLoginServer string = registry.outputs.loginServer
@@ -262,4 +240,4 @@ output postgresServerName string = postgres.outputs.serverName
 output appOrigin string = appOrigin
 output displayOrigin string = deployApps ? containerApps!.outputs.displayOrigin : ''
 output jobNames object = deployApps ? containerApps!.outputs.jobNames : {}
-output entraRedirectUri string = '${appOrigin}/.auth/login/aad/callback'
+output entraRedirectUri string = deployApps ? '${appOrigin}/.auth/login/aad/callback' : ''

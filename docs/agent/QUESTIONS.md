@@ -417,7 +417,7 @@
 - 回答: (2026-09-27 人の回答)仮定どおり承認
 
 ### Q-063 [未回答] 基盤: Easy Authのトークンストアを無効にした状態で`/.auth/me`が使えるか未確認
-- 状況: `infra/modules/web.bicep`はEasy Authの`tokenStore`を`enabled: false`にしている(Graphを呼ばないため。`docs/OPERATIONS.md`「シークレット更新」)。一方`docs/RELEASE_CHECKLIST.md`は、実Entra IDでログインして「`/.auth/me`とアプリ(監査履歴)で複数所属コード・`User`・`Admin`が一致する」ことを確認する手順を持つ(Q-059、設計§18.3)。App Service公式ドキュメントはトークンストアを「IDトークン・アクセストークン・リフレッシュトークンを認証済みセッションにキャッシュする仕組み」と説明しているが、無効時に`/.auth/me`が何を返すかは明記していない(2026-10-04確認、https://learn.microsoft.com/en-us/azure/app-service/overview-authentication-authorization)
+- 状況: `infra/modules/container-apps.bicep`(Webの`authConfigs`。Q-064以前は`infra/modules/web.bicep`)はEasy Authの`tokenStore`を`enabled: false`にしている(Graphを呼ばないため。`docs/OPERATIONS.md`「シークレット更新」)。一方`docs/RELEASE_CHECKLIST.md`は、実Entra IDでログインして「`/.auth/me`とアプリ(監査履歴)で複数所属コード・`User`・`Admin`が一致する」ことを確認する手順を持つ(Q-059、設計§18.3)。App Service公式ドキュメントはトークンストアを「IDトークン・アクセストークン・リフレッシュトークンを認証済みセッションにキャッシュする仕組み」と説明しているが、無効時に`/.auth/me`が何を返すかは明記していない(2026-10-04確認、https://learn.microsoft.com/en-us/azure/app-service/overview-authentication-authorization)
 - 置いた仮定: 何も変更していない。`/.auth/me`が空を返す場合でも、アプリは`X-MS-CLIENT-PRINCIPAL`だけで動くため業務機能への影響は無い。影響を受けるのはリリース時の確認手順だけ
 - 影響範囲: `docs/RELEASE_CHECKLIST.md`(24行目付近)。stagingで最初に`/.auth/me`の応答を確認し、空なら確認手順を「アプリが受け取ったprincipalの所属コード・ロールを監査履歴で確認する」等へ置き換える(トークンストアを有効にする場合はStorageと秘密情報の扱いが増えるため別途判断)
 - 回答:

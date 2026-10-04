@@ -21,7 +21,7 @@ param grantVerificationKeys = readEnvironmentVariable('SIRYOU_GRANT_VERIFICATION
 param logHmacKey = readEnvironmentVariable('SIRYOU_LOG_HMAC_KEY')
 
 // 設計 §7.4, §7.6 のstaging値
-param appServicePlanSku = 'B1'
+param webMinReplicas = 1
 param postgresSkuName = 'Standard_B1ms'
 param postgresSkuTier = 'Burstable'
 param postgresStorageAutoGrow = false

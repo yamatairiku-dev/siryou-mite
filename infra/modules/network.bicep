@@ -1,13 +1,13 @@
 // ネットワーク(設計 §8)。staging(開発用テナント)では社内ネットワークが無いため、
 // このテンプレートでVNet・サブネット・Private DNSゾーンを新規作成する。
 //
-// - snet-app: App Service(Web)のVNet統合用。DB・Storage・Key Vaultへはprivate endpoint経由
-// - snet-cae: Container Apps環境(Display・各Job)用。NSGでインターネットへの通信を拒否し、
+// - snet-cae: Container Apps環境(Web・Display・各Job)用。DB・Storage・Key Vaultへは
+//   private endpoint経由。NSGでインターネットへの通信を拒否し、
 //   コンテナイメージの取得・Entra ID・監視など必要な宛先だけを許可する(設計 §8)
 // - snet-pe: private endpoint用
 //
 // 2025年9月30日以降に作るVNetは既定の外向き通信(default outbound access)が無いため、
-// 外向き通信が必要なsnet-app・snet-caeにはNAT Gatewayを付ける。宛先の制限はNSGで行う。
+// 外向き通信が必要なsnet-caeにはNAT Gatewayを付ける。宛先の制限はNSGで行う。
 
 @description('リソース名の接頭辞(例: siryou-mite-stg)')
 param namePrefix string
@@ -69,7 +69,7 @@ resource caeNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
         }
       }
       {
-        // Managed IdentityのtokenとEntra ID
+        // Managed IdentityのtokenとEntra ID(WebのEasy Auth sidecarのOIDCメタデータ・署名鍵を含む)
         name: 'AllowEntraIdOutbound'
         properties: {
           priority: 110
@@ -166,13 +166,6 @@ resource caeNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
   }
 }
 
-resource appNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
-  name: 'nsg-${namePrefix}-app'
-  location: location
-  tags: tags
-  properties: { securityRules: [] }
-}
-
 resource peNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
   name: 'nsg-${namePrefix}-pe'
   location: location
@@ -187,18 +180,6 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
   properties: {
     addressSpace: { addressPrefixes: [ addressPrefix ] }
     subnets: [
-      {
-        name: 'snet-app'
-        properties: {
-          addressPrefix: cidrSubnet(addressPrefix, 26, 0)
-          defaultOutboundAccess: false
-          networkSecurityGroup: { id: appNsg.id }
-          natGateway: { id: nat.id }
-          delegations: [
-            { name: 'web', properties: { serviceName: 'Microsoft.Web/serverFarms' } }
-          ]
-        }
-      }
       {
         name: 'snet-pe'
         properties: {
@@ -243,9 +224,8 @@ resource dnsLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06
 }]
 
 output vnetId string = vnet.id
-output appSubnetId string = vnet.properties.subnets[0].id
-output privateEndpointSubnetId string = vnet.properties.subnets[1].id
-output containerAppsSubnetId string = vnet.properties.subnets[2].id
+output privateEndpointSubnetId string = vnet.properties.subnets[0].id
+output containerAppsSubnetId string = vnet.properties.subnets[1].id
 output postgresDnsZoneId string = dnsZones[0].id
 output blobDnsZoneId string = dnsZones[1].id
 output queueDnsZoneId string = dnsZones[2].id

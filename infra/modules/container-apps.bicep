@@ -1,9 +1,12 @@
-// Container Apps環境と、Display・Preview Job・Maintenance Job・Migration Job・DB初期設定Job
-// (設計 §7.2, §7.5, §7.6, §7.7)。
+// Container Apps環境と、Web・Display・Preview Job・Maintenance Job・Migration Job・
+// DB初期設定Job(設計 §7.1, §7.2, §7.5, §7.6, §7.7)。
 // - 環境はsnet-cae(インターネットへの通信をNSGで拒否)へ配置する(設計 §8)
-// - Displayは別オリジンで公開し、staging(開発用テナント)は許可したIPアドレスだけを通す
+// - WebとDisplayは別オリジンで公開し、staging(開発用テナント)は許可したIPアドレスだけを通す
+// - WebだけEasy Auth(authConfigs)を有効にする。Webでは認証sidecarを通らない経路になり得る
+//   Daprを有効にしない(設計 §9.1)
 // - 各実行単位は専用のManaged IdentityでACR・DB・Storage・Key Vaultへ接続する
-// - Web以外はWebと同じNode.js imageをcommandだけ変えて使い、Preview Jobだけ専用image(設計 §7.6)
+// - Web・Display・Migration・Maintenance・DB初期設定は同じNode.js imageをcommandだけ変えて使い、
+//   Preview Jobだけ専用image(設計 §7.6)
 
 param namePrefix string
 param location string
@@ -18,20 +21,37 @@ param registryLoginServer string
 param appImage string
 param previewImage string
 
-param appOrigin string
 param allowedClientIpRanges array
+@description('Webの最小レプリカ数。Easy Authのログインで起動待ちを避けるため1以上(設計 §7.6)')
+@minValue(1)
+param webMinReplicas int = 1
 @description('Displayの最小レプリカ数。stagingは0、productionは1(設計 §7.6)')
 param displayMinReplicas int = 0
+
+@description('Entra IDのtenant ID(Easy Authのissuerとアプリのtid照合)')
+param tenantId string
+@description('Easy Authが使うEntra IDアプリ登録のclient ID')
+param entraClientId string
+@description('画面に表示するアプリ名。stagingは本番と見分けられる名前にする')
+param appName string
 
 param databaseUrls object
 param storageAccountName string
 param storageContainerName string
 param storageQueueName string
 param logHmacKeySecretUri string
+param grantSigningKeyId string
+param grantSigningPrivateKeySecretUri string
 @description('Displayがgrantを検証する公開鍵(keyId付きJSON配列、秘密値ではない)')
 param grantVerificationKeys string
 @description('DB初期設定Jobへ渡す対象identityの一覧(JSON)')
 param dbBootstrapPrincipals string
+
+// WebとDisplayのオリジンは環境の既定ドメインから決まる(staging。productionはカスタムドメイン、設計 §8)
+var webName = 'ca-${namePrefix}-web'
+var displayName = 'ca-${namePrefix}-display'
+var webOrigin = 'https://${webName}.${environment.properties.defaultDomain}'
+var displayOrigin = 'https://${displayName}.${environment.properties.defaultDomain}'
 
 var commonEnv = [
   { name: 'NODE_ENV', value: 'production' }
@@ -77,8 +97,116 @@ resource environment 'Microsoft.App/managedEnvironments@2025-01-01' = {
   }
 }
 
+var ipRestrictions = [for (range, i) in allowedClientIpRanges: {
+  name: 'allow-${i}'
+  action: 'Allow'
+  ipAddressRange: range
+}]
+
+// Web(React Router SSR、設計 §7.1)。imageの既定CMDで起動する。
+resource web 'Microsoft.App/containerApps@2025-01-01' = {
+  name: webName
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: { '${identities.web.id}': {} }
+  }
+  properties: {
+    environmentId: environment.id
+    workloadProfileName: 'Consumption'
+    configuration: {
+      activeRevisionsMode: 'Single'
+      ingress: {
+        external: true
+        targetPort: 8080
+        transport: 'auto'
+        allowInsecure: false
+        ipSecurityRestrictions: ipRestrictions
+      }
+      registries: [ registryFor(registryLoginServer, identities.web.id) ]
+      secrets: [
+        hmacSecret(logHmacKeySecretUri, identities.web.id)
+        {
+          name: 'grant-signing-private-key'
+          keyVaultUrl: grantSigningPrivateKeySecretUri
+          identity: identities.web.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'web'
+          image: appImage
+          resources: { cpu: json('0.5'), memory: '1Gi' }
+          env: concat(commonEnv, storageEnv, hmacSecretEnv, [
+            { name: 'PORT', value: '8080' }
+            { name: 'APP_NAME', value: appName }
+            { name: 'APP_ORIGIN', value: webOrigin }
+            { name: 'AUTH_MODE', value: 'easyauth' }
+            { name: 'ENTRA_TENANT_ID', value: tenantId }
+            { name: 'AZURE_CLIENT_ID', value: identities.web.clientId }
+            { name: 'DATABASE_URL', value: databaseUrls.web }
+            { name: 'DISPLAY_ORIGIN', value: displayOrigin }
+            { name: 'AZURE_STORAGE_QUEUE_NAME', value: storageQueueName }
+            { name: 'GRANT_SIGNING_KEY_ID', value: grantSigningKeyId }
+            { name: 'GRANT_SIGNING_PRIVATE_KEY', secretRef: 'grant-signing-private-key' }
+          ])
+          probes: [
+            {
+              type: 'Liveness'
+              httpGet: { path: '/health', port: 8080 }
+              periodSeconds: 30
+            }
+            {
+              type: 'Readiness'
+              httpGet: { path: '/health', port: 8080 }
+              periodSeconds: 10
+            }
+          ]
+        }
+      ]
+      scale: { minReplicas: webMinReplicas, maxReplicas: 3 }
+    }
+  }
+}
+
+// Easy Auth(設計 §7.1.1)。Token Storeは使わず、client secretも持たない(IDトークンだけを使う)。
+resource webAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = {
+  parent: web
+  name: 'current'
+  properties: {
+    platform: { enabled: true }
+    globalValidation: {
+      unauthenticatedClientAction: 'RedirectToLoginPage'
+      redirectToProvider: 'azureactivedirectory'
+      excludedPaths: [ '/', '/auth/login', '/health' ]
+    }
+    identityProviders: {
+      azureActiveDirectory: {
+        enabled: true
+        registration: {
+          openIdIssuer: '${az.environment().authentication.loginEndpoint}${tenantId}/v2.0'
+          clientId: entraClientId
+        }
+        validation: {
+          allowedAudiences: [ entraClientId, 'api://${entraClientId}' ]
+        }
+      }
+    }
+    login: {
+      tokenStore: { enabled: false }
+      preserveUrlFragmentsForLogins: false
+    }
+    httpSettings: {
+      requireHttps: true
+    }
+  }
+}
+
 resource display 'Microsoft.App/containerApps@2025-01-01' = {
-  name: 'ca-${namePrefix}-display'
+  name: displayName
   location: location
   tags: tags
   identity: {
@@ -95,11 +223,7 @@ resource display 'Microsoft.App/containerApps@2025-01-01' = {
         targetPort: 8080
         transport: 'auto'
         allowInsecure: false
-        ipSecurityRestrictions: [for (range, i) in allowedClientIpRanges: {
-          name: 'allow-${i}'
-          action: 'Allow'
-          ipAddressRange: range
-        }]
+        ipSecurityRestrictions: ipRestrictions
       }
       registries: [ registryFor(registryLoginServer, identities.display.id) ]
       secrets: [ hmacSecret(logHmacKeySecretUri, identities.display.id) ]
@@ -113,7 +237,7 @@ resource display 'Microsoft.App/containerApps@2025-01-01' = {
           resources: { cpu: json('0.5'), memory: '1Gi' }
           env: concat(commonEnv, storageEnv, hmacSecretEnv, [
             { name: 'PORT', value: '8080' }
-            { name: 'APP_ORIGIN', value: appOrigin }
+            { name: 'APP_ORIGIN', value: webOrigin }
             { name: 'AZURE_CLIENT_ID', value: identities.display.clientId }
             { name: 'DATABASE_URL', value: databaseUrls.display }
             { name: 'GRANT_VERIFICATION_KEYS', value: grantVerificationKeys }
@@ -314,7 +438,8 @@ resource dbBootstrapJob 'Microsoft.App/jobs@2025-01-01' = {
   }
 }
 
-output displayOrigin string = 'https://${display.properties.configuration.ingress.fqdn}'
+output webOrigin string = webOrigin
+output displayOrigin string = displayOrigin
 output environmentName string = environment.name
 output jobNames object = {
   preview: previewJob.name

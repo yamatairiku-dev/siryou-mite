@@ -147,8 +147,8 @@ npm run test:e2e
   Preview Jobは`chromiumSandbox: true`のまま実装していますが、Container Apps上で
   実際にsandboxが起動できるかの検証は範囲外です)
 - 設計書§21の未決事項全般(WebとDisplayの正式ホスト名・証明書・private DNS、Entra ID
-  の実セキュリティグループと所属コード発行属性、App Service PlanのSKUとstaging
-  callback検証、運用担当者の共有メールアドレスと当番体制、Workload Identity向け
+  の実セキュリティグループと所属コード発行属性、Container Apps上のEasy Auth
+  callbackと内部環境での到達性の検証、運用担当者の共有メールアドレスと当番体制、Workload Identity向け
   Conditional Accessの検証、Azureサービスの費用見積もり)
 
 ## 既知の制約・残課題

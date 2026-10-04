@@ -4,7 +4,7 @@
 
 - 状態: Easy Auth移行実装中
 - 対象: 初期リリース
-- 最終更新日: 2026-09-27
+- 最終更新日: 2026-10-04
 - 実装状態: 初期リリース分を実装済み(実装中の判断は`docs/agent/QUESTIONS.md`の回答を反映)
 
 この文書は、`docs/ラフ仕様.md`と要件ヒアリングの結果をもとに、初期リリースの
@@ -301,9 +301,9 @@ URL解析には標準のURLパーサーを使い、scheme名の大文字小文�
 
 ```mermaid
 flowchart LR
-  U["社内PC<br>最新版Edge"] -->|社内NW / VPN| EA["App Service Easy Auth"]
-  EA -->|X-MS-CLIENT-PRINCIPAL| APP["React Router Web<br>Linux App Service"]
-  U -->|社内NW / VPN| VIEW["HTML表示サービス<br>別オリジン"]
+  U["社内PC<br>最新版Edge"] -->|社内NW / VPN| EA["Container Apps Easy Auth<br>認証sidecar"]
+  EA -->|X-MS-CLIENT-PRINCIPAL| APP["React Router Web<br>Azure Container Apps"]
+  U -->|社内NW / VPN| VIEW["HTML表示サービス<br>別オリジン<br>Azure Container Apps"]
   EA --> ENTRA["Microsoft Entra ID<br>roles・groups"]
   APP --> DB["Azure Database for<br>PostgreSQL Flexible Server"]
   APP --> BLOB["Azure Blob Storage<br>private"]
@@ -321,8 +321,8 @@ flowchart LR
 ### 7.1 Webアプリ
 
 - React Router Framework Mode、SSR有効、RSC不使用
-- Linux App Serviceのcustom containerで実行し、Easy AuthのMicrosoft Entra ID
-  providerを有効にする
+- Azure Container Appsのcontainer appとして実行し、組み込み認証(Easy Auth)の
+  Microsoft Entra ID providerを有効にする
 - 認証、認可、アップロード受付、一覧、管理、監査画面を担当
 - 保護対象loader/actionの先頭で`requireUser(request)`を呼ぶ
 - `requireUser`は`X-MS-CLIENT-PRINCIPAL`をBase64 decodeし、Zodで構造検証した後、
@@ -338,14 +338,16 @@ flowchart LR
 
 #### 7.1.1 Easy Auth設定
 
-App Serviceの`authsettingsV2`をBicepで管理し、portal上の手変更を正本にしない。
+Container Appsの`authConfigs`(`Microsoft.App/containerApps/authConfigs`)をBicepで管理し、
+portal上の手変更を正本にしない。
 
 - platform authenticationを有効にし、Microsoft Entra ID providerだけを使用する
 - single-tenant issuerを指定し、許可するtoken audienceをこのWebアプリ登録に限定する
 - 未認証要求はWeb向けにMicrosoft Entra IDへ`302`でリダイレクトする
 - `/`、`/auth/login`、`/health`だけを認証除外pathとする。業務routeは除外しない
 - `/.auth/login/aad`と`/.auth/logout`を使用し、アプリ独自callbackを公開しない
-- Microsoft Graphを呼ばないためToken Storeを無効にする
+- Microsoft Graphを呼ばないためToken Storeを無効にし、client secretも設定しない
+  (IDトークンだけを受け取る)
 - Easy Auth設定とアプリ設定`ENTRA_TENANT_ID`を同じtenantへ固定する
 - Entra IDのエンタープライズアプリで「割り当てが必要」を有効にする
 
@@ -459,19 +461,18 @@ Azure Database for PostgreSQL Flexible Serverを使い、資料メタデータ�
 
 ### 7.6 実行単位とコンテナimage
 
-- WebはLinux App Service、DisplayはContainer Appsで、同じNode.js用Docker imageを
-  異なるcommandとManaged Identityで使う。
+- Web、Display、各Jobはすべて同じContainer Apps環境で実行する(Q-064)。WebとDisplayは
+  同じNode.js用Docker imageを異なるcommandとManaged Identityで使う。
 - Preview JobはChromiumを含む専用Dockerfileと専用imageを使う。
 - Migration Job、Maintenance Job、DB初期設定JobはWeb・Displayと同じNode.js imageを使う。
 - 6つのAzure実行単位に対し、コンテナimageは2種類だけとする。
-- production WebはApp Service Plan上で常時起動し、production Displayは0.5 vCPU、
-  1GB、最小1・最大3レプリカとする。
-- staging WebもEasy Authの結合試験が可能なApp Serviceとして常時起動する。
+- production WebとDisplayはそれぞれ0.5 vCPU、1GB、最小1・最大3レプリカとする。
+  アップロード上限の判定はDBで行うため、Webを複数レプリカにしても上限は崩れない。
+- staging WebはEasy Authの結合試験で起動待ちを避けるため最小1レプリカとする。
   staging Displayは最小0レプリカとする。
 - Preview Jobは1 vCPU、2GB、最大2件並列とする。
 - Migration・Maintenance・DB初期設定Jobは0.5 vCPU、1GB、並列実行しない。
-- App Service PlanとContainer Apps Environmentのゾーン冗長はproduction、stagingとも
-  使用しない。
+- Container Apps環境のゾーン冗長はproduction、stagingとも使用しない。
 
 ### 7.7 定期保守Job
 
@@ -485,16 +486,28 @@ Maintenance Jobを毎日UTC 18:00（JST 03:00）に実行する。Blob削除失�
 - 利用者向けアプリとHTML表示オリジンは社内ネットワークからだけ到達可能にする。
 - 在宅勤務者は会社VPNまたは承認済み社内接続基盤を経由する。
 - PostgreSQLとBlob Storage（Storage Queueを含む）はprivate endpointを使用する。
-- App ServiceとContainer Appsから各Azureサービスへは用途別のManaged Identityで
-  接続する。
-- Web Appはprivate endpointで受信し、VNet integrationでprivate data planeへ接続する。
-  Display、PostgreSQL、Storageのpublic network accessも無効化する。
+- Container Appsから各Azureサービスへは用途別のManaged Identityで接続する。
+- Container Apps環境は内部環境(internal environment)としてVNetへ配置する。WebとDisplayは
+  external ingress(環境の外から受ける設定。内部環境ではVNetと社内ネットワークだけが
+  対象で、インターネットへは公開されない)で受信する。PostgreSQL、Storageの
+  public network accessは無効化する。
 - ACRだけはGitHub-hosted runnerからpushするため、認証付きpublic endpointを有効にする。
   ACR管理者accountは無効化し、runtimeはManaged Identityの`AcrPull`を使う。
 - HTML表示サービスとプレビューワーカーから外部インターネットへの通信を禁止する。
 - Entra IDやAzure管理サービスへの必要な通信は、対象コンポーネントごとに限定する。
 - WebとDisplayには会社の異なるカスタムドメインを使う。正式なホスト名と証明書は
   環境別Bicepパラメーターとし、リポジトリへ実値を保存しない。
+
+最初の検証環境(staging)は、会社の正式なテナントとは別の開発用テナントに作る。社内
+ネットワークが無いため、次の点だけ上記と異なる(手順と未検証点は`docs/OPERATIONS.md`)。
+
+- WebとDisplayは公開エンドポイントにし、許可したIPアドレスからだけ受け付ける。
+  そのためContainer Apps環境は内部環境にせず、ホスト名はAzure既定のもの
+  (`*.azurecontainerapps.io`)を使う
+- VNet、サブネット、Private DNSゾーンはBicepで新規作成する。新しいVNetには既定の
+  外向き通信が無いため、Container Apps環境のサブネットにNAT Gatewayを付け、
+  NSGでインターネットへの通信を拒否する(イメージ取得・Entra ID・監視の宛先だけ許可)
+- PostgreSQL、Storage、Key Vaultのprivate endpoint限定とManaged Identity接続は設計どおり
 
 ## 9. セキュリティ設計
 
@@ -511,9 +524,14 @@ Maintenance Jobを毎日UTC 18:00（JST 03:00）に実行する。Blob削除失�
 - Blob StorageとStorage Queueなど外部サービスの応答
 
 `X-MS-CLIENT-PRINCIPAL`は、Easy Authを迂回してWeb containerへ到達できないことを条件に
-信頼する。受信経路をApp Serviceに限定し、同名headerをクライアントが自由に注入できる
-local・sidecar・別ingressをproductionへ設けない。headerのJSON構造と必須claimはアプリでも
-検証するが、アプリ自身がトークン署名を再検証する構成ではない。
+信頼する。受信経路をContainer Appsのingress(環境のEnvoy proxyと、各レプリカの認証sidecar)に
+限定し、同名headerをクライアントが自由に注入できるlocal・sidecar・別ingressを
+productionへ設けない。Webでは、認証sidecarを通らずにアプリへ届く可能性があるDaprを
+有効にしない。同じ環境の他のアプリからの呼び出しもproxyと認証sidecarを通るが、同じ環境の
+コンテナがWebのレプリカへ直接接続できないことはAzureの文書で保証されていない。
+信頼できないHTMLを描画するPreview Jobと同じ環境に置くことによるこの分離の弱さは受け入れ、
+Preview JobのChromium sandbox有効化(§7.5)を前提とする(Q-064)。headerのJSON構造と
+必須claimはアプリでも検証するが、アプリ自身がトークン署名を再検証する構成ではない。
 
 ### 9.2 表示制御
 
@@ -564,7 +582,7 @@ sandbox allow-popups allow-popups-to-escape-sandbox;
 | ID推測 | 暗号学的に推測困難なランダム資料ID |
 | IDOR | 資料取得・削除直前のサーバー認可 |
 | CSRF | cookie認証mutationの同一オリジン検証 |
-| principal header偽装 | Easy Authを迂回できないApp Service受信経路、header構造・tenant検証 |
+| principal header偽装 | Easy Authを迂回できないContainer Apps受信経路、Dapr無効、header構造・tenant検証 |
 | group overage・欠落 | ApplicationGroupへ限定、所属なしをfail closed、監視とEntra設定是正 |
 | 悪意あるHTML | 形式・リンク検査、CSP、sandbox、別オリジン |
 | プレビュー生成攻撃 | 別ワーカー、非root、ネットワーク遮断、資源制限、timeout |
@@ -578,7 +596,7 @@ sandbox allow-popups allow-popups-to-escape-sandbox;
 - HTML内で利用者がクリックする遷移先は`http:`の場合がある。この通信はアプリが
   管理するサービス間通信ではなく、遷移先の安全性と機密性を保証しない。
 - grant署名用Ed25519秘密鍵とログ用HMAC鍵は環境ごとにKey Vaultで管理する。
-- App ServiceとContainer AppsのKey Vault参照から環境変数へ渡し、アプリコードからKey Vault APIを
+- Container AppsのKey Vault参照から環境変数へ渡し、アプリコードからKey Vault APIを
   直接呼ばない。Webだけがgrant秘密鍵を持ち、Displayは公開鍵だけを持つ。grant署名鍵は
   `keyId`で新旧鍵を併用してrotationする。
 - token、Cookie、`X-MS-CLIENT-PRINCIPAL`全文、表示grant、request body、URLのクエリ文字列を
@@ -900,9 +918,10 @@ productionで有効になり得る認証bypassやテスト専用ログインrout
 
 ### 19.2 Infrastructure as Code
 
-Bicepを`infra/main.bicep`から開始し、network、App Service、Easy Auth
-`authsettingsV2`、Container Apps、PostgreSQL、Storage、Key Vault、monitoringを
-module分割する。stagingとproductionは環境別parameter fileで同じmoduleを再利用する。
+Bicepを`infra/main.bicep`から開始し、network、Container Apps(Web・Display・各Jobと
+Easy Authの`authConfigs`)、PostgreSQL、Storage、Key Vault、monitoringを
+module分割する(`infra/modules/`)。Container Appsの作成時にイメージを取得できる必要が
+あるため、基盤(ACRを含む)とアプリ・Jobの2段階でデプロイする。stagingとproductionは環境別parameter fileで同じmoduleを再利用する。
 秘密値、tenant・client IDの実値、正式ホスト名、通知先メールアドレスはrepositoryへ
 保存しない。
 
@@ -917,7 +936,7 @@ module分割する。stagingとproductionは環境別parameter fileで同じmodu
 - `main` mergeでstagingへ自動deployし、VNet内のMigration Jobとsmoke-test Jobを
   Azure管理APIから起動して終了状態を確認する。
 - productionはstagingで検証した同一image digestを昇格し、Migration Job成功後に
-  Web Appのcontainer imageとContainer Apps revisionを更新する。
+  WebとDisplayのContainer Apps revisionを更新する。
 - Workload Identity向けConditional Accessのlicenseと利用可能な制御は未確認事項とし、
   利用可能ならreport-onlyで検証後に適用する。固定IP制限は設けない。
 - ACRへのpushだけは認証付きpublic endpointを使用する。private endpoint限定へ
@@ -944,7 +963,7 @@ ZIP対応は初期リリースに含めないが、資料ID配下へ複数Blob�
 
 - WebとDisplayの正式な社内ホスト名、証明書、private DNS設定
 - Entra IDで割り当てる実セキュリティグループと、所属コードを発行する属性・形式
-- App Service PlanのSKU、private endpointとEasy Auth callbackのstaging検証結果
+- Container Apps上のEasy Auth callbackと、内部環境での社内ネットワークからの到達性の検証結果
 - 運用担当者の共有メールアドレスと当番体制
 - Workload Identity向けConditional Accessのlicense・設定可否とreport-only検証結果
 - Container Apps Job上でのChromium sandbox security spike結果

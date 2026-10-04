@@ -1,0 +1,9 @@
+{
+  "idToken": [
+    {
+      "name": "groups",
+      "essential": false,
+      "additionalProperties": ["cloud_displayname"]
+    }
+  ]
+}

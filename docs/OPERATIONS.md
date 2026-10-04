@@ -7,7 +7,7 @@
 | アプリ責任者 | 利用部門調整、リリース承認 |
 | 保守担当 | 更新、監視、一次障害対応 |
 | レビュー担当 | コード・セキュリティレビュー |
-| 基盤担当 | App Service Easy Auth、コンテナ、シークレット、ネットワーク |
+| 基盤担当 | Container Apps Easy Auth、コンテナ、シークレット、ネットワーク |
 
 兼務は可能ですが、リリース承認と実施は可能な限り別担当にします。
 
@@ -67,7 +67,7 @@ Azure Monitor Action Groupから運用担当者の共有メールアドレスへ
 ## シークレット更新
 
 対象はgrant署名用Ed25519鍵とログ用HMAC鍵です。環境ごとに別の値をKey Vaultへ保存し、
-App ServiceまたはContainer AppsのKey Vault参照で渡します。`SESSION_SECRET`はlocal開発
+Container AppsのKey Vault参照で渡します。`SESSION_SECRET`はlocal開発
 専用で、本番へ設定しません。Easy AuthでGraph Token Storeを使用しないため、このアプリが
 管理するEntra ID client secretはありません。
 
@@ -89,12 +89,12 @@ Maintenance Job用)。`services/`配下は`app/`をimportせず、共通の検�
 `services/shared/env.ts`へ切り出しています。不正な値がある場合はプロセス起動時に
 例外で停止します(fail closed)。
 
-### Web(App Service)
+### Web(Container Apps)
 
 | 変数 | 内容 | 本番での扱い |
 |---|---|---|
 | `NODE_ENV` | 実行環境 | 本番・stagingは`production`を必須設定(fail closedの本番制約が働く条件) |
-| `PORT` | Webが待受けるport(既定3000) | Container/App Serviceの設定に合わせる |
+| `PORT` | Webが待受けるport(既定3000) | Container Appsのingressの`targetPort`(8080)に合わせる |
 | `APP_NAME` | 画面タイトル等に表示するアプリ名 | 既定値は`資料みて！`。検証環境などで見分けたい場合だけ変更する |
 | `APP_ORIGIN` | Webのオリジン | 同一オリジン検証(`assertSameOrigin`)とEasy Auth callbackの基準になる値と一致させる |
 | `AUTH_MODE` | 認証方式(`dev`/`easyauth`) | `NODE_ENV=production`のときは`easyauth`必須(`dev`は起動時のZod検証で拒否される) |
@@ -127,7 +127,7 @@ Web・Display・Migration Job・Maintenance Jobは**同じNode.js image**を使�
 
 | 実行単位 | 起動command |
 |---|---|
-| Web(App Service) | `node node_modules/@react-router/serve/bin.cjs ./build/server/index.js`(imageの既定CMD) |
+| Web(Container Apps) | `node node_modules/@react-router/serve/bin.cjs ./build/server/index.js`(imageの既定CMD) |
 | Display(Container Apps) | `node build/services/display/index.js` |
 | Migration Job | `node build/services/migrate/index.js` |
 | Maintenance Job | `node build/services/maintenance/index.js` |
@@ -351,10 +351,171 @@ devcontainerには導入済みです。CIで実行する場合は
 - productionはGitHub Environmentの手動承認後に同じimage digestを昇格する
 - ACRは認証付きpublic endpoint、管理者account無効、runtimeは`AcrPull`を使う
 - production/non-productionのservice principalとfederated credentialを分離する
-- `authsettingsV2`をBicepでdeployし、Easy Authのtenant、audience、除外path、Token Storeが
+- Container Appsの`authConfigs`をBicepでdeployし、Easy Authのtenant、audience、除外path、Token Storeが
   設計値と一致することを確認する
 - staging smoke testでは`/health`が匿名で成功し、業務routeが未認証時にEntra IDへ遷移し、
   実ログイン後に`roles`と複数`groups`を取得できることを確認する
+
+## Azureへのデプロイ(staging・開発用テナント)
+
+最初の検証環境は、会社の正式なテナントとは別の**開発用テナント**に作ります(本番は会社の
+テナントで別途構築する)。Bicepは`infra/main.bicep`、stagingの値は
+`infra/parameters/staging.bicepparam`です。自動デプロイ(GitHub Actions)は次の段階で
+用意するため、ここでは手元のAzure CLIから手動で実行します。
+
+### 構成(設計 §7, §8 とstagingの差分)
+
+- 社内ネットワークが無いため、VNet・サブネット・Private DNSゾーンはこのBicepで新規作成する
+- Web・Display・各Jobは同じContainer Apps環境で動かす(設計 §7.6)。環境は内部環境にせず、
+  WebとDisplayを公開エンドポイントにし、`SIRYOU_ALLOWED_IP_RANGES`で許可したIPアドレス
+  からだけ受け付ける(設計 §8 の「社内ネットワークからだけ到達」の代わり)。ホスト名は
+  Azure既定(`*.azurecontainerapps.io`)
+- PostgreSQL・Storage(Blob・Queue)・Key Vaultはprivate endpointだけで公開し、
+  public network accessは無効(設計どおり)。Storageのアカウントキーと
+  PostgreSQLのpassword認証も無効にし、Managed Identityだけで接続する
+- Container Apps環境のサブネットはNSGでインターネットへの通信を拒否し、イメージの取得・
+  Entra ID・監視に必要な宛先だけを許可する(設計 §8)。新しいVNetには既定の外向き通信が
+  無いため、Container Apps環境のサブネットにNAT Gatewayを付ける
+
+概算費用(Japan East、1ドル150円、2026-10時点の公開価格からの目安。正式な見積もりは
+設計 §21 の未決事項): Container AppsのWeb(0.5 vCPU・1GiB・最小1レプリカ)約1,800円、
+PostgreSQL B1ms+32GB 約2,500円、private endpoint 4個 約4,400円、NAT Gateway+固定IP
+約5,500円(+通信量)、ACR Basic 約750円、Log Analytics・Display・各Job(従量)少額で、
+合計**月1.5万〜2万円程度**。
+
+### 0. 前提
+
+- Azure CLI(`az`)、開発用テナントのサブスクリプションの所有者権限、Entraのアプリ登録権限
+- 開発用テナントのEntra ID P1以上(グループをアプリへ割り当てるために必要。無い場合は
+  下の「1.」の注記を参照)
+
+```bash
+az login --tenant <開発用テナントのID>
+az account set --subscription <サブスクリプションID>
+for ns in Microsoft.App Microsoft.ContainerRegistry Microsoft.DBforPostgreSQL \
+  Microsoft.KeyVault Microsoft.Network Microsoft.OperationalInsights Microsoft.Storage \
+  Microsoft.ManagedIdentity Microsoft.Insights; do
+  az provider register --namespace "$ns"
+done
+```
+
+### 1. Entra IDのアプリ登録(Easy Auth用、設計 §7.1.1, §7.1.2)
+
+```bash
+APP_ID=$(az ad app create --display-name "資料みて！(検証)" \
+  --sign-in-audience AzureADMyOrg --enable-id-token-issuance true \
+  --app-roles @infra/entra/app-roles.json \
+  --optional-claims @infra/entra/optional-claims.json --query appId -o tsv)
+az ad app update --id "$APP_ID" --set groupMembershipClaims=ApplicationGroup
+az ad sp create --id "$APP_ID"
+az ad sp update --id "$APP_ID" --set appRoleAssignmentRequired=true
+```
+
+- App Role `User`・`Admin`(`infra/entra/app-roles.json`)と、IDトークンの`groups`
+  (所属グループ。クラウドのグループは表示名を発行する`cloud_displayname`)を設定する
+- client secretは作らない(Easy AuthはIDトークンだけを使い、Token Storeも使わない)
+- Entra管理センターの「エンタープライズアプリケーション」→このアプリ→「ユーザーとグループ」で、
+  利用者へ`User`または`Admin`を、所属グループ(名前を所属コードにする。例: `ZAA535-A`)を
+  アプリへ割り当てる。`ApplicationGroup`は**アプリへ割り当てたグループだけ**を発行する
+- 注記: グループのアプリへの割り当てにはEntra ID P1以上が必要。開発用テナントがFreeの場合は
+  P2の試用版を有効にするか、検証用に`groupMembershipClaims=SecurityGroup`(利用者が属する
+  全セキュリティグループを発行。設計とは異なる)を使う。どちらを使ったかは記録しておく
+- リダイレクトURIは手順5でWebのURLが決まってから登録する
+
+### 2. 鍵の生成(リポジトリの外へ)
+
+```bash
+node infra/scripts/generate-keys.mjs ~/siryou-mite-stg-keys.env
+```
+
+grant署名用Ed25519鍵ペアとログ用HMAC鍵を、所有者だけが読める(600)ファイルへ書き出す
+(画面には表示しない)。このファイルはcommit・共有しない。
+
+### 3. 基盤のデプロイ(1段階目)
+
+```bash
+RG=rg-siryou-mite-stg
+az group create --name "$RG" --location japaneast
+
+export SIRYOU_TENANT_ID=$(az account show --query tenantId -o tsv)
+export SIRYOU_ENTRA_CLIENT_ID="$APP_ID"
+export SIRYOU_ALLOWED_IP_RANGES="<許可するIP>/32"      # カンマ区切りで複数可
+export SIRYOU_ALERT_EMAIL="<通知先メールアドレス>"
+set -a; . ~/siryou-mite-stg-keys.env; set +a
+
+az deployment group create --resource-group "$RG" --name siryou-mite-infra \
+  --parameters infra/parameters/staging.bicepparam
+```
+
+VNet、NAT Gateway、Private DNS、Log Analytics、Managed Identity 6個、Storage、
+Key Vault(鍵を登録)、PostgreSQL(Entra管理者はDB初期設定Job用identity)、ACRを作る。
+
+### 4. イメージのbuildとpush
+
+ACR Tasksでクラウド上でbuildする(手元にDockerは不要)。
+
+```bash
+ACR=$(az deployment group show -g "$RG" -n siryou-mite-infra \
+  --query properties.outputs.registryName.value -o tsv)
+TAG=$(git rev-parse --short HEAD)
+az acr build --registry "$ACR" --image "siryou-mite:$TAG" --file Dockerfile .
+az acr build --registry "$ACR" --image "siryou-mite-preview:$TAG" --file Dockerfile.preview .
+```
+
+### 5. アプリとJobのデプロイ(2段階目)
+
+```bash
+export SIRYOU_DEPLOY_APPS=true SIRYOU_IMAGE_TAG="$TAG"
+az deployment group create --resource-group "$RG" --name siryou-mite-apps \
+  --parameters infra/parameters/staging.bicepparam
+
+# Easy AuthのリダイレクトURIをアプリ登録へ追加する
+REDIRECT=$(az deployment group show -g "$RG" -n siryou-mite-apps \
+  --query properties.outputs.entraRedirectUri.value -o tsv)
+az ad app update --id "$APP_ID" --web-redirect-uris "$REDIRECT"
+```
+
+### 6. DB初期設定 → マイグレーション
+
+DB初期設定Jobを**先に**実行し、成功してからMigration Jobを実行する。
+
+```bash
+az containerapp job start -g "$RG" -n caj-siryou-mite-stg-dbbootstrap
+az containerapp job execution list -g "$RG" -n caj-siryou-mite-stg-dbbootstrap \
+  --query "[0].properties.status" -o tsv          # Succeeded になるまで確認
+az containerapp job start -g "$RG" -n caj-siryou-mite-stg-migrate
+az containerapp job execution list -g "$RG" -n caj-siryou-mite-stg-migrate \
+  --query "[0].properties.status" -o tsv
+```
+
+失敗した場合はLog Analyticsの`ContainerAppConsoleLogs_CL`で`db_bootstrap_failed`・
+`migrate_job_failed`(例外の種類とSQLSTATEだけを出力)を確認する。
+
+### 7. 動作確認
+
+`RELEASE_CHECKLIST.md`の「ステージング」を確認する。少なくとも、`<Webのオリジン>/health`が
+匿名で成功し、業務画面が未認証時にEntra IDへ遷移し、ログイン後にアップロード・表示・
+プレビュー生成ができること。
+
+### stagingで確認が必要な点(未検証)
+
+Bicepは構文・型・lintまで検証済み(CIの`bicep` job)で、Azureへのデプロイはまだ行っていない。
+次は構成上の前提で、実際の環境で確認する。
+
+1. WebのEasy Auth(認証sidecar)が、インターネットを拒否したContainer Apps環境のNSG
+   (`AzureActiveDirectory`サービスタグだけ許可)のままEntra IDのOIDCメタデータ・署名鍵を取得し、
+   ログインできる
+2. Container AppsのKey Vault参照(secret。Webのgrant署名鍵を含む)がprivate endpoint経由で解決できる
+3. Preview JobのKEDA scaler(azure-queue、Managed Identity)がprivate endpointのみのQueueの長さを読める
+4. DB初期設定Jobの`pgaadauth_create_principal_with_oid`と、Entra管理者による業務DB作成・権限付与
+5. Container Apps環境のNSG(インターネット拒否)でイメージ取得・Managed Identityのtoken取得ができる
+6. Container Apps Job上でChromium sandboxが有効のまま起動できる(設計 §21 のsecurity spike)
+7. Container AppsはコンテナのファイルシステムをRead-onlyにする設定を持たないため、設計 §7.5
+   「読み取り専用filesystem」は満たせない(`/tmp`だけ書き込み可能にする構成は維持)
+8. Job失敗(Preview・Migration・Maintenance)の通知(設計 §17)は未作成。ログの形を確認してから
+   Log Analyticsのアラートを追加する
+9. Key Vault(public network access無効・`bypass: None`)へ、デプロイ(ARM)で秘密値を
+   登録できる(秘密値の登録は管理プレーン経由のため可能な想定)
 
 ## 定期Job
 

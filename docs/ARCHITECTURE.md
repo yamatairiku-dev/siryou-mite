@@ -137,6 +137,24 @@ WebだけをLinux App Serviceで実行し、Easy Authを有効にします。プ
 含む別imageのQueue駆動Container Apps Jobで最大3回試行し、JavaScriptと外部ネットワークを
 無効化します。Display、Migration、MaintenanceもContainer Appsで実行します。
 
+実行基盤を分ける理由は次のとおりです(設計 §7.1, §7.5, §7.6, §9.1)。
+
+- Web: Entra IDのOIDCフローとセッションCookieをEasy Authへ任せ、アプリは
+  `X-MS-CLIENT-PRINCIPAL`を検証するだけにするため、App Serviceで実行する。このheaderは
+  Easy Authを迂回してWebへ到達できないことを前提に信頼するので、受信経路をApp Serviceに
+  限定する。Easy Auth設定(`authsettingsV2`)はBicepで管理する
+- Display: アップロードされたHTMLを別オリジンで配信し、Easy AuthのCookieを受け取らず
+  表示grantだけで制御するため、Easy Authは不要。小さいHTTPサーバーを少ないレプリカで
+  動かし、stagingは0レプリカまで縮退できるContainer Appsで実行する
+- Preview: Queueにメッセージがあるときだけ起動し、1実行1メッセージで使い捨てにし、
+  CPU・メモリ上限と読み取り専用filesystemを付けるため、Queue駆動のContainer Apps Jobで
+  実行する
+- Migration・Maintenance・DB初期設定: 実行して終わる処理で、private endpointだけで公開する
+  PostgreSQLへ届く必要があるため、VNet内のContainer Apps Jobで実行する
+
+実行基盤を分けてもcontainer imageはNode.js用とPreview用(Chromium入り)の2種類だけで、
+Node.js用imageをcommandとManaged Identityの違いでWeb・Display・各Jobに使い回します。
+
 ## データとAzure境界
 
 - PostgreSQLには`pg`で接続し、loader/action、service、repositoryへ分離する

@@ -415,3 +415,18 @@
 - 置いた仮定: 明示的な形式バージョニングやfail closedの拒否は追加していない。理由は次の2点。(1) 影響が起きるのは「デプロイをまたいで保持され続けたcursor」だけで、`/app`のcursorはReactのuseStateで保持されコンポーネントのマウント中しか生きず、`/admin/documents`のcursorもそのURLのクエリ文字列でページ内リンクをたどる間だけ使われるため、デプロイの瞬間にちょうどそのページを開いていた場合の1回の「もっと見る」操作に限られる。(2) 旧cursorを拒否して`InvalidCursorError`にしても、利用者にはエラー画面が出るだけで、精度が足りないことによる軽微な取りこぼし(次ページ内で同一ミリ秒の行を1件だけ欠落させる可能性)より体験が悪化する。以上からfail closedにはせず、経過措置として黙って受理する
 - 影響範囲: `services/shared/db/documents.ts`(`encodeDocumentCursor`/`decodeDocumentCursor`/`cursorPayloadSchema`は変更していない)。人が拒否すべきと判断する場合は`cursorPayloadSchema`の`createdAt`にマイクロ秒6桁の正規表現(例: `/\.\d{6}Z$/`)を足せばfail closedにできる
 - 回答: (2026-09-27 人の回答)仮定どおり承認
+
+### Q-063 [未回答] 基盤: Easy Authのトークンストアを無効にした状態で`/.auth/me`が使えるか未確認
+- 状況: `infra/modules/web.bicep`はEasy Authの`tokenStore`を`enabled: false`にしている(Graphを呼ばないため。`docs/OPERATIONS.md`「シークレット更新」)。一方`docs/RELEASE_CHECKLIST.md`は、実Entra IDでログインして「`/.auth/me`とアプリ(監査履歴)で複数所属コード・`User`・`Admin`が一致する」ことを確認する手順を持つ(Q-059、設計§18.3)。App Service公式ドキュメントはトークンストアを「IDトークン・アクセストークン・リフレッシュトークンを認証済みセッションにキャッシュする仕組み」と説明しているが、無効時に`/.auth/me`が何を返すかは明記していない(2026-10-04確認、https://learn.microsoft.com/en-us/azure/app-service/overview-authentication-authorization)
+- 置いた仮定: 何も変更していない。`/.auth/me`が空を返す場合でも、アプリは`X-MS-CLIENT-PRINCIPAL`だけで動くため業務機能への影響は無い。影響を受けるのはリリース時の確認手順だけ
+- 影響範囲: `docs/RELEASE_CHECKLIST.md`(24行目付近)。stagingで最初に`/.auth/me`の応答を確認し、空なら確認手順を「アプリが受け取ったprincipalの所属コード・ロールを監査履歴で確認する」等へ置き換える(トークンストアを有効にする場合はStorageと秘密情報の扱いが増えるため別途判断)
+- 回答:
+
+### Q-064 [未回答] 基盤: WebをContainer Appsでなく App Service で実行する根拠が未記録
+- 状況: 設計§7.1・§7.6はWebをApp Service(Easy Auth)で実行すると決めているが、選定理由は記録されていない。公式ドキュメント(2026-10-04確認)では、Container Appsにも同じEasy Authがあり「App Serviceと同じ認証・認可の仕組みを使う」と明記され、本アプリが使う設定(`excludedPaths`、`RedirectToLoginPage`、トークンストア無効)も`Microsoft.App/containerApps/authConfigs`で指定できる。このため「Container AppsにはEasy Authが無い」は理由にならない。差として確認できたのは次の点(https://learn.microsoft.com/en-us/azure/container-apps/authentication 、https://learn.microsoft.com/en-us/azure/container-apps/token-store)
+  1. Container Appsのドキュメントは対象を「external ingress-enabled container app」と書いており、内部ingressで使えるかは明記していない。本番は「社内ネットワークからだけ到達可能」(設計§8)なので、Container Appsに寄せる場合はここが判断材料になる
+  2. トークンストアはContainer AppsではBlobコンテナの設定が必要(Managed Identityでの接続はpreview)。本アプリは無効にしているため影響しない
+  3. App Serviceのドキュメントにあるcookie認証POSTのCSRF自動防御は、Container Appsのページには記載が無い。アプリ側で`assertSameOrigin`を実装済みのため影響しない
+- 置いた仮定: App Serviceのまま変更しない。`docs/ARCHITECTURE.md`の「「資料みて！」固有の実行境界」には、設計書から読み取れる理由(Easy Authに任せる・principal headerの受信経路を限定する等)だけを書き、「Container Appsでは実現できない」とは書いていない
+- 影響範囲: `docs/ARCHITECTURE.md`。当時の選定理由(運用実績、App Service Planの常時起動、内部ingressでの認証可否など)があれば追記する。無ければ、内部ingressでのContainer Apps認証の可否を確認してから記録するか決める
+- 回答:

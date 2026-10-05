@@ -24,7 +24,7 @@
   "dependencies": {
     "@azure/identity": "4.13.2",
     "@azure/storage-blob": "12.33.0",
-    "@azure/storage-queue": "12.31.0",
+    "@azure/storage-queue": "12.32.0",
     "@react-router/node": "8.3.0",
     "@react-router/serve": "8.3.0",
     "isbot": "5.2.2",

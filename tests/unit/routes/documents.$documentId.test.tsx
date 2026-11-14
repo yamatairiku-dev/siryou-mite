@@ -323,6 +323,28 @@ describe("資料表示画面コンポーネント", () => {
     expect(screen.queryByRole("link", { name: "削除" })).toBeNull();
   });
 
+  it("表示領域を画面いっぱいに広げ、元に戻せる(iframeは作り直さない)", async () => {
+    renderDocumentView();
+
+    const iframe = await screen.findByTestId("document-display-frame");
+    const stage = iframe.parentElement as HTMLElement;
+    expect(stage.className).toBe("document-view-stage");
+
+    fireEvent.click(screen.getByRole("button", { name: "画面いっぱいに広げる" }));
+    expect(stage.className).toContain("document-view-stage-expanded");
+    // iframeを作り直すと資料が消える(grantの再送信が必要になる)。
+    expect(screen.getByTestId("document-display-frame")).toBe(iframe);
+
+    fireEvent.click(screen.getByRole("button", { name: "元の大きさに戻す" }));
+    expect(stage.className).toBe("document-view-stage");
+
+    // Escでも元に戻せる。
+    fireEvent.click(screen.getByRole("button", { name: "画面いっぱいに広げる" }));
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(stage.className).toBe("document-view-stage");
+    expect(screen.getByTestId("document-display-frame")).toBe(iframe);
+  });
+
   it("「初期画面へ戻る」の導線がある", async () => {
     renderDocumentView();
 

@@ -101,7 +101,7 @@ Maintenance Job用)。`services/`配下は`app/`をimportせず、共通の検�
 | `SESSION_SECRET` | ローカル`AUTH_MODE=dev`専用のセッション署名鍵 | 本番(`AUTH_MODE=easyauth`)では設定しない |
 | `SESSION_MAX_AGE_SECONDS` | `AUTH_MODE=dev`セッションの有効期間 | 同上、本番では未使用 |
 | `ENTRA_TENANT_ID` | Easy Authと一致させるEntra ID tenant | `AUTH_MODE=easyauth`のとき必須。principalの`tid`照合に使う |
-| `DATABASE_URL` | PostgreSQL接続文字列 | Azure上は`postgres://<Managed Identityの名前>@<server>.postgres.database.azure.com:5432/<DB名>`の形でpasswordを書かない(passwordを含めるとZod検証で拒否) |
+| `DATABASE_URL` | PostgreSQL接続文字列 | Azure上は`postgres://<Managed Identityの名前>@<server>.postgres.database.azure.com:5432/<DB名>`の形でpasswordを書かない(passwordを含めるとZod検証で拒否)。`entra`では`?sslmode=...`などのクエリ文字列も書かない(Zod検証で拒否。TLSはコード側で必須にしている) |
 | `DATABASE_AUTH` | DB認証方式(`password`/`entra`、既定`password`) | 本番・stagingは`entra`必須(`NODE_ENV=production`で`password`はZod検証で拒否)。`entra`ではManaged IdentityのEntra ID access tokenを接続ごとに取得してpasswordに使う |
 | `AZURE_CLIENT_ID` | user-assigned Managed IdentityのclientId | DB・Storageへの接続に使うidentityを指定する(`DefaultAzureCredential`が読む)。実行単位ごとに別のidentityを設定する |
 | `DISPLAY_ORIGIN` | Display(HTML表示サービス)のオリジン | Web・Displayで一致させる |

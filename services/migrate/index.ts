@@ -16,6 +16,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runner, type RunnerOption } from "node-pg-migrate";
 import type { ClientConfig } from "pg";
+import { connectionTarget } from "../shared/db/connection.js";
 import { databasePasswordOption } from "../shared/db/entra-auth.js";
 import { describeFailure } from "../shared/log.js";
 import { parseMigrateEnvironment, type MigrateEnvironment } from "./env.js";
@@ -44,13 +45,14 @@ export function buildMigrationRunnerOptions(
 ): RunnerOption & { databaseUrl: ClientConfig } {
   return {
     databaseUrl: {
-      connectionString: env.DATABASE_URL,
+      // password関数は`connectionString`と併用できない
+      // (`services/shared/db/connection.ts`を参照)。
+      ...connectionTarget(env.DATABASE_URL, options.password),
       application_name: MIGRATE_APPLICATION_NAME,
       // 本番(Azure Database for PostgreSQL)はTLS必須。証明書検証は無効化しない。
       ...(env.NODE_ENV === "production"
         ? { ssl: { rejectUnauthorized: true } }
         : {}),
-      ...(options.password ? { password: options.password } : {}),
     },
     dir: options.migrationsDir,
     direction: "up",

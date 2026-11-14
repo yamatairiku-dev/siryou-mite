@@ -13,6 +13,7 @@
  * (設計 §9.5, §15.2)。
  */
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
+import { connectionTarget } from "./connection.js";
 
 /**
  * repositoryがクエリ実行に使う最小のインターフェース。
@@ -74,7 +75,8 @@ export type DatabasePoolConfig = {
  */
 export function createDatabasePool(config: DatabasePoolConfig): Pool {
   const pool = new Pool({
-    connectionString: config.connectionString,
+    // password関数は`connectionString`と併用できない(`connection.ts`を参照)。
+    ...connectionTarget(config.connectionString, config.password),
     max: poolSettings.maxConnections,
     idleTimeoutMillis: poolSettings.idleTimeoutMillis,
     connectionTimeoutMillis: poolSettings.connectionTimeoutMillis,
@@ -82,7 +84,6 @@ export function createDatabasePool(config: DatabasePoolConfig): Pool {
     query_timeout: poolSettings.queryTimeoutMillis,
     application_name: config.applicationName,
     ...(config.requireTls ? { ssl: { rejectUnauthorized: true } } : {}),
-    ...(config.password ? { password: config.password } : {}),
   });
 
   // idle接続がサーバー側都合で切断された場合、listenerが無いとprocessごと

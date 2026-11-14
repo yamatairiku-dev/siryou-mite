@@ -1,3 +1,4 @@
+import { Client } from "pg";
 import { describe, expect, it } from "vitest";
 import {
   buildMigrationRunnerOptions,
@@ -46,10 +47,37 @@ describe("buildMigrationRunnerOptions", () => {
       password,
     });
 
-    expect(options.databaseUrl).toMatchObject({
+    expect(options.databaseUrl).toEqual({
+      host: "db.example.com",
+      port: 5432,
+      user: "id-siryou-mite-migrate",
+      database: "siryou_mite",
+      password,
+      application_name: MIGRATE_APPLICATION_NAME,
       ssl: { rejectUnauthorized: true },
+    });
+  });
+
+  it("password関数はconnectionStringと併用せず、pgのClientへ渡る", () => {
+    // `pg`は`connectionString`とpassword関数を併用すると関数を捨て、passwordなしで
+    // 接続する(stagingで認証エラー28P01になった不具合の再発防止)。
+    const env = parseMigrateEnvironment({
+      NODE_ENV: "production",
+      DATABASE_URL: "postgres://id-siryou-mite-migrate@db.example.com:5432/siryou_mite",
+      DATABASE_AUTH: "entra",
+    });
+    const password = async () => "token";
+
+    const { databaseUrl } = buildMigrationRunnerOptions(env, {
+      migrationsDir: "/app/migrations",
       password,
     });
+    const client = new Client(databaseUrl);
+
+    expect(databaseUrl).not.toHaveProperty("connectionString");
+    expect(client.password).toBe(password);
+    expect(client.user).toBe("id-siryou-mite-migrate");
+    expect(client.database).toBe("siryou_mite");
   });
 
   it("本番でDATABASE_AUTH=entra以外は起動前に拒否する", () => {

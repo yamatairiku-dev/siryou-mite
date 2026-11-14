@@ -133,6 +133,16 @@ export function validateDatabaseConfig(
         "DATABASE_AUTH=entra のとき DATABASE_URL にManaged Identityの利用者名が必要です",
     });
   }
+  // `entra`では接続文字列を利用者名・host・port・DB名へ分解して使い、クエリ文字列は
+  // 読まない(`services/shared/db/connection.ts`)。黙って無視せず起動前に拒否する。
+  if (url.search !== "") {
+    context.addIssue({
+      code: "custom",
+      path: ["DATABASE_URL"],
+      message:
+        "DATABASE_AUTH=entra のとき DATABASE_URL にクエリ文字列(?以降)を含めないでください",
+    });
+  }
 }
 
 /**

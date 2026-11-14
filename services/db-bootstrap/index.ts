@@ -12,7 +12,8 @@
  * Node.js用Docker imageから、このentryだけを異なるcommandで起動する。
  */
 import { fileURLToPath } from "node:url";
-import { Client } from "pg";
+import { Client, type ClientConfig } from "pg";
+import { connectionTarget } from "../shared/db/connection.js";
 import { databasePasswordOption } from "../shared/db/entra-auth.js";
 import { describeFailure } from "../shared/log.js";
 import { parseDbBootstrapEnvironment, type DbBootstrapEnvironment } from "./env.js";
@@ -52,16 +53,36 @@ function logEvent(
   );
 }
 
-function newClient(env: DbBootstrapEnvironment, databaseName: string): Client {
-  return new Client({
-    connectionString: connectionStringForDatabase(env.DATABASE_URL, databaseName),
+/**
+ * 指定したDBへ接続する`pg`の設定。password関数は`connectionString`と併用できないため、
+ * `connectionTarget`で接続先を組み立てる(`services/shared/db/connection.ts`)。
+ */
+export function buildClientConfig(
+  env: DbBootstrapEnvironment,
+  databaseName: string,
+  password?: () => Promise<string>,
+): ClientConfig {
+  return {
+    ...connectionTarget(
+      connectionStringForDatabase(env.DATABASE_URL, databaseName),
+      password,
+    ),
     application_name: DB_BOOTSTRAP_APPLICATION_NAME,
     // 本番(Azure Database for PostgreSQL)はTLS必須。証明書検証は無効化しない。
     ...(env.NODE_ENV === "production" ? { ssl: { rejectUnauthorized: true } } : {}),
-    ...databasePasswordOption(env.DATABASE_AUTH),
     connectionTimeoutMillis: 10_000,
     statement_timeout: 30_000,
-  });
+  };
+}
+
+function newClient(env: DbBootstrapEnvironment, databaseName: string): Client {
+  return new Client(
+    buildClientConfig(
+      env,
+      databaseName,
+      databasePasswordOption(env.DATABASE_AUTH).password,
+    ),
+  );
 }
 
 async function runDbBootstrapJob(): Promise<void> {

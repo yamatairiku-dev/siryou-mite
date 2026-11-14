@@ -1,8 +1,11 @@
+import { Client } from "pg";
 import { describe, expect, it, vi } from "vitest";
 import type { Queryable } from "../../../services/shared/db/pool";
 import {
+  buildClientConfig,
   connectionStringForDatabase,
   databaseNameOf,
+  DB_BOOTSTRAP_APPLICATION_NAME,
 } from "../../../services/db-bootstrap/index";
 import { parseDbBootstrapEnvironment } from "../../../services/db-bootstrap/env";
 import {
@@ -184,5 +187,41 @@ describe("接続先DBの切り替え", () => {
     expect(connectionStringForDatabase(url, "postgres")).toBe(
       "postgres://id-admin@db.example.com:5432/postgres?sslmode=require",
     );
+  });
+
+  it("Managed Identityのpassword関数は、接続先DBを差し替えてもpgのClientへ渡る", () => {
+    // `pg`は`connectionString`とpassword関数を併用すると関数を捨て、passwordなしで
+    // 接続する(stagingで認証エラー28P01になった不具合の再発防止)。
+    const env = parseDbBootstrapEnvironment({
+      NODE_ENV: "production",
+      DATABASE_URL: "postgres://id-siryou-mite-dbadmin@db.example.com:5432/siryou_mite",
+      DATABASE_AUTH: "entra",
+      DB_BOOTSTRAP_PRINCIPALS: JSON.stringify(principals),
+    });
+    const password = async () => "token";
+
+    const config = buildClientConfig(env, "postgres", password);
+    const client = new Client(config);
+
+    expect(config).not.toHaveProperty("connectionString");
+    expect(config).toMatchObject({
+      application_name: DB_BOOTSTRAP_APPLICATION_NAME,
+      ssl: { rejectUnauthorized: true },
+    });
+    expect(client.password).toBe(password);
+    expect(client.user).toBe("id-siryou-mite-dbadmin");
+    expect(client.host).toBe("db.example.com");
+    expect(client.database).toBe("postgres");
+  });
+
+  it("password関数が無い場合(ローカル・CI)は接続文字列で接続する", () => {
+    const env = parseDbBootstrapEnvironment({
+      DATABASE_URL: "postgres://user:pass@localhost:5432/siryou_mite",
+      DB_BOOTSTRAP_PRINCIPALS: JSON.stringify(principals),
+    });
+
+    expect(buildClientConfig(env, "postgres")).toMatchObject({
+      connectionString: "postgres://user:pass@localhost:5432/postgres",
+    });
   });
 });

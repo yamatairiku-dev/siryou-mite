@@ -335,17 +335,44 @@ dd {
   overflow-wrap: anywhere;
 }
 
-/* 「資料を開く」「URLをコピー」「削除」を、最小幅のカードでも1段に収める。 */
 .document-card .document-card-actions {
-  flex-wrap: nowrap;
-  gap: 4px;
+  gap: 6px;
   margin-top: auto;
 }
 
 .document-card .button {
-  font-size: 12px;
-  padding: 4px 5px;
-  white-space: nowrap;
+  font-size: 13px;
+  padding: 5px 10px;
+}
+
+/* サムネイルと資料名のクリックで資料を開く。 */
+.document-card-open {
+  border-radius: 6px;
+  display: block;
+}
+
+.document-card-open:hover .document-card-preview {
+  border-color: #174ea6;
+  box-shadow: 0 0 0 2px rgb(23 78 166 / 25%);
+}
+
+.document-card-open:focus-visible {
+  outline: 3px solid #174ea6;
+  outline-offset: 2px;
+}
+
+.document-card-preview {
+  display: block;
+}
+
+.document-card h2 a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.document-card h2 a:hover {
+  color: #174ea6;
+  text-decoration: underline;
 }
 
 .document-card-actions {

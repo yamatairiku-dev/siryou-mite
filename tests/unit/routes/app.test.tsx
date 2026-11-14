@@ -255,6 +255,22 @@ describe("初期画面コンポーネント", () => {
     expect(screen.getByRole("button", { name: "削除" })).toBeTruthy();
   });
 
+  it("サムネイルと資料名が資料表示画面へのリンクになり、カードに「資料を開く」ボタンは無い", async () => {
+    renderApp({ documents: [cardFrom()] });
+
+    const thumbnail = (await screen.findByRole("link", {
+      name: "資料タイトルを開く",
+    })) as HTMLAnchorElement;
+    expect(thumbnail.getAttribute("href")).toBe(
+      "/documents/11111111-1111-4111-8111-111111111111",
+    );
+    expect(thumbnail.querySelector("img")).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "資料タイトル" }).getAttribute("href"),
+    ).toBe("/documents/11111111-1111-4111-8111-111111111111");
+    expect(screen.queryByRole("link", { name: "資料を開く" })).toBeNull();
+  });
+
   it("削除導線は確認画面へのGET遷移で、直接の削除POSTにしない(設計 §5.5)", async () => {
     renderApp({ documents: [cardFrom()] });
 

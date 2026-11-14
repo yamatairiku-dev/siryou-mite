@@ -589,10 +589,16 @@ describe("管理画面コンポーネント", () => {
   it("資料表示画面と削除確認画面への導線を出す(この画面では削除しない)", async () => {
     renderAdminDocuments({ documents: [cardFrom()] });
 
+    // サムネイルと資料名が資料表示画面へのリンクを兼ねる。
     const open = (await screen.findByRole("link", {
-      name: "資料を開く",
+      name: "資料タイトルを開く",
     })) as HTMLAnchorElement;
     expect(open.getAttribute("href")).toBe(`/documents/${DOCUMENT_ID}`);
+    expect(open.querySelector("img")).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "資料タイトル" }).getAttribute("href"),
+    ).toBe(`/documents/${DOCUMENT_ID}`);
+    expect(screen.queryByRole("link", { name: "資料を開く" })).toBeNull();
 
     const forceDelete = screen.getByRole("link", {
       name: "強制削除",

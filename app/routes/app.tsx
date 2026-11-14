@@ -428,13 +428,22 @@ export default function Application({ loaderData }: Route.ComponentProps) {
         )}
         {documents.map((document) => (
           <li key={document.id} className="card document-card">
-            <PreviewImage
-              documentId={document.id}
-              status={document.previewStatus}
-              alt={`${document.title}のプレビュー`}
-              className="document-card-preview"
-            />
-            <h2>{document.title}</h2>
+            {/* サムネイルと資料名が「資料を開く」操作を兼ねる(設計 §5.2)。 */}
+            <a
+              className="document-card-open"
+              href={`/documents/${document.id}`}
+              aria-label={`${document.title}を開く`}
+            >
+              <PreviewImage
+                documentId={document.id}
+                status={document.previewStatus}
+                alt={`${document.title}のプレビュー`}
+                className="document-card-preview"
+              />
+            </a>
+            <h2>
+              <a href={`/documents/${document.id}`}>{document.title}</a>
+            </h2>
             <dl>
               <dt>元ファイル名</dt>
               <dd>{document.originalFileName}</dd>
@@ -446,9 +455,6 @@ export default function Application({ loaderData }: Route.ComponentProps) {
               <dd>{formatPreviewStatus(document.previewStatus)}</dd>
             </dl>
             <div className="document-card-actions">
-              <a className="button" href={`/documents/${document.id}`}>
-                資料を開く
-              </a>
               <button
                 type="button"
                 className="button button-secondary"

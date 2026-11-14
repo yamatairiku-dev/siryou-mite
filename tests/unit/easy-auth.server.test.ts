@@ -201,39 +201,25 @@ describe("parseEasyAuthPrincipal", () => {
         },
       ],
     ],
-  ])("group overage(%s)をfail closedで拒否する", (_label, overageClaims) => {
-    const claims = withoutTypes("groups").concat(overageClaims);
-    expect(() => parseEasyAuthPrincipal(encode(claims), "tenant-001")).toThrow(
-      expect.objectContaining({ status: 403 }),
-    );
-  });
+  ])(
+    "group overage(%s)でも拒否せず、所属なしとして返す(所属は任意の属性)",
+    (_label, overageClaims) => {
+      const claims = withoutTypes("groups").concat(overageClaims);
+      expect(
+        parseEasyAuthPrincipal(encode(claims), "tenant-001").groups,
+      ).toEqual([]);
+    },
+  );
 
-  it("一部のgroupsが届いていてもoverage時は拒否する", () => {
+  it("overage時に一部のgroupsが届いていれば、届いた分だけを返す", () => {
     const claims = baseClaims.concat([{ typ: "hasgroups", val: "true" }]);
-    expect(() => parseEasyAuthPrincipal(encode(claims), "tenant-001")).toThrow(
-      expect.objectContaining({ status: 403 }),
-    );
-  });
-
-  it("groupsを指さない_claim_namesはoverageとして扱わない", () => {
-    const claims = baseClaims.concat([
-      { typ: "_claim_names", val: '{"roles":"src1"}' },
-    ]);
     expect(parseEasyAuthPrincipal(encode(claims), "tenant-001").groups).toEqual([
       "ZAA535-A",
       "ZAA090-A",
     ]);
   });
 
-  it("hasgroupsがfalseの場合はoverageとして扱わない", () => {
-    const claims = baseClaims.concat([{ typ: "hasgroups", val: "false" }]);
-    expect(parseEasyAuthPrincipal(encode(claims), "tenant-001").groups).toEqual([
-      "ZAA535-A",
-      "ZAA090-A",
-    ]);
-  });
-
-  it("所属が0件のprincipalはgroupsを空で返し、利用可否はrequireUserが判定する", () => {
+  it("所属が0件のprincipalはgroupsを空で返す(拒否しない)", () => {
     const user = parseEasyAuthPrincipal(
       encode(withoutTypes("groups")),
       "tenant-001",
@@ -244,20 +230,20 @@ describe("parseEasyAuthPrincipal", () => {
   it("拒否レスポンスへprincipal本文やclaim値を含めない", async () => {
     const secretClaims = withoutTypes("groups").concat([
       { typ: "groups", val: "SECRET-GROUP" },
-      { typ: "hasgroups", val: "true" },
     ]);
     const encoded = encode(secretClaims);
 
+    // tenant不一致で拒否させ、その本文に入力由来の値が出ないことを確認する。
     let thrown: unknown;
     try {
-      parseEasyAuthPrincipal(encoded, "tenant-001");
+      parseEasyAuthPrincipal(encoded, "tenant-other");
     } catch (error) {
       thrown = error;
     }
 
     expect(thrown).toBeInstanceOf(Response);
     const body = await (thrown as Response).text();
-    expect(body).toBe("所属情報を確認できません");
+    expect(body).toBe("許可されていないテナントです");
     expect(body).not.toContain(encoded);
     expect(body).not.toContain("SECRET-GROUP");
     expect(body).not.toContain("user@example.com");

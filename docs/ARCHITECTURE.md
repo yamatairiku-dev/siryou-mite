@@ -66,9 +66,9 @@ Microsoft Graphは呼ばず、Easy AuthのToken Storeも無効にします。ロ
 
 `roles`は`User`・`Admin`の業務認可に使います。`groups`は複数値を前提とした所属コードで、
 画面表示と監査時点情報に使います。特定のグループ名を操作権限へ直接対応付けません。
-有効なApp Roleまたは所属クレームがない場合、アプリはfail closedで拒否します。
-グループoverageは`hasgroups`、`_claim_names`、`_claim_sources`、`groups.link`の
-claim typeで検出して403で拒否し、Graphへ自動fallbackせずEntra側の割り当てを是正します。
+有効なApp Roleがない場合、アプリはfail closedで拒否します。所属(`groups`)は任意の属性で、
+tokenに載っていた分だけを保持して監査履歴へ記録し、空・欠落・overageでも拒否しません
+(設計 §4.1)。Graphへの自動fallbackは設けません。
 
 認証・認可のモジュールは次のとおり分けます。
 

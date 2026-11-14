@@ -74,10 +74,13 @@ describe("App Role判定", () => {
     expect(isAdmin(owner)).toBe(false);
   });
 
-  it("App Roleが無い、または所属が無い利用者を拒否する", () => {
+  it("App Roleが無い利用者を拒否する", () => {
     expect(hasAppAccess({ ...owner, roles: [] })).toBe(false);
     expect(hasAppAccess({ ...owner, roles: ["ZAA535-A"] })).toBe(false);
-    expect(hasAppAccess({ ...owner, groups: [] })).toBe(false);
+  });
+
+  it("所属は任意の属性で、無くてもApp Roleがあれば利用できる(設計 §4.1)", () => {
+    expect(hasAppAccess({ ...owner, groups: [] })).toBe(true);
   });
 
   it("所属グループ名をApp Roleとして扱わない", () => {
@@ -102,8 +105,12 @@ describe("assertAdmin", () => {
     );
   });
 
-  it("所属が無い管理者も拒否する", () => {
-    expect(() => assertAdmin({ ...administrator, groups: [] })).toThrow(
+  it("所属が無い管理者も通す(所属は任意の属性)", () => {
+    expect(() => assertAdmin({ ...administrator, groups: [] })).not.toThrow();
+  });
+
+  it("所属があってもApp Roleが無ければ403で拒否する", () => {
+    expect(() => assertAdmin({ ...administrator, roles: [] })).toThrow(
       expect.objectContaining({ status: 403 }),
     );
   });
@@ -161,7 +168,7 @@ describe("資料の閲覧認可", () => {
     });
   });
 
-  it("App Roleまたは所属が無い利用者はオーナーでも閲覧できない", () => {
+  it("App Roleが無い利用者はオーナーでも閲覧できない", () => {
     expect(
       authorizeDocumentView({ ...owner, roles: [] }, activeDocument),
     ).toMatchObject({
@@ -169,18 +176,20 @@ describe("資料の閲覧認可", () => {
       status: 403,
       errorCategory: "not_authorized",
     });
+  });
+
+  it("所属が無くてもApp Roleがあれば閲覧できる", () => {
     expect(
       authorizeDocumentView({ ...owner, groups: [] }, activeDocument),
-    ).toMatchObject({
-      allowed: false,
-      status: 403,
-      errorCategory: "not_authorized",
-    });
+    ).toMatchObject({ allowed: true });
+    expect(() =>
+      assertCanViewDocument({ ...owner, groups: [] }, activeDocument),
+    ).not.toThrow();
   });
 
   it("拒否時は403の`Response`を投げる", () => {
     expect(() =>
-      assertCanViewDocument({ ...owner, groups: [] }, activeDocument),
+      assertCanViewDocument({ ...owner, roles: [] }, activeDocument),
     ).toThrow(expect.objectContaining({ status: 403 }));
   });
 });

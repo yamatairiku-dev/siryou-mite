@@ -98,13 +98,13 @@ describe("ユーザーセッション", () => {
     await expect(requireUser(request)).rejects.toMatchObject({ status: 403 });
   });
 
-  it("所属情報がないユーザーを拒否する", async () => {
+  it("所属情報がないユーザーも、App Roleがあれば通す(所属は任意の属性)", async () => {
     const response = await createUserSession({ ...testUser, groups: [] });
     const request = new Request("http://localhost:3000/app", {
       headers: { Cookie: response.headers.get("Set-Cookie") ?? "" },
     });
 
-    await expect(requireUser(request)).rejects.toMatchObject({ status: 403 });
+    await expect(requireUser(request)).resolves.toMatchObject({ groups: [] });
   });
 
   it("ログアウト時にセッションCookieを破棄する", async () => {
@@ -184,16 +184,16 @@ describe("Easy Auth経路のrequireUser", () => {
     ).rejects.toMatchObject({ status: 302 });
   });
 
-  it("所属が0件のprincipalをfail closedで拒否する", async () => {
+  it("所属が0件のprincipalも、App Roleがあれば通す(所属は任意の属性)", async () => {
     const { requireUser: requireEasyAuthUser } = await loadSessionModule();
     const claims = validClaims.filter((claim) => claim.typ !== "groups");
 
     await expect(
       requireEasyAuthUser(principalRequest(claims)),
-    ).rejects.toMatchObject({ status: 403 });
+    ).resolves.toMatchObject({ groups: [] });
   });
 
-  it("group overageのprincipalをfail closedで拒否する", async () => {
+  it("group overageのprincipalも拒否せず、所属なしとして扱う", async () => {
     const { requireUser: requireEasyAuthUser } = await loadSessionModule();
     const claims = validClaims
       .filter((claim) => claim.typ !== "groups")
@@ -201,7 +201,7 @@ describe("Easy Auth経路のrequireUser", () => {
 
     await expect(
       requireEasyAuthUser(principalRequest(claims)),
-    ).rejects.toMatchObject({ status: 403 });
+    ).resolves.toMatchObject({ groups: [] });
   });
 
   it("tenantが異なるprincipalを拒否する", async () => {

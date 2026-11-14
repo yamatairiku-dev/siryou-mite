@@ -2,7 +2,7 @@
  * Easy Authが付加する`X-MS-CLIENT-PRINCIPAL`の解析(設計 §7.1, §7.1.2, §9.1)。
  *
  * このmoduleは「このprincipalを信頼して読み切れるか」だけを判断する信頼境界で、
- * 業務認可(App Role・所属・owner/admin)は`app/lib/auth/authorization.server.ts`と
+ * 業務認可(App Role・owner/admin)は`app/lib/auth/authorization.server.ts`と
  * `requireUser`が行う。
  *
  * 方針:
@@ -48,7 +48,7 @@ const claimTypes = {
     "roles",
     "http://schemas.microsoft.com/ws/2008/06/identity/claims/role",
   ],
-  /** 所属コード。複数値を前提とする(設計 §7.1.2)。 */
+  /** 所属コード。任意の属性で、複数値を前提とする(設計 §4.1, §7.1.2)。 */
   group: [
     "groups",
     "http://schemas.microsoft.com/ws/2008/06/identity/claims/groups",
@@ -63,24 +63,6 @@ const claimTypes = {
     "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/upn",
   ],
 } as const;
-
-/**
- * JWTのgroup overage(所属が多すぎてtokenへ入りきらない状態)を示すclaim type。
- *
- * Entraはoverage時に`groups`を出さず、代わりにGraphのエンドポイントを指す
- * `_claim_names`・`_claim_sources`(JWT)、`groups.link`(SAML)、または
- * `hasgroups`を発行する。これらを見ないと「所属0件」と区別できず、
- * fail closedにならないため、allowlistとして明示する(設計 §7.1.2)。
- */
-const groupOverageClaimTypes = [
-  "hasgroups",
-  "_claim_names",
-  "_claim_sources",
-  "http://schemas.microsoft.com/claims/groups.link",
-] as const;
-
-/** overageの有無を判定しない`hasgroups`の値(Entraは`true`のときだけ発行する)。 */
-const negativeHasGroupsValues = ["false", "0", ""];
 
 export function parseEasyAuthPrincipal(
   encodedPrincipal: string,
@@ -123,12 +105,9 @@ export function parseEasyAuthPrincipal(
     throw unauthorized("許可されていないテナントです");
   }
 
-  // overageのときは`groups`が欠落または不完全になる。所属はこのアプリの必須属性の
-  // ため、Graphで補完せずここで拒否する(設計 §4.1, §7.1.2)。
-  if (hasGroupOverage(claims)) {
-    throw forbidden("所属情報を確認できません");
-  }
-
+  // 所属(`groups`)は任意の属性。tokenに載っていた分だけを保持し、欠落・overage
+  // (所属が多すぎてtokenへ入りきらない状態)でも拒否せず、Graphでも補完しない
+  // (設計 §4.1, §7.1.2)。
   return {
     id: objectId,
     tenantId,
@@ -137,24 +116,6 @@ export function parseEasyAuthPrincipal(
     roles: allClaims(claims, claimTypes.role),
     groups: allClaims(claims, claimTypes.group),
   };
-}
-
-function hasGroupOverage(claims: PrincipalClaim[]): boolean {
-  return claims.some((claim) => {
-    const typ = claim.typ.toLowerCase();
-    if (!groupOverageClaimTypes.some((candidate) => candidate === typ)) {
-      return false;
-    }
-    if (typ === "hasgroups") {
-      return !negativeHasGroupsValues.includes(claim.val.trim().toLowerCase());
-    }
-    // `_claim_names`・`_claim_sources`は他のclaimのoverageにも使われるため、
-    // `groups`を指している場合だけoverageとして扱う。
-    if (typ === "_claim_names" || typ === "_claim_sources") {
-      return /groups/i.test(claim.val);
-    }
-    return true;
-  });
 }
 
 function firstClaim(
@@ -180,8 +141,4 @@ function allClaims(
 
 function unauthorized(message: string): Response {
   return new Response(message, { status: 401 });
-}
-
-function forbidden(message: string): Response {
-  return new Response(message, { status: 403 });
 }

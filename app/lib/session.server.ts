@@ -44,13 +44,11 @@ export async function requireUser(request: Request): Promise<AppUser> {
     const returnTo = `${target.pathname}${target.search}`;
     throw redirect(`/auth/login?returnTo=${encodeURIComponent(returnTo)}`);
   }
-  // App Roleが無い、または所属が取得できない場合はfail closedで拒否する
-  // (設計 §4.1, §7.1)。`Admin`は`User`との二重割り当て無しで一般機能を使える。
+  // App Roleが無い場合はfail closedで拒否する(設計 §4.1, §7.1)。`Admin`は`User`との
+  // 二重割り当て無しで一般機能を使える。所属(`groups`)は任意の属性で、取得できた
+  // 場合だけ監査履歴へ記録し、無くても利用を拒否しない。
   if (!hasAppAccessRole(user)) {
     throw new Response("このアプリを利用する権限がありません", { status: 403 });
-  }
-  if (user.groups.length === 0) {
-    throw new Response("所属情報を確認できません", { status: 403 });
   }
   return user;
 }

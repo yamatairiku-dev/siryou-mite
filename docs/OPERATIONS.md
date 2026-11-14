@@ -387,8 +387,8 @@ PostgreSQL B1ms+32GB 約2,500円、private endpoint 4個 約4,400円、NAT Gatew
 
 - Azure CLI(`az`)とBicep(Dev Containerには導入済み。コンテナ内では`az login --use-device-code`が
   確実)、開発用テナントのサブスクリプションの所有者権限、Entraのアプリ登録権限
-- 開発用テナントのEntra ID P1以上(グループをアプリへ割り当てるために必要。無い場合は
-  下の「1.」の注記を参照)
+- Entra IDのライセンスはFreeでよい。所属(`groups`)は任意の属性で、stagingでは発行しない
+  (設計 §4.1)
 
 ```bash
 az login --tenant <開発用テナントのID>
@@ -405,22 +405,26 @@ done
 ```bash
 APP_ID=$(az ad app create --display-name "資料みて！(検証)" \
   --sign-in-audience AzureADMyOrg --enable-id-token-issuance true \
-  --app-roles @infra/entra/app-roles.json \
-  --optional-claims @infra/entra/optional-claims.json --query appId -o tsv)
-az ad app update --id "$APP_ID" --set groupMembershipClaims=ApplicationGroup
+  --app-roles @infra/entra/app-roles.json --query appId -o tsv)
 az ad sp create --id "$APP_ID"
 az ad sp update --id "$APP_ID" --set appRoleAssignmentRequired=true
 ```
 
-- App Role `User`・`Admin`(`infra/entra/app-roles.json`)と、IDトークンの`groups`
-  (所属グループ。クラウドのグループは表示名を発行する`cloud_displayname`)を設定する
+- App Role `User`・`Admin`(`infra/entra/app-roles.json`)を設定する
 - client secretは作らない(Easy AuthはIDトークンだけを使い、Token Storeも使わない)
 - Entra管理センターの「エンタープライズアプリケーション」→このアプリ→「ユーザーとグループ」で、
-  利用者へ`User`または`Admin`を、所属グループ(名前を所属コードにする。例: `ZAA535-A`)を
-  アプリへ割り当てる。`ApplicationGroup`は**アプリへ割り当てたグループだけ**を発行する
-- 注記: グループのアプリへの割り当てにはEntra ID P1以上が必要。開発用テナントがFreeの場合は
-  P2の試用版を有効にするか、検証用に`groupMembershipClaims=SecurityGroup`(利用者が属する
-  全セキュリティグループを発行。設計とは異なる)を使う。どちらを使ったかは記録しておく
+  利用者へ`User`または`Admin`を直接割り当てる(利用者への直接割り当てはFreeでできる)
+- stagingでは所属(`groups`)を発行しない。利用可否はApp Roleだけで決まり、監査履歴の所属は
+  空になる(設計 §4.1)
+- 所属を発行する環境(Entra ID P1以上が必要)では、次を追加で実行し、所属グループ(名前を
+  所属コードにする。例: `ZAA535-A`)をアプリへ割り当てる。`ApplicationGroup`は
+  **アプリへ割り当てたグループだけ**を発行し、`cloud_displayname`でクラウドのグループを
+  表示名で発行する
+
+  ```bash
+  az ad app update --id "$APP_ID" --optional-claims @infra/entra/optional-claims.json
+  az ad app update --id "$APP_ID" --set groupMembershipClaims=ApplicationGroup
+  ```
 - リダイレクトURIは手順5でWebのURLが決まってから登録する
 
 ### 2. 鍵の生成(リポジトリの外へ)

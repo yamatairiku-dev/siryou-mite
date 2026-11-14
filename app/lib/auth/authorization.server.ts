@@ -95,7 +95,8 @@ const notDocumentOwner: AuthorizationDenial = {
  * 将来の呼び出し漏れでもfail closedになるよう、データアクセス直前でも確認する。
  */
 export function hasAppAccess(user: AppUser): boolean {
-  return hasAppAccessRole(user) && user.groups.length > 0;
+  // 所属(`groups`)は任意の属性のため、利用可否の条件にしない(設計 §4.1)。
+  return hasAppAccessRole(user);
 }
 
 /** オーナー判定。`oid`(`AppUser.id`)だけで判定し、メールアドレスは使わない。 */

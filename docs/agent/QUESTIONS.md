@@ -433,3 +433,9 @@
 - 置いた仮定: App Serviceのまま変更しない。`docs/ARCHITECTURE.md`の「「資料みて！」固有の実行境界」には、設計書から読み取れる理由(Easy Authに任せる・principal headerの受信経路を限定する等)だけを書き、「Container Appsでは実現できない」とは書いていない
 - 影響範囲: `docs/ARCHITECTURE.md`。公式ドキュメントからは選定の決め手になる差は見つかっていない。当時の選定理由(運用実績、App Service Planの常時起動など)があれば追記し、無ければ「どちらでも実現できるが、設計時にApp Serviceを選んだ」と記録するか決める
 - 回答: (2026-10-04 人の回答)WebもContainer Appsへ寄せ、Display・Preview・各Jobと同じContainer Apps環境で進める(5.(b)の分離の弱さは受け入れる)。WebではDaprを有効にしない。Preview JobのChromium sandbox有効化(設計§7.5のsecurity spike)はこの判断の前提とする。設計書(§7.1・§7.6・§8・§9.1)、`docs/ARCHITECTURE.md`、`docs/OPERATIONS.md`、`docs/RELEASE_CHECKLIST.md`、Bicep(`infra/modules/web.bicep`を`container-apps.bicep`へ統合し`authConfigs`を追加)の変更は別途行う
+
+### Q-065 [回答済] 認証: 所属(`groups`)を必須の利用者属性から任意へ変更する
+- 状況: 設計§4.1・§7.1.2は所属を必須とし、`groups`が空・overageの利用者を403で拒否していた。stagingの開発用テナントはEntra ID Freeで、`ApplicationGroup`方式に必要な「グループのアプリへの割り当て」(P1以上)ができず、そのままでは全員がログイン後に拒否される
+- 置いた仮定: 所属は認可に使わず、画面表示と監査時点の記録だけに使う属性のため、任意とした。tokenに載っていれば監査履歴へ記録し、空・欠落・overageでも拒否しない。環境変数で必須・任意を切り替える方式は、本番の設定誤りで関門が外れること、stagingで本番と同じ経路を検証できなくなることから採らなかった
+- 影響範囲: `app/lib/session.server.ts`、`app/lib/auth/authorization.server.ts`、`app/lib/auth/easy-auth.server.ts`(overage検出を削除)、設計§4.1・§7.1・§7.1.2・§12・§18・§21、`docs/SECURITY.md`、`docs/ARCHITECTURE.md`、`docs/OPERATIONS.md`(stagingのアプリ登録手順から所属の設定を外した)、`docs/RELEASE_CHECKLIST.md`。所属を発行しない環境では、操作時点の所属を監査履歴から追跡できない
+- 回答: (2026-11-14 人の回答)本番でも所属は必須にしない。上記の方針で進める

@@ -91,7 +91,7 @@ test.describe("fail closedな拒否(設計 §4.1, §7.1, §18.3)", () => {
     await context.close();
   });
 
-  test("所属(groups)が無い要求は403", async ({ browser }) => {
+  test("所属(groups)が無くても、App Roleがあれば利用できる", async ({ browser }) => {
     const noGroups = createPersona({
       namePrefix: "no-groups",
       roles: ["User"],
@@ -102,9 +102,10 @@ test.describe("fail closedな拒否(設計 §4.1, §7.1, §18.3)", () => {
     });
     const page = await context.newPage();
 
+    // 所属は任意の属性(設計 §4.1)。無くても拒否しない。
     const response = await page.goto("/app");
-    expect(response?.status()).toBe(403);
-    await expect(page.getByText("所属情報を確認できません")).toBeVisible();
+    expect(response?.status()).toBe(200);
+    await expect(page.getByRole("heading", { name: "資料一覧" })).toBeVisible();
 
     await context.close();
   });

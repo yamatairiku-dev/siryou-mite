@@ -68,16 +68,23 @@ App Roleを定義する。
 管理機能の両方を利用でき、`User`との二重割り当てを必要としない。グループをrole claim
 として発行せず、App Roleと所属グループを混在させない。
 
-同じアプリ登録で`groups` claimも発行し、利用者の所属コードを複数値で受け取る。
-初期構成は「アプリケーションに割り当てられたグループ」だけを対象とする。オンプレAD
-同期グループは所属コードと一致する`sAMAccountName`、クラウド専用グループを使用する
-場合は`displayName`を発行する。クラウド専用グループ名の発行は、アプリへ明示的に
-割り当てたグループだけに限定する。
+所属(`groups` claim)は**任意の利用者属性**とする。発行する環境では、同じアプリ登録で
+`groups` claimを発行し、利用者の所属コードを複数値で受け取る。発行する場合の構成は
+「アプリケーションに割り当てられたグループ」だけを対象とする。オンプレAD同期グループは
+所属コードと一致する`sAMAccountName`、クラウド専用グループを使用する場合は`displayName`を
+発行する。クラウド専用グループ名の発行は、アプリへ明示的に割り当てたグループだけに限定する。
+`groups`を発行しない環境(staging)では、アプリ登録に所属グループの設定を入れない。
 
 `roles`は操作認可、`groups`は所属表示と監査時点情報に使う。特定の所属コードを
-`User`・`Admin`権限へ直接対応付けない。ただし、所属情報がこのアプリの必須利用者属性で
-あるため、`groups`が空、overage、または期待した形式で取得できない場合はfail closedで
-利用を拒否する。通常要求ごとにMicrosoft Graphは呼ばず、Token Storeも有効にしない。
+`User`・`Admin`権限へ直接対応付けない。アプリはtokenに載っていた所属だけを保持して
+監査履歴へ記録し、`groups`が空・欠落・overageの場合も利用を拒否しない(その操作の
+監査履歴では所属が空になる)。利用可否はApp Roleだけで決める。通常要求ごとに
+Microsoft Graphは呼ばず、Token Storeも有効にしない。
+
+所属を必須にしない理由: 所属は認可に使わず、表示と監査時点の記録だけに使う属性である。
+必須にすると、グループをアプリへ割り当てるためのEntra ID P1以上のライセンスと、overage・
+グループ名変更に起因するログイン失敗の運用が必要になるため、任意とした(2026-11-14決定)。
+所属を発行しない環境では、操作時点の所属を監査履歴から追跡できない。
 
 テナントはEasy Auth設定とアプリの`tid`検証の両方で固定し、利用者の内部識別子には
 `oid`を使う。メールアドレスと表示名は画面表示と監査時点の確認だけに使い、利用者識別や
@@ -329,7 +336,8 @@ flowchart LR
   `oid`、`tid`、`roles`、複数の`groups`を抽出する
 - Easy Authのclaim mappingに備え、短縮名とMicrosoftのURI形式claim typeを明示的な
   allowlistで扱う。未知のclaim typeは認証・認可へ使用しない
-- `tid`が構成値と異なる場合、`User`・`Admin`がない場合、または所属がない場合は拒否する
+- `tid`が構成値と異なる場合、または`User`・`Admin`がない場合は拒否する。所属は任意の属性で、
+  無くても拒否しない
 - cookie認証のすべてのmutation actionで`assertSameOrigin(request)`を呼ぶ
 - URLパラメーター、FormData、検索条件をZodで検証する
 - アップロードは`POST /documents`へ`application/octet-stream`で送り、UTF-8
@@ -363,11 +371,11 @@ WebのEasy Authが使うアプリ登録で、IDトークンへ次を発行する
 | `oid` | 安定した利用者ID、owner判定 | Entra user Object ID |
 | `tid` | tenant固定 | 環境別tenant ID |
 | `roles` | 業務認可 | `User`、`Admin` |
-| `groups` | 所属表示・監査 | 所属コードの文字列。複数可 |
+| `groups` | 所属表示・監査(任意) | 所属コードの文字列。複数可。発行しない環境では省略 |
 | `name`、`preferred_username`等 | 画面・監査時点表示 | 認可キーにしない |
 
-`groupMembershipClaims`は`ApplicationGroup`とし、このアプリに割り当てた所属グループだけを
-発行する。オンプレAD同期グループでは、管理者確認後に`sam_account_name`、
+所属を発行する環境では、`groupMembershipClaims`は`ApplicationGroup`とし、このアプリに
+割り当てた所属グループだけを発行する(グループのアプリへの割り当てにはEntra ID P1以上が必要)。オンプレAD同期グループでは、管理者確認後に`sam_account_name`、
 `dns_domain_and_sam_account_name`、`netbios_domain_and_sam_account_name`のいずれか1形式へ
 統一する。クラウド専用グループ名も必要な場合だけ`cloud_displayname`を追加する。
 `emit_as_roles`は設定しない。`ApplicationGroup`では入れ子グループ経由のmembershipを
@@ -375,8 +383,9 @@ WebのEasy Authが使うアプリ登録で、IDトークンへ次を発行する
 
 発行値が`ZAA535-A`形式かdomain付き形式かはEntra管理者の確認結果で1つに固定する。
 アプリは複数所属を保持し、順序には意味を持たせない。グループ名は変更され得るため、
-資料ownerや認可の主キーには使わない。JWTのgroup overageを検出した場合や所属が0件の場合は
-403とし、Graph権限を追加してrequest中に補完するfallbackは設けない。
+資料ownerや認可の主キーには使わない。JWTのgroup overageや所属が0件の場合も拒否せず、
+tokenに載っていた分だけを所属として扱う。Graph権限を追加してrequest中に補完するfallbackは
+設けない。
 
 ### 7.2 HTML表示サービス
 
@@ -583,7 +592,7 @@ sandbox allow-popups allow-popups-to-escape-sandbox;
 | IDOR | 資料取得・削除直前のサーバー認可 |
 | CSRF | cookie認証mutationの同一オリジン検証 |
 | principal header偽装 | Easy Authを迂回できないContainer Apps受信経路、Dapr無効、header構造・tenant検証 |
-| group overage・欠落 | ApplicationGroupへ限定、所属なしをfail closed、監視とEntra設定是正 |
+| group overage・欠落 | 所属は認可に使わない任意属性とし、欠落時は監査履歴の所属が空になるだけに留める。発行する場合はApplicationGroupへ限定 |
 | 悪意あるHTML | 形式・リンク検査、CSP、sandbox、別オリジン |
 | プレビュー生成攻撃 | 別ワーカー、非root、ネットワーク遮断、資源制限、timeout |
 | 大容量・資源枯渇 | 10MB上限、ユーザー・全体容量上限、頻度・同時実行制限、監視 |
@@ -712,7 +721,7 @@ stateDiagram-v2
 | `actor_subject_id` | Entra内部識別子 |
 | `actor_tenant_id` | 操作時点のEntra tenant ID |
 | `actor_email_at_event` | 操作時点のメールアドレス |
-| `actor_group_values` | 操作時点の所属コード配列 |
+| `actor_group_values` | 操作時点の所属コード配列(所属を発行しない環境では空) |
 | `actor_roles` | 操作時点のApp Role配列 |
 | `correlation_id` | 一連の処理を追跡するランダムID |
 | `error_category` | 秘密情報を含まない分類。値は下記の一覧に限る |
@@ -857,7 +866,7 @@ DBトランザクションをrollbackし、閲覧はHTMLを返さない。利用
 - 一般ユーザーによる他人の削除拒否
 - `User`・`Admin` App Role判定と`Admin`の一般機能利用
 - Easy Auth principalのBase64・JSON・Zod検証、mapped claim type、tenant不一致
-- 複数`groups`の抽出、重複除去、所属なし・overageのfail closed
+- 複数`groups`の抽出、重複除去、所属なし・overageでも拒否しないこと
 - 資料状態の`active`から`deleted`への遷移と、失敗時にレコードを残さないこと
 - ユーザー・システム単位の件数と容量上限
 - URLのscheme正規化と許可・拒否判定
@@ -888,8 +897,8 @@ productionで有効になり得る認証bypassやテスト専用ログインrout
 担当者がstagingで確認する。
 
 - ログイン、アップロード、警告表示、資料表示、ログアウト
-- `/.auth/me`とアプリで複数所属コード、`User`・`Admin`が一致すること
-- App Roleなし、所属なし、不正tenantの要求が拒否されること
+- `/.auth/me`とアプリで`User`・`Admin`が一致すること(所属を発行する環境では複数所属コードも)
+- App Roleなし、不正tenantの要求が拒否されること。所属なしの利用者は利用できること
 - URLを別ユーザーが開いて閲覧
 - URLを知らない他人の資料が一覧へ出ない
 - オーナー削除と削除後の閲覧不可
@@ -962,7 +971,8 @@ ZIP対応は初期リリースに含めないが、資料ID配下へ複数Blob�
 実装開始前または基盤詳細設計で次を決定する。
 
 - WebとDisplayの正式な社内ホスト名、証明書、private DNS設定
-- Entra IDで割り当てる実セキュリティグループと、所属コードを発行する属性・形式
+- Entra IDで割り当てる実セキュリティグループ。本番で所属を発行するかどうかと、発行する場合の
+  属性・形式(所属は任意属性のため、発行しなくてもアプリは動作する)
 - Container Apps上のEasy Auth callbackと、内部環境での社内ネットワークからの到達性の検証結果
 - 運用担当者の共有メールアドレスと当番体制
 - Workload Identity向けConditional Accessのlicense・設定可否とreport-only検証結果

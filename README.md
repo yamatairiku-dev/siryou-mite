@@ -158,8 +158,8 @@ curl --fail http://127.0.0.1:8080/health
 ## Easy AuthとEntra ID設定
 
 Container AppsのEasy Auth(組み込み認証)でMicrosoft Entra ID providerを設定します。アプリ登録には
-`User`・`Admin` App Roleと、アプリへ割り当てた所属グループだけを返す`groups` claimを
-設定します。Graphを使用しないためToken Storeは無効にします。
+`User`・`Admin` App Roleを設定します。所属(`groups` claim)は任意で、発行する環境では
+アプリへ割り当てた所属グループだけを返すよう設定します。Graphを使用しないためToken Storeは無効にします。
 
 本番環境へ以下を設定します。
 
@@ -171,7 +171,8 @@ ENTRA_TENANT_ID=...
 ```
 
 本番の認証フロー、callback、セッションCookieはEasy Authが管理します。アプリは
-`X-MS-CLIENT-PRINCIPAL`から`oid`、`tid`、`roles`、複数の`groups`を検証して取得します。
+`X-MS-CLIENT-PRINCIPAL`から`oid`、`tid`、`roles`を検証して取得し、`groups`(所属)は
+載っていた場合だけ取得します。
 ローカルの`AUTH_MODE=dev`だけは`.env`の`SESSION_SECRET`を使用します。
 
 ## GitHub側で別途設定するもの

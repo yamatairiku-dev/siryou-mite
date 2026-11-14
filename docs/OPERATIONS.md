@@ -385,7 +385,8 @@ PostgreSQL B1ms+32GB 約2,500円、private endpoint 4個 約4,400円、NAT Gatew
 
 ### 0. 前提
 
-- Azure CLI(`az`)、開発用テナントのサブスクリプションの所有者権限、Entraのアプリ登録権限
+- Azure CLI(`az`)とBicep(Dev Containerには導入済み。コンテナ内では`az login --use-device-code`が
+  確実)、開発用テナントのサブスクリプションの所有者権限、Entraのアプリ登録権限
 - 開発用テナントのEntra ID P1以上(グループをアプリへ割り当てるために必要。無い場合は
   下の「1.」の注記を参照)
 

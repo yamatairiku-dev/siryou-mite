@@ -151,6 +151,17 @@ h2 {
   margin: 16px 0 8px;
 }
 
+/* 資料本文の表示領域。指定が無いとiframeは既定の300x150pxになる。 */
+.document-view-frame {
+  background: #ffffff;
+  border: 1px solid #c1c7d0;
+  border-radius: 8px;
+  display: block;
+  height: 80vh;
+  min-height: 480px;
+  width: 100%;
+}
+
 .notice {
   background: #fff8dc;
   border-radius: 8px;

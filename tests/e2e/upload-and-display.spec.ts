@@ -55,6 +55,13 @@ test.describe("アップロードと資料表示", () => {
     const frame = displayFrameLocator(page, result.body.documentId);
     await expect(frame.getByText(`${title}の本文です。`)).toBeVisible();
 
+    // 資料本文の表示領域が、iframe既定の300x150pxのままになっていない。
+    const frameBox = await page
+      .locator(`iframe[name="document-display-${result.body.documentId}"]`)
+      .boundingBox();
+    expect(frameBox?.width).toBeGreaterThan(600);
+    expect(frameBox?.height).toBeGreaterThan(400);
+
     await context.close();
   });
 

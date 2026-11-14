@@ -307,7 +307,7 @@ dd {
 }
 
 .document-card h2 {
-  font-size: 15px;
+  font-size: 17px;
   line-height: 1.4;
   margin: 0;
   overflow-wrap: anywhere;
@@ -341,7 +341,7 @@ dd {
 }
 
 .document-card .button {
-  font-size: 14px;
+  font-size: 15px;
   padding: 5px 10px;
 }
 

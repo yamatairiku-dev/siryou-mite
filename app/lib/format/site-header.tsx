@@ -75,6 +75,20 @@ export function SiteHeader({
               </button>
             </Form>
           </nav>
+          {/*
+            メニューの外を押したら閉じるための透明な覆い。資料表示画面の別オリジンiframeの
+            上では親画面へ押下イベントが届かないため、documentへのlistenerではなく、
+            画面全体を覆う要素で受ける。外を押した操作は「閉じる」だけに使い、下にある
+            ボタンやリンクは反応させない。
+          */}
+          {isMenuOpen && (
+            <div
+              className="site-menu-backdrop"
+              data-testid="site-menu-backdrop"
+              aria-hidden="true"
+              onClick={() => setIsMenuOpen(false)}
+            />
+          )}
         </>
       )}
     </header>

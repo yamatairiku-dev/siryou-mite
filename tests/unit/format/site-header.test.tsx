@@ -53,6 +53,21 @@ describe("SiteHeader", () => {
     expect(menu.className).toBe("site-menu");
   });
 
+  it("メニューの外を押すと閉じ、メニューの中を押しても閉じない", async () => {
+    renderHeader();
+
+    fireEvent.click(await screen.findByRole("button", { name: "メニューを開く" }));
+    const menu = screen.getByRole("navigation", { name: "メインナビゲーション" });
+
+    fireEvent.click(screen.getByText("利用者 太郎"));
+    expect(menu.className).toContain("site-menu-open");
+
+    // 外側は透明な覆いが受ける(別オリジンiframeの上でも閉じられるようにするため)。
+    fireEvent.click(screen.getByTestId("site-menu-backdrop"));
+    expect(menu.className).toBe("site-menu");
+    expect(screen.queryByTestId("site-menu-backdrop")).toBeNull();
+  });
+
   it("管理画面への導線は許可された利用者にだけ出す", async () => {
     const general = renderHeader({ canUseAdminScreen: false });
     await screen.findByRole("button", { name: "ログアウト" });

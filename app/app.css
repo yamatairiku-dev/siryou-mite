@@ -82,6 +82,10 @@ select {
   width: 20px;
 }
 
+.site-menu-backdrop {
+  display: none;
+}
+
 /* ヘッダーに置くボタンは、本文のボタンより小さくする。 */
 .header-button {
   font-size: 14px;
@@ -593,6 +597,15 @@ td.audit-id {
     gap: 16px;
     padding: 0 18px;
     position: relative;
+    z-index: 50;
+  }
+
+  /* 開いたメニューの外側を覆い、押されたらメニューを閉じる。ヘッダーよりは下に置く。 */
+  .site-menu-backdrop {
+    display: block;
+    inset: 0;
+    position: fixed;
+    z-index: -1;
   }
 
   .menu-toggle {

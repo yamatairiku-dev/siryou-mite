@@ -340,6 +340,11 @@ dd {
   margin-top: auto;
 }
 
+/* 削除は他の操作から離し、カードの右端へ寄せる。 */
+.document-card .document-card-actions form {
+  margin-left: auto;
+}
+
 .document-card .button {
   font-size: 15px;
   padding: 5px 10px;

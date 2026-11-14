@@ -141,7 +141,7 @@ Displayは`SIGTERM`・`SIGINT`で待受けを止め、DB接続を閉じてから
 Preview JobだけはChromiumを含む専用image(`Dockerfile.preview`)を使います(設計 §7.6。
 imageは合計2種類)。起動commandは`node build/services/preview/index.js`です。
 
-- base imageは`mcr.microsoft.com/playwright:v1.63.0-noble`で、tagは`package.json`の
+- base imageは`mcr.microsoft.com/playwright:v1.64.0-noble`で、tagは`package.json`の
   `@playwright/test`のversionと**必ず一致**させます。`@playwright/test`を更新するときは
   同じPRでbase imageのtagも上げます(不一致だとPreview Jobの起動時にbrowserが見つからず
   失敗します)。一致は単体テスト(`tests/unit/services/preview-image-version.test.ts`)が

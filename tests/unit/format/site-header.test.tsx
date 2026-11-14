@@ -36,6 +36,19 @@ describe("SiteHeader", () => {
     expect(screen.getByRole("button", { name: "ログアウト" })).toBeTruthy();
   });
 
+  it("ログアウトはブラウザ標準のform送信で行う(画面内の遷移として横取りしない)", async () => {
+    // 遷移先はEasy Authの`/.auth/logout`とEntra IDで、アプリのrouteではない。
+    renderHeader();
+
+    const form = (
+      await screen.findByRole("button", { name: "ログアウト" })
+    ).closest("form");
+    expect(form?.getAttribute("action")).toBe("/auth/logout");
+    expect(form?.getAttribute("method")).toBe("post");
+    // React Routerが送信を横取りする場合は`preventDefault`され、falseが返る。
+    expect(fireEvent.submit(form as HTMLFormElement)).toBe(true);
+  });
+
   it("メニューボタンで開閉し、Escでも閉じる", async () => {
     renderHeader();
 

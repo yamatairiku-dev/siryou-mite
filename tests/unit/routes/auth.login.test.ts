@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getUser } from "~/lib/session.server";
 import { action } from "~/routes/auth.login";
 
@@ -49,5 +49,37 @@ describe("開発用ログイン", () => {
     await expect(
       login({ devRole: "admin" }, "http://evil.example"),
     ).rejects.toMatchObject({ status: 403 });
+  });
+});
+
+describe("Easy Authモードのログイン", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it("Easy Authのlogin endpointへ、document全体の遷移としてリダイレクトする", async () => {
+    vi.stubEnv("AUTH_MODE", "easyauth");
+    vi.stubEnv("ENTRA_TENANT_ID", "tenant-001");
+    vi.resetModules();
+    const { action: easyAuthAction } = await import("~/routes/auth.login");
+
+    const request = new Request(`${ORIGIN}/auth/login`, {
+      method: "POST",
+      headers: { Origin: ORIGIN },
+      body: new URLSearchParams({ returnTo: "/app" }),
+    });
+    const response = (await easyAuthAction({
+      request,
+      params: {},
+      context: {},
+    } as never)) as Response;
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("Location")).toBe(
+      `/.auth/login/aad?post_login_redirect_uri=${encodeURIComponent(`${ORIGIN}/app`)}`,
+    );
+    // `/.auth/login/aad`はアプリのrouteではないため、画面内の遷移にしない。
+    expect(response.headers.get("X-Remix-Reload-Document")).toBe("true");
   });
 });

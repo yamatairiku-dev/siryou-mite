@@ -181,7 +181,10 @@ resource webAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = {
     globalValidation: {
       unauthenticatedClientAction: 'RedirectToLoginPage'
       redirectToProvider: 'azureactivedirectory'
-      excludedPaths: [ '/', '/auth/login', '/health' ]
+      // 匿名で表示する`/`・`/auth/login`が読み込む静的ファイルも除外する(設計 §7.1.1)。
+      // `/assets/*`はbuildが出力するCSS・JavaScriptで、秘密情報・業務データを含まない。
+      // 除外しないと、ログイン前の画面でCSS・JavaScriptがEntra IDへ転送されて読み込めない。
+      excludedPaths: [ '/', '/auth/login', '/health', '/assets/*', '/favicon.svg' ]
     }
     identityProviders: {
       azureActiveDirectory: {

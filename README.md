@@ -69,9 +69,9 @@ npm run local
 
 - `http://localhost:3000` を開き、開発ユーザーでログインします(`AUTH_MODE=dev`)
 - Displayは `http://localhost:3100`、Preview Jobは3秒おきにQueueを1件処理します
-- Displayは、ブラウザが実際に開いているWebのオリジン(`localhost:3000`、composeが公開する
-  `localhost:3001`、`127.0.0.1` など)に合わせて自動で起動し直します。Display側のOrigin検証は
-  緩めていません
+- WebとDisplayは、ブラウザが実際に開いているWebのオリジン(`localhost:3000`、composeが公開する
+  `localhost:3001`、`127.0.0.1` など)に合わせて自動で起動し直します。Origin検証は緩めていません
+  (WebもDisplayも、`APP_ORIGIN`と完全一致するOriginだけを受け付けます)
 - build・DBマイグレーション・Blob container / Queueの作成も自動で行います。`.env`は不要で、
   grant署名鍵などの秘密値は起動のたびに使い捨てで生成します(再起動するとログインし直しになります)
 - buildを省いて起動し直すときは `LOCAL_SKIP_BUILD=1 npm run local`
@@ -87,6 +87,10 @@ Webはローカルでは`AUTH_MODE=dev`(`.env`既定)により開発ユーザー
 ```bash
 npm run dev
 ```
+
+ブラウザで開くオリジンを`.env`の`APP_ORIGIN`(既定`http://localhost:3000`)と一致させてください。
+ログインやアップロードなどの更新操作は、`Origin`が`APP_ORIGIN`と完全一致する場合だけ受け付けます。
+port転送で別のportになる場合は`npm run local`を使うか、`APP_ORIGIN`を合わせます。
 
 Display・Preview Job・Maintenance JobはReact Routerに依存しない独立したスクリプトで、
 `services/`配下のTypeScriptを`build/services`へビルドしてから`node`で直接起動します。

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertSameOrigin,
   documentContentSecurityPolicy,
@@ -6,17 +6,18 @@ import {
 } from "~/lib/security.server";
 
 describe("assertSameOrigin", () => {
-  it("同一オリジンを許可する", () => {
-    const request = new Request("https://internal.example/action", {
+  // 単体テストの`APP_ORIGIN`は`http://localhost:3000`(`tests/setup.ts`)。
+  it("OriginがAPP_ORIGINと一致する要求を許可する", () => {
+    const request = new Request("http://localhost:3000/action", {
       method: "POST",
-      headers: { Origin: "https://internal.example" },
+      headers: { Origin: "http://localhost:3000" },
     });
 
     expect(() => assertSameOrigin(request)).not.toThrow();
   });
 
   it("異なるオリジンを拒否する", () => {
-    const request = new Request("https://internal.example/action", {
+    const request = new Request("http://localhost:3000/action", {
       method: "POST",
       headers: { Origin: "https://attacker.example" },
     });
@@ -25,11 +26,67 @@ describe("assertSameOrigin", () => {
   });
 
   it("Originがない更新リクエストを拒否する", () => {
-    const request = new Request("https://internal.example/action", {
+    const request = new Request("http://localhost:3000/action", {
       method: "POST",
     });
 
     expect(() => assertSameOrigin(request)).toThrow();
+  });
+
+  it("request.urlと一致していても、APP_ORIGINと異なるOriginは拒否する", () => {
+    // `request.url`のhostは要求のHost header由来で、設定値より信頼できない。
+    const request = new Request("https://internal.example/action", {
+      method: "POST",
+      headers: { Origin: "https://internal.example" },
+    });
+
+    expect(() => assertSameOrigin(request)).toThrow();
+  });
+
+  it("schemeだけ異なるOriginは拒否する", () => {
+    const request = new Request("http://localhost:3000/action", {
+      method: "POST",
+      headers: { Origin: "https://localhost:3000" },
+    });
+
+    expect(() => assertSameOrigin(request)).toThrow();
+  });
+
+  describe("TLSを終端するingressの背後(Azure)", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    });
+
+    it("request.urlがhttpでも、OriginがAPP_ORIGIN(https)と一致すれば許可する", async () => {
+      // stagingでログインを含むすべてのmutationが拒否された不具合の再発防止。
+      // ingressがTLSを終端するため、Webには`http://<公開host>`として届く。
+      vi.stubEnv("APP_ORIGIN", "https://app.example.test");
+      vi.resetModules();
+      const { assertSameOrigin: assertBehindIngress } = await import(
+        "~/lib/security.server"
+      );
+      const request = new Request("http://app.example.test/auth/login", {
+        method: "POST",
+        headers: { Origin: "https://app.example.test" },
+      });
+
+      expect(() => assertBehindIngress(request)).not.toThrow();
+    });
+
+    it("request.urlと同じhttpのOriginは、APP_ORIGIN(https)と異なるため拒否する", async () => {
+      vi.stubEnv("APP_ORIGIN", "https://app.example.test");
+      vi.resetModules();
+      const { assertSameOrigin: assertBehindIngress } = await import(
+        "~/lib/security.server"
+      );
+      const request = new Request("http://app.example.test/auth/login", {
+        method: "POST",
+        headers: { Origin: "http://app.example.test" },
+      });
+
+      expect(() => assertBehindIngress(request)).toThrow();
+    });
   });
 });
 

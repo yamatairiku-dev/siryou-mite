@@ -64,6 +64,25 @@ flowchart LR
 Microsoft Graphは呼ばず、Easy AuthのToken Storeも無効にします。ログアウトはアプリの
 同一オリジン検証済みPOST actionから`/.auth/logout`へ遷移します。
 
+Easy Authとingressの背後で動かすための取り決め(stagingへの初回デプロイで判明した3点):
+
+- **Origin検査は`APP_ORIGIN`を基準にする。** ingressがTLSを終端し、Webには
+  `http://<公開host>`として届くため、`request.url`のschemeは`http`になります。ブラウザが送る
+  `Origin`(`https://...`)と`request.url`を比較すると常に不一致になるため、`assertSameOrigin`は
+  `Origin`を`APP_ORIGIN`と完全一致で比較します。React Router(8.4)の組み込みCSRF検査も
+  `request.url`と比較するので、`APP_ORIGIN`のhostを許可Origin(`allowedActionOrigins`)として
+  渡します。この値は`react-router.config.ts`ではbuild時に固定されるため、Webは
+  `react-router-serve`へ`server/web-build.mjs`を渡して起動します。これはReact Routerのbuildを
+  そのまま再exportし、`allowedActionOrigins`だけを実行時の`APP_ORIGIN`から決める薄いmoduleです
+  (`services/shared/action-origins.ts`)。独自サーバーや依存パッケージは追加していません。
+  `request.url`のoriginを、認可や絶対URLの組み立てに使ってはいけません。
+- **ログインとログアウトはdocument全体の遷移にする。** `/.auth/login/aad`と`/.auth/logout`は
+  アプリのrouteではありません。actionは`redirectDocument`で返し、formは`reloadDocument`で
+  ブラウザ標準の送信にします。ログインformは`discover="none"`にして、route探索
+  (`/__manifest`)も起こしません。ログイン前のfetchはEasy AuthがEntra IDへ転送するためです。
+- **匿名で表示する画面の静的ファイルを認証除外にする。** `/assets/*`と`/favicon.svg`を
+  Easy Authの`excludedPaths`へ入れます(設計 §7.1.1)。
+
 `roles`は`User`・`Admin`の業務認可に使います。`groups`は複数値を前提とした所属コードで、
 画面表示と監査時点情報に使います。特定のグループ名を操作権限へ直接対応付けません。
 有効なApp Roleがない場合、アプリはfail closedで拒否します。所属(`groups`)は任意の属性で、

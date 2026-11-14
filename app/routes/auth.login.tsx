@@ -1,4 +1,4 @@
-import { Form, redirect } from "react-router";
+import { Form, redirect, redirectDocument } from "react-router";
 import { z } from "zod";
 import type { Route } from "./+types/auth.login";
 import { env } from "~/lib/env.server";
@@ -56,8 +56,10 @@ export async function action({ request }: Route.ActionArgs) {
     );
   }
 
+  // `/.auth/login/aad`はEasy Authのendpointで、アプリのrouteではない。画面内の遷移
+  // (client side navigation)として扱うと404になるため、document全体の遷移にする。
   const postLoginUri = new URL(returnTo, env.APP_ORIGIN).toString();
-  return redirect(
+  return redirectDocument(
     `/.auth/login/aad?post_login_redirect_uri=${encodeURIComponent(postLoginUri)}`,
   );
 }
@@ -72,7 +74,12 @@ export default function Login({ loaderData }: Route.ComponentProps) {
           ? "ローカル開発用ユーザーでログインします。"
           : "会社のMicrosoftアカウントを使用します。"}
       </p>
-      <Form method="post">
+      {/*
+        ログインはブラウザ標準のform送信(document全体の遷移)で行う。Easy Authは未認証の
+        要求をEntra IDへ転送するため、fetchによる送信(`/auth/login.data`)やroute探索
+        (`/__manifest`)は認証除外path(設計 §7.1.1)に含まれず、失敗する。
+      */}
+      <Form method="post" reloadDocument discover="none">
         <input name="returnTo" type="hidden" value={loaderData.returnTo} />
         <button className="button button-large" type="submit">
           {loaderData.authMode === "dev"

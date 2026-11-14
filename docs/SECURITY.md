@@ -36,7 +36,8 @@ secret、機微な個人情報を保存してはいけません。
 
 ## CSRF、XSS、redirect
 
-- actionで`assertSameOrigin(request)`を呼ぶ
+- actionで`assertSameOrigin(request)`を呼ぶ。`Origin`は設定済みの`APP_ORIGIN`と完全一致で
+  比較する(`request.url`やHost headerから導いた値とは比較しない)
 - logoutをGETで実行しない
 - redirect先は`safeInternalPath`で検証する
 - ユーザー入力を`dangerouslySetInnerHTML`へ渡さない

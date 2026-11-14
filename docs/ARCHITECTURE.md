@@ -177,6 +177,13 @@ access token(約1時間で失効)を固定の接続文字列へ入れず、`pg`�
 password関数として渡し、有効期限の5分前まで同じtokenを使い回します(`DATABASE_AUTH=entra`。
 本番は環境変数のZod検証でこれを必須にし、接続文字列へのpassword記載を拒否します)。
 
+`pg`は`connectionString`を受け取ると、そこから読み取った値で個別指定を上書きし、passwordを
+含まない接続文字列も「空のpassword」として扱います。このため`connectionString`とpassword関数を
+併用すると関数が捨てられ、認証に失敗します(SQLSTATE 28P01。stagingへの初回デプロイで判明)。
+password関数を使う接続は、`services/shared/db/connection.ts`の`connectionTarget`が接続文字列を
+利用者名・host・port・DB名へ分解して渡します(Pool、Migration Job、DB初期設定Jobで共通)。
+クエリ文字列は読まないため、`entra`でクエリ文字列を含む`DATABASE_URL`はZod検証で拒否します。
+
 Managed Identityごとの DB role は、PostgreSQLのEntra管理者に設定した専用identityで動く
 DB初期設定Job(`services/db-bootstrap/`)が冪等に作ります。各identityのEntra principalを
 object IDで作り、`siryou_mite_runtime`・`siryou_mite_maintenance`(login不可のまとめ役role)

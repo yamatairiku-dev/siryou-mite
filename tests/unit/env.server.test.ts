@@ -94,6 +94,17 @@ describe("parseEnvironment", () => {
     ).toThrow("Managed Identityの利用者名が必要です");
   });
 
+  it("DATABASE_AUTH=entraでDATABASE_URLにクエリ文字列を含む場合は拒否する", () => {
+    // `entra`では接続文字列を分解して使い、クエリ文字列は読まない。黙って無視しない。
+    expect(() =>
+      parseEnvironment({
+        ...validEasyAuthEnvironment,
+        DATABASE_URL:
+          "postgres://id-siryou-mite-web@db.example.com:5432/siryou_mite?sslmode=no-verify",
+      }),
+    ).toThrow("クエリ文字列(?以降)を含めないでください");
+  });
+
   it("DATABASE_AUTHの既定値はpassword(ローカル・CI)", () => {
     expect(parseEnvironment(baseEnvironment).DATABASE_AUTH).toBe("password");
   });

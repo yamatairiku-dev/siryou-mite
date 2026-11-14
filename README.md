@@ -58,6 +58,25 @@ npm run db:migrate
 Dev Containerを起動するとPostgreSQLと併せてAdminerも常時起動します。Adminerは
 `http://localhost:8080`で開き、サーバーには`postgres`を指定してください。
 
+## ローカルで一通り動かす
+
+Web・Display・Preview Jobをまとめて起動し、ログイン → アップロード → プレビュー生成 →
+資料表示までをローカルで確認できます(Azureには接続しません)。
+
+```bash
+npm run local
+```
+
+- `http://localhost:3000` を開き、開発ユーザーでログインします(`AUTH_MODE=dev`)
+- Displayは `http://localhost:3100`、Preview Jobは3秒おきにQueueを1件処理します
+- build・DBマイグレーション・Blob container / Queueの作成も自動で行います。`.env`は不要で、
+  grant署名鍵などの秘密値は起動のたびに使い捨てで生成します(再起動するとログインし直しになります)
+- buildを省いて起動し直すときは `LOCAL_SKIP_BUILD=1 npm run local`
+- 接続先がdevcontainerのPostgreSQL・Azurite以外の場合は起動しません
+
+Entra IDログイン(Easy Auth)、Managed Identity、ネットワーク制限、Container Apps上の
+Job実行はローカルでは再現できないため、stagingで確認します(`docs/RELEASE_CHECKLIST.md`)。
+
 ## 開発サーバーの起動
 
 Webはローカルでは`AUTH_MODE=dev`(`.env`既定)により開発ユーザーでログインできます。

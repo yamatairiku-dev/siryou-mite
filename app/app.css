@@ -283,7 +283,7 @@ dd {
  */
 .document-list.grid {
   gap: 16px;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
 }
 
 .document-card {
@@ -335,14 +335,17 @@ dd {
   overflow-wrap: anywhere;
 }
 
+/* 「資料を開く」「URLをコピー」「削除」を、最小幅のカードでも1段に収める。 */
 .document-card .document-card-actions {
-  gap: 6px;
+  flex-wrap: nowrap;
+  gap: 4px;
   margin-top: auto;
 }
 
 .document-card .button {
-  font-size: 13px;
-  padding: 5px 10px;
+  font-size: 12px;
+  padding: 4px 5px;
+  white-space: nowrap;
 }
 
 .document-card-actions {

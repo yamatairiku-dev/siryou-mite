@@ -15,12 +15,14 @@
 import { spawn, spawnSync } from "node:child_process";
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
+import http from "node:http";
 import { fileURLToPath } from "node:url";
 
 const rootDir = fileURLToPath(new URL("../..", import.meta.url));
 const WEB_PORT = Number(process.env.LOCAL_WEB_PORT ?? 3000);
 const DISPLAY_PORT = Number(process.env.LOCAL_DISPLAY_PORT ?? 3100);
-const APP_ORIGIN = `http://localhost:${WEB_PORT}`;
+// Web本体はコンテナ内だけで使うportで動かし、WEB_PORTにはこのスクリプトの中継を置く。
+const WEB_INTERNAL_PORT = WEB_PORT + 80;
 const DISPLAY_ORIGIN = `http://localhost:${DISPLAY_PORT}`;
 const PREVIEW_INTERVAL_MS = 3_000;
 const STORAGE_CONTAINER = "documents";
@@ -111,8 +113,7 @@ const commonEnv = {
 
 const webEnv = {
   ...commonEnv,
-  PORT: String(WEB_PORT),
-  APP_ORIGIN,
+  PORT: String(WEB_INTERNAL_PORT),
   DISPLAY_ORIGIN,
   AUTH_MODE: "dev",
   SESSION_SECRET: randomBytes(48).toString("base64"),
@@ -123,10 +124,9 @@ const webEnv = {
     .toString(),
 };
 
-const displayEnv = {
+const displayBaseEnv = {
   ...commonEnv,
   PORT: String(DISPLAY_PORT),
-  APP_ORIGIN,
   GRANT_VERIFICATION_KEYS: JSON.stringify([
     {
       keyId: GRANT_SIGNING_KEY_ID,
@@ -145,10 +145,12 @@ const previewEnv = {
 
 const children = new Set();
 let stopping = false;
+let proxy = null;
 
 function stop(exitCode) {
   if (stopping) return;
   stopping = true;
+  proxy?.close();
   for (const child of children) child.kill("SIGTERM");
   setTimeout(() => process.exit(exitCode), 500);
 }
@@ -162,11 +164,25 @@ function startServer(label, args, env) {
   children.add(child);
   child.on("exit", (code) => {
     children.delete(child);
-    if (!stopping) {
+    if (!stopping && !child.replaced) {
       console.error(`[local] ${label} が終了しました(code=${code})`);
       stop(1);
     }
   });
+  return child;
+}
+
+async function waitForHealth(port) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/health`);
+      if (response.ok) return;
+    } catch {
+      // 起動待ち
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  fail(`port ${port} の起動を確認できませんでした`);
 }
 
 startServer(
@@ -174,7 +190,73 @@ startServer(
   ["node_modules/@react-router/serve/bin.cjs", "build/server/index.js"],
   webEnv,
 );
-startServer("Display", ["build/services/display/index.js"], displayEnv);
+await waitForHealth(WEB_INTERNAL_PORT);
+
+/**
+ * DisplayはWebのオリジン(`APP_ORIGIN`)と完全一致するOriginからの要求だけを受け付ける
+ * (設計 §7.2)。ローカルではport転送の仕方によってブラウザから見たWebのオリジンが
+ * 変わる(`localhost:3000`、composeが公開する`localhost:3001`、`127.0.0.1`など)ため、
+ * ブラウザが実際に使ったHostに合わせてDisplayを起動し直す。Displayの検証そのものは
+ * 緩めない。
+ */
+let displayChild = null;
+let displayAppOrigin = null;
+let displaySwitch = Promise.resolve();
+
+function ensureDisplayFor(appOrigin) {
+  displaySwitch = displaySwitch.then(async () => {
+    if (appOrigin === displayAppOrigin) return;
+    if (displayChild) {
+      const previous = displayChild;
+      previous.replaced = true;
+      const exited = new Promise((resolve) => previous.once("exit", resolve));
+      previous.kill("SIGTERM");
+      await exited;
+    }
+    displayAppOrigin = appOrigin;
+    displayChild = startServer("Display", ["build/services/display/index.js"], {
+      ...displayBaseEnv,
+      APP_ORIGIN: appOrigin,
+    });
+    await waitForHealth(DISPLAY_PORT);
+    console.log(`[local] Displayが受け付けるWebのオリジン: ${appOrigin}`);
+  });
+  return displaySwitch;
+}
+
+const localHostPattern = /^(localhost|127\.0\.0\.1)(:\d{1,5})?$/;
+
+proxy = http.createServer(async (request, response) => {
+  const host = request.headers.host ?? "";
+  if (!localHostPattern.test(host)) {
+    response.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("localhost または 127.0.0.1 で開いてください");
+    return;
+  }
+  if (request.url !== "/health") {
+    await ensureDisplayFor(`http://${host}`);
+  }
+  const upstream = http.request(
+    {
+      host: "127.0.0.1",
+      port: WEB_INTERNAL_PORT,
+      method: request.method,
+      path: request.url,
+      headers: request.headers,
+    },
+    (upstreamResponse) => {
+      response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+      upstreamResponse.pipe(response);
+    },
+  );
+  upstream.on("error", () => {
+    if (!response.headersSent) response.writeHead(502);
+    response.end();
+  });
+  request.pipe(upstream);
+});
+proxy.listen(WEB_PORT);
+await ensureDisplayFor(`http://localhost:${WEB_PORT}`);
 
 // Preview Job: 1実行1メッセージ。Queueが空なら何もせず終わるので、出力は捨てる。
 function runPreviewOnce() {
@@ -197,7 +279,8 @@ process.on("SIGTERM", () => stop(0));
 
 console.log(`
 [local] 起動しました(Ctrl+C で停止)
-  Web     : ${APP_ORIGIN}
+  Web     : http://localhost:${WEB_PORT}
+            (composeが公開するport経由の http://localhost:3001 などでも開けます)
   Display : ${DISPLAY_ORIGIN}
   Preview : ${PREVIEW_INTERVAL_MS / 1000}秒おきにQueueを1件処理
 `);

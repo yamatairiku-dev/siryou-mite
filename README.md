@@ -69,6 +69,9 @@ npm run local
 
 - `http://localhost:3000` を開き、開発ユーザーでログインします(`AUTH_MODE=dev`)
 - Displayは `http://localhost:3100`、Preview Jobは3秒おきにQueueを1件処理します
+- Displayは、ブラウザが実際に開いているWebのオリジン(`localhost:3000`、composeが公開する
+  `localhost:3001`、`127.0.0.1` など)に合わせて自動で起動し直します。Display側のOrigin検証は
+  緩めていません
 - build・DBマイグレーション・Blob container / Queueの作成も自動で行います。`.env`は不要で、
   grant署名鍵などの秘密値は起動のたびに使い捨てで生成します(再起動するとログインし直しになります)
 - buildを省いて起動し直すときは `LOCAL_SKIP_BUILD=1 npm run local`

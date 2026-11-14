@@ -72,7 +72,6 @@ export default function App() {
         <nav aria-label="メインナビゲーション">
           {user ? (
             <>
-              <a href="/app">アプリ</a>
               <span className="user-name">{user.name}</span>
               <Form action="/auth/logout" method="post">
                 <button className="button button-secondary" type="submit">

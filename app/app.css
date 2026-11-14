@@ -277,16 +277,72 @@ dd {
   padding: 0;
 }
 
+/*
+ * 資料カードは一覧で多く見渡せるよう小さめにする。`auto-fill`にして、件数が少ない
+ * ときにカードが行いっぱいへ引き伸ばされないようにする。
+ */
+.document-list.grid {
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
 .document-card {
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgb(23 32 51 / 6%);
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
+  padding: 12px;
 }
 
 .document-card-preview {
-  border-radius: 8px;
+  aspect-ratio: 16 / 9;
+  border: 1px solid #e3e9f2;
+  border-radius: 6px;
   height: auto;
+  object-fit: cover;
+  object-position: top;
   width: 100%;
+}
+
+.document-card h2 {
+  font-size: 15px;
+  line-height: 1.4;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* 項目名と値を横に並べ、縦に積むより行数を減らす。 */
+.document-card dl {
+  column-gap: 8px;
+  display: grid;
+  font-size: 12px;
+  grid-template-columns: auto minmax(0, 1fr);
+  line-height: 1.5;
+  margin: 0;
+  row-gap: 2px;
+}
+
+.document-card dt {
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.document-card dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.document-card .document-card-actions {
+  gap: 6px;
+  margin-top: auto;
+}
+
+.document-card .button {
+  font-size: 13px;
+  padding: 5px 10px;
 }
 
 .document-card-actions {

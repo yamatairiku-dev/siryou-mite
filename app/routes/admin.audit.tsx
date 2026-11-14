@@ -158,36 +158,72 @@ export default function AdminAudit({ loaderData }: Route.ComponentProps) {
         </div>
       </Form>
 
-      <ul className="document-list grid">
-        {page.events.length === 0 && (
-          <p>条件に一致する監査履歴はありません。</p>
-        )}
-        {page.events.map((event) => (
-          <li key={event.id} className="card document-card">
-            <h2>
-              {actionLabels[event.action]}／{resultLabels[event.result]}
-            </h2>
-            <dl>
-              <dt>日時</dt>
-              <dd>{formatJstDateTime(event.occurredAt)}</dd>
-              <dt>利用者</dt>
-              <dd>{event.actorEmail ?? "(不明)"}</dd>
-              <dt>利用者ID</dt>
-              <dd>{event.actorSubjectId}</dd>
-              <dt>ロール</dt>
-              <dd>{event.actorRoles.join("、") || "(なし)"}</dd>
-              <dt>所属</dt>
-              <dd>{event.actorGroupValues.join("、") || "(なし)"}</dd>
-              <dt>資料ID</dt>
-              <dd>{event.documentId ?? "(なし)"}</dd>
-              <dt>エラー分類</dt>
-              <dd>{event.errorCategory ?? "(なし)"}</dd>
-              <dt>相関ID</dt>
-              <dd>{event.correlationId}</dd>
-            </dl>
-          </li>
-        ))}
-      </ul>
+      {page.events.length === 0 ? (
+        <p>条件に一致する監査履歴はありません。</p>
+      ) : (
+        <>
+          <p className="audit-legend">
+            <span className="audit-badge audit-badge-denied">拒否</span>
+            <span className="audit-badge audit-badge-failed">失敗</span>
+            の行は色を変えて表示します。
+          </p>
+          {/* 列が多いため、狭い画面では表だけを横スクロールさせる。 */}
+          <div className="table-wrap card">
+            <table className="audit-table">
+              <thead>
+                <tr>
+                  <th scope="col">日時</th>
+                  <th scope="col">操作</th>
+                  <th scope="col">結果</th>
+                  <th scope="col">利用者</th>
+                  <th scope="col">ロール／所属</th>
+                  <th scope="col">資料ID</th>
+                  <th scope="col">エラー分類</th>
+                  <th scope="col">相関ID</th>
+                </tr>
+              </thead>
+              <tbody>
+                {page.events.map((event) => (
+                  <tr
+                    key={event.id}
+                    className={`audit-row-${event.result}`}
+                    data-result={event.result}
+                  >
+                    <td className="audit-nowrap">
+                      {formatJstDateTime(event.occurredAt)}
+                    </td>
+                    <td className="audit-nowrap">
+                      {actionLabels[event.action]}
+                    </td>
+                    <td>
+                      <span
+                        className={`audit-badge audit-badge-${event.result}`}
+                      >
+                        {resultLabels[event.result]}
+                      </span>
+                    </td>
+                    <td>
+                      <div>{event.actorEmail ?? "(不明)"}</div>
+                      <div className="audit-id">{event.actorSubjectId}</div>
+                    </td>
+                    <td>
+                      <div className="audit-nowrap">
+                        {event.actorRoles.join("、") || "(なし)"}
+                      </div>
+                      <div className="audit-sub">
+                        {event.actorGroupValues.join("、") || "(なし)"}
+                      </div>
+                    </td>
+                    <td className="audit-id">{event.documentId ?? "—"}</td>
+                    <td>{event.errorCategory ?? "—"}</td>
+                    <td className="audit-id">{event.correlationId}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
 
       {page.nextCursor && (
         <a

@@ -1,5 +1,4 @@
 import {
-  Form,
   isRouteErrorResponse,
   Links,
   Meta,
@@ -7,18 +6,25 @@ import {
   Scripts,
   ScrollRestoration,
   useLoaderData,
+  useLocation,
 } from "react-router";
 import type { Route } from "./+types/root";
 import { DEFAULT_APP_NAME } from "~/lib/app-name";
+import { isAdmin } from "~/lib/auth/authorization.server";
 import { env } from "~/lib/env.server";
+import { SiteHeader } from "~/lib/format/site-header";
 import { securityHeaders } from "~/lib/security.server";
 import { getUser } from "~/lib/session.server";
 import "./app.css";
 
 export async function loader({ request }: Route.LoaderArgs) {
+  const user = await getUser(request);
   return {
     appName: env.APP_NAME,
-    user: await getUser(request),
+    user,
+    // 管理画面への導線を出すかどうか(設計 §5.6, §5.7)。表示制御であって認可ではなく、
+    // `/admin/documents`・`/admin/audit`のloaderが必ず`requireAdmin`で判定する。
+    canUseAdminScreen: user ? isAdmin(user) : false,
   };
 }
 
@@ -61,32 +67,17 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
-  const { appName, user } = useLoaderData<typeof loader>();
+  const { appName, user, canUseAdminScreen } = useLoaderData<typeof loader>();
+  const { pathname } = useLocation();
 
   return (
     <>
-      <header className="site-header">
-        <a className="brand" href="/">
-          {appName}
-        </a>
-        <nav aria-label="メインナビゲーション">
-          {user ? (
-            <>
-              <a href="/app">アプリ</a>
-              <span className="user-name">{user.name}</span>
-              <Form action="/auth/logout" method="post">
-                <button className="button button-secondary" type="submit">
-                  ログアウト
-                </button>
-              </Form>
-            </>
-          ) : (
-            <a className="button" href="/auth/login">
-              ログイン
-            </a>
-          )}
-        </nav>
-      </header>
+      <SiteHeader
+        appName={appName}
+        userName={user?.name ?? null}
+        canUseAdminScreen={canUseAdminScreen}
+        pathname={pathname}
+      />
       <main className="container">
         <Outlet />
       </main>

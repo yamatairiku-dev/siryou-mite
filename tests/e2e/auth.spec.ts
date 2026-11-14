@@ -34,9 +34,8 @@ test.describe("正常なログイン(設計 §4.1, §4.2)", () => {
     await expect(page.getByRole("heading", { name: "資料一覧" })).toBeVisible();
     await expect(page.getByText(user.email)).toBeVisible();
     // Userロールだけでは管理画面への導線を表示しない(設計 §4.2、表示制御)。
-    await expect(
-      page.getByRole("link", { name: "管理画面（全資料の検索）" }),
-    ).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "全資料の検索" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "監査履歴" })).toHaveCount(0);
 
     await context.close();
   });
@@ -56,10 +55,16 @@ test.describe("正常なログイン(設計 §4.1, §4.2)", () => {
 
     await page.goto("/app");
     await expect(page.getByRole("heading", { name: "資料一覧" })).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: "管理画面（全資料の検索）" }),
-    ).toBeVisible();
-    await expect(page.getByRole("link", { name: "監査履歴" })).toBeVisible();
+    // 管理画面への導線はヘッダーにあり、どの画面からも2つの管理画面を行き来できる。
+    const header = page.getByRole("navigation", { name: "メインナビゲーション" });
+    await header.getByRole("link", { name: "全資料の検索" }).click();
+    await expect(page.getByRole("heading", { name: "全資料の検索" })).toBeVisible();
+    await header.getByRole("link", { name: "監査履歴" }).click();
+    await expect(page.getByRole("heading", { name: "監査履歴" })).toBeVisible();
+    await expect(header.getByRole("link", { name: "監査履歴" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
 
     await context.close();
   });

@@ -55,6 +55,24 @@ test.describe("アップロードと資料表示", () => {
     const frame = displayFrameLocator(page, result.body.documentId);
     await expect(frame.getByText(`${title}の本文です。`)).toBeVisible();
 
+    // 資料本文の表示領域が、iframe既定の300x150pxのままになっていない。
+    const frameBox = await page
+      .locator(`iframe[name="document-display-${result.body.documentId}"]`)
+      .boundingBox();
+    // 本文の幅(1040px)に縛られず、画面幅の大半を使う(既定viewportは1280px)。
+    expect(frameBox?.width).toBeGreaterThan(1100);
+    expect(frameBox?.height).toBeGreaterThan(400);
+
+    // 画面いっぱいに広げても資料は消えず、元に戻せる。
+    await page.getByRole("button", { name: "画面いっぱいに広げる" }).click();
+    const expandedBox = await page
+      .locator(`iframe[name="document-display-${result.body.documentId}"]`)
+      .boundingBox();
+    expect(expandedBox?.width).toBe(page.viewportSize()?.width);
+    await expect(frame.getByText(`${title}の本文です。`)).toBeVisible();
+    await page.getByRole("button", { name: "元の大きさに戻す" }).click();
+    await expect(frame.getByText(`${title}の本文です。`)).toBeVisible();
+
     await context.close();
   });
 

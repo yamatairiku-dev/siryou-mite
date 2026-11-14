@@ -18,7 +18,7 @@
  *   などのログには一切出さない(設計 §9.5)。この画面自体は監査を書かない
  *   (閲覧成功監査はDisplay側がHTMLを返す直前に保存する、設計 §10.3(6)、T12)。
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRevalidator } from "react-router";
 import { z } from "zod";
 import type { Route } from "./+types/documents.$documentId";
@@ -106,6 +106,29 @@ export default function DocumentView({ loaderData }: Route.ComponentProps) {
   // 開発時二重effectなど)を避けるためだけに使い、業務的な単回使用制御ではない
   // (grantの有効期限内の再利用自体は許容する、設計判断Q-019)。
   const submittedGrantRef = useRef<string | null>(null);
+  // 資料の表示領域を画面いっぱいに広げているかどうか。iframeを作り直すと資料の
+  // 再取得(grantの再送信)が必要になるため、切り替えはCSS classだけで行う。
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!isExpanded) {
+      return;
+    }
+    // 広げている間は背後の画面をスクロールさせず、Escで元に戻せるようにする
+    // (資料のiframe内にフォーカスがある間は、別オリジンのためEscを受け取れない)。
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsExpanded(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isExpanded]);
 
   useEffect(() => {
     if (submittedGrantRef.current === loaderData.grant) {
@@ -174,6 +197,13 @@ export default function DocumentView({ loaderData }: Route.ComponentProps) {
         >
           表示をやり直す
         </button>
+        <button
+          type="button"
+          className="button button-secondary"
+          onClick={() => setIsExpanded(true)}
+        >
+          画面いっぱいに広げる
+        </button>
         {loaderData.canDelete && (
           // 削除確認画面(設計 §5.5)へ遷移するだけのリンク。ここでは削除しない。
           <a
@@ -216,17 +246,35 @@ export default function DocumentView({ loaderData }: Route.ComponentProps) {
         資料内のリンクは、右クリックして「新しいタブで開く」を選ぶと開けます。クリックして資料が表示されなくなった場合は「表示をやり直す」を押してください。
       </p>
 
-      <iframe
-        name={iframeName}
-        title={`${loaderData.title}の内容`}
-        className="document-view-frame"
-        // sandboxは`allow-popups`と`allow-popups-to-escape-sandbox`だけを許可する
-        // (設計 §9.2)。script・form・download・same-origin・
-        // `target="_top"`/`target="_parent"`による親画面遷移は許可しない。
-        sandbox="allow-popups allow-popups-to-escape-sandbox"
-        referrerPolicy="no-referrer"
-        data-testid="document-display-frame"
-      />
+      <div
+        className={
+          isExpanded
+            ? "document-view-stage document-view-stage-expanded"
+            : "document-view-stage"
+        }
+      >
+        <div className="document-view-stage-bar">
+          <span className="document-view-stage-title">{loaderData.title}</span>
+          <button
+            type="button"
+            className="button button-secondary"
+            onClick={() => setIsExpanded(false)}
+          >
+            元の大きさに戻す
+          </button>
+        </div>
+        <iframe
+          name={iframeName}
+          title={`${loaderData.title}の内容`}
+          className="document-view-frame"
+          // sandboxは`allow-popups`と`allow-popups-to-escape-sandbox`だけを許可する
+          // (設計 §9.2)。script・form・download・same-origin・
+          // `target="_top"`/`target="_parent"`による親画面遷移は許可しない。
+          sandbox="allow-popups allow-popups-to-escape-sandbox"
+          referrerPolicy="no-referrer"
+          data-testid="document-display-frame"
+        />
+      </div>
 
       <noscript>
         {/*

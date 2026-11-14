@@ -577,17 +577,48 @@ describe("監査履歴画面コンポーネント", () => {
 
     // UTC 15:30 → JST 翌日00:30(設計 §5.2)。
     await screen.findByText("2026/01/03 00:30");
-    expect(screen.getByText("アップロード／成功")).toBeTruthy();
+    const row = screen.getByText(CORRELATION_ID).closest("tr");
+    expect(row?.textContent).toContain("アップロード");
+    expect(row?.textContent).toContain("成功");
     expect(screen.getByText("owner@example.com")).toBeTruthy();
     expect(screen.getByText("oid-someone-else")).toBeTruthy();
     expect(screen.getByText(DOCUMENT_ID)).toBeTruthy();
     expect(screen.getByText(CORRELATION_ID)).toBeTruthy();
   });
 
+  it("表形式で表示し、拒否・失敗の行を見分けられるようにする", async () => {
+    renderAdminAudit({
+      events: [
+        eventFrom({ id: "1", result: "success" }),
+        eventFrom({ id: "2", result: "denied" }),
+        eventFrom({ id: "3", result: "failed" }),
+      ],
+    });
+
+    await screen.findByRole("table");
+    expect(screen.getAllByRole("columnheader").map((th) => th.textContent)).toEqual(
+      ["日時", "操作", "結果", "利用者", "ロール／所属", "資料ID", "エラー分類", "相関ID"],
+    );
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(rows.map((row) => row.getAttribute("data-result"))).toEqual([
+      "success",
+      "denied",
+      "failed",
+    ]);
+    expect(rows.map((row) => row.className)).toEqual([
+      "audit-row-success",
+      "audit-row-denied",
+      "audit-row-failed",
+    ]);
+    // 色だけに頼らず、結果を文字でも示す。
+    expect(rows[1]?.textContent).toContain("拒否");
+    expect(rows[2]?.textContent).toContain("失敗");
+  });
+
   it("CSV出力と詳細分析の操作を置かない(設計 §5.7)", async () => {
     renderAdminAudit({ events: [eventFrom()] });
 
-    await screen.findByText("アップロード／成功");
+    await screen.findByText(CORRELATION_ID);
     expect(screen.queryByText(/CSV/)).toBeNull();
     expect(screen.queryByText(/ダウンロード/)).toBeNull();
     expect(screen.queryByText(/集計|分析/)).toBeNull();

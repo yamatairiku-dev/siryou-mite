@@ -17,7 +17,6 @@ import {
   type AdminAuditSearchCriteria,
   type AdminAuditSearchData,
 } from "~/lib/admin/audit-search.server";
-import { AdminNav } from "~/lib/format/admin-nav";
 import { formatJstDateTime } from "~/lib/format/document-view";
 
 export async function loader({
@@ -70,7 +69,6 @@ export default function AdminAudit({ loaderData }: Route.ComponentProps) {
     <section>
       <p className="eyebrow">資料みて！ 管理画面</p>
       <h1>監査履歴</h1>
-      <AdminNav current="audit" />
       <p className="lead">
         日時、利用者、資料ID、操作、結果で検索できます。条件を空欄にすると絞り込みません。
         監査履歴の閲覧もこの履歴へ記録されます。

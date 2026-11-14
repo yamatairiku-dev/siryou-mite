@@ -14,7 +14,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Form, useFetcher, useRevalidator } from "react-router";
 import type { Route } from "./+types/app";
-import { isAdmin, isDocumentOwner } from "~/lib/auth/authorization.server";
+import { isDocumentOwner } from "~/lib/auth/authorization.server";
 import {
   InvalidCursorError,
   listDocumentsByOwner,
@@ -48,12 +48,6 @@ export type DocumentCard = {
 
 export type AppLoaderData = {
   user: Pick<AppUser, "name" | "email">;
-  /**
-   * 管理画面への導線を表示するかどうか(設計 §5.6)。これは表示制御であって
-   * 認可ではない。`/admin/documents`のloaderが`requireAdmin`で必ず認可し直すため、
-   * この値を偽装しても管理画面は利用できない(設計 §4.2、AGENTS.md 5項)。
-   */
-  canUseAdminScreen: boolean;
   page: { documents: DocumentCard[]; nextCursor: string | null };
 };
 
@@ -91,7 +85,6 @@ export async function loader({ request }: Route.LoaderArgs): Promise<AppLoaderDa
 
   return {
     user: { name: user.name, email: user.email },
-    canUseAdminScreen: isAdmin(user),
     page: {
       documents: page.documents.map((document) => toDocumentCard(user, document)),
       nextCursor: page.nextCursor,
@@ -335,21 +328,6 @@ export default function Application({ loaderData }: Route.ComponentProps) {
         {loaderData.user.name}さん（{loaderData.user.email}）
       </p>
 
-      {/*
-        管理画面・監査履歴画面への導線は管理者にだけ表示する(設計 §5.6, §5.7)。
-        表示制御であって認可ではなく、`/admin/documents`・`/admin/audit`側で
-        必ず`requireAdmin`が判定する。
-      */}
-      {loaderData.canUseAdminScreen && (
-        <p>
-          <a className="button button-secondary" href="/admin/documents">
-            管理画面（全資料の検索）
-          </a>{" "}
-          <a className="button button-secondary" href="/admin/audit">
-            監査履歴
-          </a>
-        </p>
-      )}
 
       <section className="upload-panel card">
         <h2>資料をアップロード</h2>

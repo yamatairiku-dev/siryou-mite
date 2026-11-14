@@ -138,27 +138,6 @@ describe("loader (所有者の資料だけを取得する)", () => {
     expect(result.page.nextCursor).toBe("next-cursor-token");
   });
 
-  it("管理画面への導線は`Admin`ロールを持つ利用者にだけ許可する(設計 §5.6)", async () => {
-    listDocumentsByOwnerMock.mockResolvedValue({ documents: [], nextCursor: null });
-
-    const asGeneralUser = await loader({
-      request: new Request("http://localhost:3000/app", {
-        headers: { Cookie: await sessionCookieFor(owner) },
-      }),
-    } as unknown as Parameters<typeof loader>[0]);
-    expect(asGeneralUser.canUseAdminScreen).toBe(false);
-
-    const asAdmin = await loader({
-      request: new Request("http://localhost:3000/app", {
-        headers: { Cookie: await sessionCookieFor(ownerAdmin) },
-      }),
-    } as unknown as Parameters<typeof loader>[0]);
-    expect(asAdmin.canUseAdminScreen).toBe(true);
-
-    // この値は表示制御であって認可ではない。管理画面側の認可は
-    // `/admin/documents`のloaderが`requireAdmin`で判定する(設計 §4.2)。
-    expect(asGeneralUser.page.documents).toEqual([]);
-  });
 
   it("未認証はログイン画面へredirectする(処理をrequireUserへ委譲)", async () => {
     listDocumentsByOwnerMock.mockResolvedValue({ documents: [], nextCursor: null });
@@ -190,7 +169,6 @@ describe("loader (所有者の資料だけを取得する)", () => {
 function renderApp(options: {
   documents?: ReturnType<typeof cardFrom>[];
   nextCursor?: string | null;
-  canUseAdminScreen?: boolean;
   loadMorePage?: { documents: ReturnType<typeof cardFrom>[]; nextCursor: string | null };
 } = {}) {
   const Stub = createRoutesStub([
@@ -202,13 +180,11 @@ function renderApp(options: {
         if (url.searchParams.get("cursor") && options.loadMorePage) {
           return {
             user: { name: owner.name, email: owner.email },
-            canUseAdminScreen: options.canUseAdminScreen ?? false,
             page: options.loadMorePage,
           };
         }
         return {
           user: { name: owner.name, email: owner.email },
-          canUseAdminScreen: options.canUseAdminScreen ?? false,
           page: {
             documents: options.documents ?? [],
             nextCursor: options.nextCursor ?? null,
@@ -287,37 +263,6 @@ describe("初期画面コンポーネント", () => {
 
     await screen.findByText("資料タイトル");
     expect(screen.queryByRole("button", { name: "削除" })).toBeNull();
-  });
-
-  it("管理者には管理画面へのリンクを表示し、一般利用者には表示しない(設計 §5.6)", async () => {
-    const general = renderApp({ documents: [], canUseAdminScreen: false });
-    await screen.findByText(/所有者 太郎さん/);
-    expect(
-      screen.queryByRole("link", { name: "管理画面（全資料の検索）" }),
-    ).toBeNull();
-    general.unmount();
-
-    renderApp({ documents: [], canUseAdminScreen: true });
-    const adminLink = (await screen.findByRole("link", {
-      name: "管理画面（全資料の検索）",
-    })) as HTMLAnchorElement;
-    // 表示のみのGET遷移。この画面では管理操作を実行しない。
-    expect(adminLink.getAttribute("href")).toBe("/admin/documents");
-  });
-
-  it("管理者には監査履歴画面へのリンクを表示し、一般利用者には表示しない(設計 §5.7)", async () => {
-    const general = renderApp({ documents: [], canUseAdminScreen: false });
-    await screen.findByText(/所有者 太郎さん/);
-    expect(screen.queryByRole("link", { name: "監査履歴" })).toBeNull();
-    general.unmount();
-
-    renderApp({ documents: [], canUseAdminScreen: true });
-    const auditLink = (await screen.findByRole("link", {
-      name: "監査履歴",
-    })) as HTMLAnchorElement;
-    // 表示制御であって認可ではない。`/admin/audit`のloaderが`requireAdmin`で
-    // 判定し直す(設計 §4.2)。
-    expect(auditLink.getAttribute("href")).toBe("/admin/audit");
   });
 
   it("プレビュー状態が生成失敗の場合は代替画像を使う", async () => {

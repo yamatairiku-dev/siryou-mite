@@ -7,18 +7,25 @@ import {
   Scripts,
   ScrollRestoration,
   useLoaderData,
+  useLocation,
 } from "react-router";
 import type { Route } from "./+types/root";
 import { DEFAULT_APP_NAME } from "~/lib/app-name";
+import { isAdmin } from "~/lib/auth/authorization.server";
 import { env } from "~/lib/env.server";
+import { AdminNav } from "~/lib/format/admin-nav";
 import { securityHeaders } from "~/lib/security.server";
 import { getUser } from "~/lib/session.server";
 import "./app.css";
 
 export async function loader({ request }: Route.LoaderArgs) {
+  const user = await getUser(request);
   return {
     appName: env.APP_NAME,
-    user: await getUser(request),
+    user,
+    // 管理画面への導線を出すかどうか(設計 §5.6, §5.7)。表示制御であって認可ではなく、
+    // `/admin/documents`・`/admin/audit`のloaderが必ず`requireAdmin`で判定する。
+    canUseAdminScreen: user ? isAdmin(user) : false,
   };
 }
 
@@ -61,7 +68,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
-  const { appName, user } = useLoaderData<typeof loader>();
+  const { appName, user, canUseAdminScreen } = useLoaderData<typeof loader>();
+  const { pathname } = useLocation();
 
   return (
     <>
@@ -72,6 +80,7 @@ export default function App() {
         <nav aria-label="メインナビゲーション">
           {user ? (
             <>
+              {canUseAdminScreen && <AdminNav pathname={pathname} />}
               <span className="user-name">{user.name}</span>
               <Form action="/auth/logout" method="post">
                 <button className="button button-secondary" type="submit">

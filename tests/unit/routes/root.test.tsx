@@ -13,9 +13,13 @@ function titleOf(loaderData: MetaArgs["loaderData"]): unknown {
 
 describe("root meta", () => {
   it("<title>にAPP_NAME(loaderのappName)を使う", () => {
-    expect(titleOf({ appName: "資料みて！(検証)", user: null })).toBe(
-      "資料みて！(検証)",
-    );
+    expect(
+      titleOf({
+        appName: "資料みて！(検証)",
+        user: null,
+        canUseAdminScreen: false,
+      }),
+    ).toBe("資料みて！(検証)");
   });
 
   it("loaderDataが無いエラー画面では既定のアプリ名にする", () => {

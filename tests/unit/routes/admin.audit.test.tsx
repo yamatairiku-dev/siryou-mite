@@ -541,17 +541,6 @@ describe("監査履歴画面コンポーネント", () => {
     expect(screen.getByLabelText("結果")).toBeTruthy();
   });
 
-  it("全資料の検索へ直接移れる導線を出し、現在の画面を示す", async () => {
-    renderAdminAudit();
-
-    const toDocuments = await screen.findByRole("link", { name: "全資料の検索" });
-    expect(toDocuments.getAttribute("href")).toBe("/admin/documents");
-    expect(toDocuments.getAttribute("aria-current")).toBeNull();
-    expect(
-      screen.getByRole("link", { name: "監査履歴" }).getAttribute("aria-current"),
-    ).toBe("page");
-  });
-
   it("操作・結果は自由入力ではなく選択肢にする(設計 §12.2のenum)", async () => {
     renderAdminAudit();
 

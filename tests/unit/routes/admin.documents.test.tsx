@@ -612,19 +612,6 @@ describe("管理画面コンポーネント", () => {
     ).toBeNull();
   });
 
-  it("監査履歴へ直接移れる導線を出し、現在の画面を示す", async () => {
-    renderAdminDocuments();
-
-    const toAudit = await screen.findByRole("link", { name: "監査履歴" });
-    expect(toAudit.getAttribute("href")).toBe("/admin/audit");
-    expect(toAudit.getAttribute("aria-current")).toBeNull();
-    expect(
-      screen
-        .getByRole("link", { name: "全資料の検索" })
-        .getAttribute("aria-current"),
-    ).toBe("page");
-  });
-
   it("オーナー変更の操作を置かない(設計 §5.6)", async () => {
     renderAdminDocuments({ documents: [cardFrom()] });
 

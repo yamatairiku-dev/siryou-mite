@@ -97,13 +97,25 @@ test("管理者は資料を検索・閲覧・強制削除でき、監査履歴�
     `/admin/audit?documentId=${uploadResult.body.documentId}`,
   );
   await expect(
-    admin.page.getByRole("heading", { name: "アップロード／成功" }),
+    admin.page
+      .getByRole("row")
+      .filter({ hasText: "アップロード" })
+      .filter({ hasText: "成功" })
+      .first(),
   ).toBeVisible();
   await expect(
-    admin.page.getByRole("heading", { name: "閲覧／成功" }),
+    admin.page
+      .getByRole("row")
+      .filter({ hasText: "閲覧" })
+      .filter({ hasText: "成功" })
+      .first(),
   ).toBeVisible();
   await expect(
-    admin.page.getByRole("heading", { name: "削除／成功" }),
+    admin.page
+      .getByRole("row")
+      .filter({ hasText: "削除" })
+      .filter({ hasText: "成功" })
+      .first(),
   ).toBeVisible();
 
   // アップロード監査行に、複数所属コードがそのまま記録されていること

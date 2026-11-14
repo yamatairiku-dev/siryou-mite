@@ -21,7 +21,8 @@ a {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -243,21 +244,160 @@ dd {
 
 /* 管理画面・監査履歴画面の検索フォーム(設計 §5.6, §5.7)。 */
 .admin-search-form {
+  align-items: end;
   display: grid;
-  gap: 12px;
+  gap: 16px 20px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   margin-bottom: 24px;
+  padding: 24px;
 }
 
 .admin-search-form label {
+  color: #3d4a60;
   display: block;
   font-size: 13px;
-  font-weight: 600;
-  margin-bottom: 4px;
+  font-weight: 700;
+  margin-bottom: 6px;
 }
 
 .admin-search-form input,
 .admin-search-form select {
+  background: #ffffff;
+  border: 1px solid #b8c4d6;
+  border-radius: 8px;
+  color: #172033;
+  font: inherit;
+  font-size: 15px;
+  height: 44px;
+  padding: 0 12px;
   width: 100%;
+}
+
+.admin-search-form input::placeholder {
+  color: #9aa6b8;
+}
+
+.admin-search-form input:focus-visible,
+.admin-search-form select:focus-visible {
+  border-color: #174ea6;
+  outline: 3px solid rgb(23 78 166 / 25%);
+  outline-offset: 0;
+}
+
+/* 検索・クリアのボタンは最後の行に、入力欄と同じ高さで並べる。 */
+.admin-search-form .document-card-actions {
+  grid-column: 1 / -1;
+}
+
+.admin-search-form .document-card-actions .button {
+  align-items: center;
+  display: inline-flex;
+  height: 44px;
+  padding: 0 22px;
+}
+
+/* 監査履歴の一覧(表形式。設計 §5.7)。 */
+.table-wrap {
+  margin-bottom: 24px;
+  overflow-x: auto;
+  padding: 0;
+}
+
+.audit-table {
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.5;
+  width: 100%;
+}
+
+.audit-table th,
+.audit-table td {
+  border-bottom: 1px solid #e3e9f2;
+  padding: 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.audit-table th {
+  background: #f4f7fb;
+  color: #56647a;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.audit-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.audit-nowrap {
+  white-space: nowrap;
+}
+
+.audit-id {
+  color: #56647a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+td.audit-id {
+  min-width: 112px;
+}
+
+.audit-sub {
+  color: #6b778c;
+}
+
+/* 注意が必要な行(拒否・失敗)。色だけに頼らず、結果のバッジと左端の線でも示す。 */
+.audit-row-denied td {
+  background: #fff7e0;
+}
+
+.audit-row-denied td:first-child {
+  box-shadow: inset 4px 0 0 #d99a00;
+}
+
+.audit-row-failed td {
+  background: #fdecec;
+}
+
+.audit-row-failed td:first-child {
+  box-shadow: inset 4px 0 0 #c62828;
+}
+
+.audit-badge {
+  border-radius: 999px;
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 2px 10px;
+  white-space: nowrap;
+}
+
+.audit-badge-success {
+  background: #e6f4ea;
+  color: #1e6b34;
+}
+
+.audit-badge-denied {
+  background: #f5c542;
+  color: #4a3600;
+}
+
+.audit-badge-failed {
+  background: #c62828;
+  color: #ffffff;
+}
+
+.audit-legend {
+  color: #56647a;
+  font-size: 13px;
+  margin: 0 0 10px;
+}
+
+.audit-legend .audit-badge {
+  margin-right: 6px;
 }
 
 .correlation-id {

@@ -85,7 +85,14 @@ export default function App() {
   );
 }
 
-export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
+export function ErrorBoundary({
+  error,
+  loaderData,
+}: Route.ErrorBoundaryProps) {
+  // ログイン中は初期画面(`/app`)へ戻す。`/`は未ログイン画面で、Easy Authの認証除外pathの
+  // ためログイン済みでも未ログイン画面になる(設計 §7.1.1)。rootのloader自体が失敗した
+  // 場合(App Roleなしの403など)は利用者が分からないため`/`へ戻す。
+  const homeHref = loaderData?.user ? "/app" : "/";
   let title = "エラーが発生しました";
   let message = "しばらく時間をおいて、もう一度お試しください。";
   let status: number | undefined;
@@ -110,7 +117,7 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
       <p className="eyebrow">{status ? `HTTP ${status}` : "SYSTEM ERROR"}</p>
       <h1>{title}</h1>
       <p>{message}</p>
-      <a className="button" href="/">
+      <a className="button" href={homeHref}>
         ホームへ戻る
       </a>
     </main>

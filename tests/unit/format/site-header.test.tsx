@@ -36,6 +36,22 @@ describe("SiteHeader", () => {
     expect(screen.getByRole("button", { name: "ログアウト" })).toBeTruthy();
   });
 
+  it("アプリ名のリンクは、ログイン中は初期画面(/app)へ戻す", async () => {
+    // `/`は未ログイン画面。Easy Authの認証除外pathではログイン状態がアプリへ渡らないため、
+    // ログイン中に`/`へ戻すと未ログイン画面が表示されてしまう(stagingで確認した不具合)。
+    renderHeader();
+
+    const brand = await screen.findByRole("link", { name: "資料みて！" });
+    expect(brand.getAttribute("href")).toBe("/app");
+  });
+
+  it("アプリ名のリンクは、未ログインでは未ログイン画面(/)を指す", async () => {
+    renderHeader({ userName: null });
+
+    const brand = await screen.findByRole("link", { name: "資料みて！" });
+    expect(brand.getAttribute("href")).toBe("/");
+  });
+
   it("ログアウトはブラウザ標準のform送信で行う(画面内の遷移として横取りしない)", async () => {
     // 遷移先はEasy Authの`/.auth/logout`とEntra IDで、アプリのrouteではない。
     renderHeader();

@@ -115,7 +115,8 @@ Microsoft Graphは呼ばず、Token Storeも有効にしない。
 ### 5.1 ログイン画面
 
 - Entra IDログインへの導線を表示し、POST後に`/.auth/login/aad`へ遷移する。
-- ログイン済みの場合は初期画面へ遷移する。
+- ログイン済みの場合は初期画面へ遷移する。ただしEasy Authの認証除外pathではログイン状態が
+  アプリへ渡らないため、Azure上ではログイン済みでも未ログイン画面を表示する(§7.1.1)。
 - ログアウトもアプリのPOST actionで同一オリジンを確認してから
   `/.auth/logout`へ遷移する。
 - `/.auth/login/aad`と`/.auth/logout`はEasy Authのendpointで、アプリのrouteではない。
@@ -363,6 +364,10 @@ portal上の手変更を正本にしない。
   CSS・JavaScriptがEntra IDへ転送されて読み込めない
 - ログイン前の画面からのfetch(`/auth/login.data`への送信、`/__manifest`のroute探索)は
   認証除外pathに含めない。ログインformはブラウザ標準の送信(document全体の遷移)だけを使う
+- 認証除外pathへの要求には、ログイン済みでもEasy Authが利用者情報(`X-MS-CLIENT-PRINCIPAL`)を
+  付けない(stagingで確認)。そのため`/`と`/auth/login`は、ログイン済みの利用者にも未ログイン画面を
+  表示する(§5.1「ログイン済みの場合は初期画面へ遷移する」は`AUTH_MODE=dev`でだけ成り立つ)。
+  ログイン後の画面から`/`へ戻す導線は置かず、ヘッダーのアプリ名はログイン中`/app`を指す
 - `/.auth/login/aad`と`/.auth/logout`を使用し、アプリ独自callbackを公開しない
 - Microsoft Graphを呼ばないためToken Storeを無効にし、client secretも設定しない
   (IDトークンだけを受け取る)

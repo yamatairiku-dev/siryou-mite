@@ -69,7 +69,11 @@ function run(command, args, env = process.env) {
   }
 }
 
-if (process.env.LOCAL_SKIP_BUILD !== "1" || !existsSync(`${rootDir}build`)) {
+// `npm run build`は`build/`を作り直すため、Web・servicesの両方が揃っているときだけ省く。
+const hasBuild =
+  existsSync(`${rootDir}build/server/index.js`) &&
+  existsSync(`${rootDir}build/services/display/index.js`);
+if (process.env.LOCAL_SKIP_BUILD !== "1" || !hasBuild) {
   console.log("[local] build中...");
   run("npm", ["run", "build"]);
   run("npm", ["run", "build:services"]);

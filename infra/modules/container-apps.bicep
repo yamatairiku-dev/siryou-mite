@@ -25,8 +25,8 @@ param allowedClientIpRanges array
 @description('Webの最小レプリカ数。Easy Authのログインで起動待ちを避けるため1以上(設計 §7.6)')
 @minValue(1)
 param webMinReplicas int = 1
-@description('Displayの最小レプリカ数。stagingは0、productionは1(設計 §7.6)')
-param displayMinReplicas int = 0
+@description('Displayの最小レプリカ数。0にすると最初の表示が起動待ち(約45秒)になり、60秒の表示grantに対して余裕がない(設計 §7.6)')
+param displayMinReplicas int = 1
 
 @description('Entra IDのtenant ID(Easy Authのissuerとアプリのtid照合)')
 param tenantId string

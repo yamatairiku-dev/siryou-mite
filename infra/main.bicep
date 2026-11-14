@@ -50,7 +50,7 @@ param webMinReplicas int = 1
 param postgresSkuName string = 'Standard_B1ms'
 param postgresSkuTier string = 'Burstable'
 param postgresStorageAutoGrow bool = false
-param displayMinReplicas int = 0
+param displayMinReplicas int = 1
 param keyVaultPurgeProtection bool = false
 
 var namePrefix = '${appPrefix}-${environmentName}'

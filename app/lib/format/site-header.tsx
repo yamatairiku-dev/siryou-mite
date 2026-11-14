@@ -39,7 +39,12 @@ export function SiteHeader({
 
   return (
     <header className="site-header">
-      <a className="brand" href="/">
+      {/*
+        ログイン中は初期画面(`/app`)へ戻す。`/`は未ログイン画面で、Easy Authの認証除外path
+        のためログイン状態がアプリへ渡らず、ログイン済みでも未ログイン画面が表示される
+        (設計 §5.1, §7.1.1)。
+      */}
+      <a className="brand" href={userName === null ? "/" : "/app"}>
         {appName}
       </a>
       {userName === null ? (

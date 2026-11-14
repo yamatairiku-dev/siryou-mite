@@ -115,7 +115,8 @@ Microsoft Graphは呼ばず、Token Storeも有効にしない。
 ### 5.1 ログイン画面
 
 - Entra IDログインへの導線を表示し、POST後に`/.auth/login/aad`へ遷移する。
-- ログイン済みの場合は初期画面へ遷移する。
+- ログイン済みの場合は初期画面へ遷移する。ただしEasy Authの認証除外pathではログイン状態が
+  アプリへ渡らないため、Azure上ではログイン済みでも未ログイン画面を表示する(§7.1.1)。
 - ログアウトもアプリのPOST actionで同一オリジンを確認してから
   `/.auth/logout`へ遷移する。
 - `/.auth/login/aad`と`/.auth/logout`はEasy Authのendpointで、アプリのrouteではない。
@@ -363,6 +364,10 @@ portal上の手変更を正本にしない。
   CSS・JavaScriptがEntra IDへ転送されて読み込めない
 - ログイン前の画面からのfetch(`/auth/login.data`への送信、`/__manifest`のroute探索)は
   認証除外pathに含めない。ログインformはブラウザ標準の送信(document全体の遷移)だけを使う
+- 認証除外pathへの要求には、ログイン済みでもEasy Authが利用者情報(`X-MS-CLIENT-PRINCIPAL`)を
+  付けない(stagingで確認)。そのため`/`と`/auth/login`は、ログイン済みの利用者にも未ログイン画面を
+  表示する(§5.1「ログイン済みの場合は初期画面へ遷移する」は`AUTH_MODE=dev`でだけ成り立つ)。
+  ログイン後の画面から`/`へ戻す導線は置かず、ヘッダーのアプリ名はログイン中`/app`を指す
 - `/.auth/login/aad`と`/.auth/logout`を使用し、アプリ独自callbackを公開しない
 - Microsoft Graphを呼ばないためToken Storeを無効にし、client secretも設定しない
   (IDトークンだけを受け取る)
@@ -488,7 +493,8 @@ Azure Database for PostgreSQL Flexible Serverを使い、資料メタデータ�
 - production WebとDisplayはそれぞれ0.5 vCPU、1GB、最小1・最大3レプリカとする。
   アップロード上限の判定はDBで行うため、Webを複数レプリカにしても上限は崩れない。
 - staging WebはEasy Authの結合試験で起動待ちを避けるため最小1レプリカとする。
-  staging Displayは最小0レプリカとする。
+  staging Displayも最小1レプリカとする。0レプリカからの起動は最初の応答まで約45秒かかり
+  (2026-11-15にstagingで計測)、有効期間60秒の表示grant(§7.2)に対して余裕がないため。
 - Preview Jobは1 vCPU、2GB、最大2件並列とする。
 - Migration・Maintenance・DB初期設定Jobは0.5 vCPU、1GB、並列実行しない。
 - Container Apps環境のゾーン冗長はproduction、stagingとも使用しない。

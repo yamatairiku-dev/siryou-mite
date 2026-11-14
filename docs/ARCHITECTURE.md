@@ -82,6 +82,10 @@ Easy Authとingressの背後で動かすための取り決め(stagingへの初�
   (`/__manifest`)も起こしません。ログイン前のfetchはEasy AuthがEntra IDへ転送するためです。
 - **匿名で表示する画面の静的ファイルを認証除外にする。** `/assets/*`と`/favicon.svg`を
   Easy Authの`excludedPaths`へ入れます(設計 §7.1.1)。
+- **認証除外pathではログイン状態を判定できない。** 除外pathへの要求には、ログイン済みでも
+  `X-MS-CLIENT-PRINCIPAL`が付きません。`/`と`/auth/login`のloaderは利用者を取得できず、
+  未ログイン画面を返します。ログイン後の画面に`/`へ戻るリンクを置かないでください
+  (ヘッダーのアプリ名は、ログイン中は`/app`を指します)。
 
 `roles`は`User`・`Admin`の業務認可に使います。`groups`は複数値を前提とした所属コードで、
 画面表示と監査時点情報に使います。特定のグループ名を操作権限へ直接対応付けません。
@@ -165,7 +169,8 @@ Chromiumを含む別imageのQueue駆動Container Apps Jobで最大3回試行し�
   sidecarに限定し、sidecarを通らない経路になり得るDaprは有効にしない。Easy Auth設定
   (`authConfigs`)はBicepで管理する
 - Display: アップロードされたHTMLを別オリジンで配信し、Easy AuthのCookieを受け取らず
-  表示grantだけで制御するため、Easy Authは不要。stagingは0レプリカまで縮退する
+  表示grantだけで制御するため、Easy Authは不要。stagingも最小1レプリカにする
+  (0レプリカからの起動は約45秒かかり、60秒の表示grantに対して余裕がない)
 - Preview: Queueにメッセージがあるときだけ起動し、1実行1メッセージで使い捨てにし、
   CPU・メモリ上限と読み取り専用filesystemを付けたContainer Apps Jobで実行する
 - Migration・Maintenance・DB初期設定: 実行して終わる処理で、private endpointだけで公開する

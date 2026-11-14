@@ -169,7 +169,7 @@ export default function AdminDocuments({ loaderData }: Route.ComponentProps) {
                 確認画面へ遷移するだけで、資料は更新しない。
               */}
               <a
-                className="button button-secondary"
+                className="button button-secondary document-card-action-end"
                 href={`/documents/${document.id}/delete`}
               >
                 強制削除

@@ -341,7 +341,7 @@ dd {
 }
 
 /* 削除は他の操作から離し、カードの右端へ寄せる。 */
-.document-card .document-card-actions form {
+.document-card .document-card-action-end {
   margin-left: auto;
 }
 

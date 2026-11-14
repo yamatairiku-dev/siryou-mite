@@ -8,7 +8,7 @@
   "scripts": {
     "build": "react-router build",
     "dev": "react-router dev --host",
-    "start": "react-router-serve ./build/server/index.js",
+    "start": "react-router-serve ./server/web-build.mjs",
     "typecheck": "react-router typegen && tsc --noEmit",
     "typecheck:services": "tsc -p tsconfig.services.json --noEmit",
     "build:services": "tsc -p tsconfig.services.json",

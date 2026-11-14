@@ -1,8 +1,17 @@
+import { env } from "~/lib/env.server";
+
+/**
+ * cookie認証のmutationが、このアプリの画面から送られたことを確認する(CSRF対策)。
+ *
+ * `Origin` headerを、設定済みの公開オリジン(`APP_ORIGIN`)と完全一致で比較する。
+ * `request.url`とは比較しない。AzureではingressがTLSを終端し、Webには`http://`で届くため、
+ * `request.url`のschemeは公開オリジン(`https://`)と一致しない。また`request.url`のhostは
+ * 要求の`Host` header由来で、設定値より信頼できない。
+ */
 export function assertSameOrigin(request: Request): void {
   const origin = request.headers.get("Origin");
-  const expectedOrigin = new URL(request.url).origin;
 
-  if (!origin || origin !== expectedOrigin) {
+  if (!origin || origin !== env.APP_ORIGIN) {
     throw new Response("不正なリクエストです", { status: 403 });
   }
 }

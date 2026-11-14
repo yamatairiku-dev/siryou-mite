@@ -96,7 +96,7 @@ Maintenance Job用)。`services/`配下は`app/`をimportせず、共通の検�
 | `NODE_ENV` | 実行環境 | 本番・stagingは`production`を必須設定(fail closedの本番制約が働く条件) |
 | `PORT` | Webが待受けるport(既定3000) | Container Appsのingressの`targetPort`(8080)に合わせる |
 | `APP_NAME` | 画面タイトル等に表示するアプリ名 | 既定値は`資料みて！`。検証環境などで見分けたい場合だけ変更する |
-| `APP_ORIGIN` | Webのオリジン | 同一オリジン検証(`assertSameOrigin`)とEasy Auth callbackの基準になる値と一致させる |
+| `APP_ORIGIN` | Webのオリジン | 利用者がブラウザで開くWebのオリジン(`https://<公開host>`)と完全に一致させる。Origin検査(`assertSameOrigin`とReact RouterのCSRF検査)とEasy Auth callbackの基準になり、一致しないとログインを含むすべての更新操作が拒否される |
 | `AUTH_MODE` | 認証方式(`dev`/`easyauth`) | `NODE_ENV=production`のときは`easyauth`必須(`dev`は起動時のZod検証で拒否される) |
 | `SESSION_SECRET` | ローカル`AUTH_MODE=dev`専用のセッション署名鍵 | 本番(`AUTH_MODE=easyauth`)では設定しない |
 | `SESSION_MAX_AGE_SECONDS` | `AUTH_MODE=dev`セッションの有効期間 | 同上、本番では未使用 |
@@ -127,7 +127,7 @@ Web・Display・Migration Job・Maintenance Jobは**同じNode.js image**を使�
 
 | 実行単位 | 起動command |
 |---|---|
-| Web(Container Apps) | `node node_modules/@react-router/serve/bin.cjs ./build/server/index.js`(imageの既定CMD) |
+| Web(Container Apps) | `node node_modules/@react-router/serve/bin.cjs ./server/web-build.mjs`(imageの既定CMD。`server/web-build.mjs`は`APP_ORIGIN`から許可Originを決めてReact Routerのbuildへ渡す) |
 | Display(Container Apps) | `node build/services/display/index.js` |
 | Migration Job | `node build/services/migrate/index.js` |
 | Maintenance Job | `node build/services/maintenance/index.js` |

@@ -18,6 +18,54 @@ test.describe("未ログイン", () => {
   });
 });
 
+test.describe("ログイン前の画面(設計 §7.1.1)", () => {
+  /** Easy Authの認証除外path。これ以外の未認証要求はEntra IDへ転送され、読み込めない。 */
+  function isExcludedFromAuth(pathname: string): boolean {
+    return (
+      pathname === "/" ||
+      pathname === "/auth/login" ||
+      pathname === "/health" ||
+      pathname === "/favicon.svg" ||
+      pathname.startsWith("/assets/")
+    );
+  }
+
+  test("認証除外pathだけを読み込み、ログインはdocument全体の遷移で行う", async ({
+    page,
+  }) => {
+    const requestedPaths: string[] = [];
+    page.on("request", (request) => {
+      requestedPaths.push(new URL(request.url()).pathname);
+    });
+
+    await page.goto("/");
+    await page.getByRole("link", { name: "ログインして開始" }).click();
+    const loginButton = page.getByRole("button", { name: "Microsoftでログイン" });
+    await expect(loginButton).toBeVisible();
+    await page.waitForLoadState("networkidle");
+
+    // route探索(`/__manifest`)やloaderのfetch(`*.data`)が起きていないこと。
+    expect(requestedPaths.filter((path) => !isExcludedFromAuth(path))).toEqual([]);
+
+    // ログインはブラウザ標準のform送信で`/auth/login`へPOSTし、Easy Authの
+    // `/.auth/login/aad`(このE2E環境には実在しない)へdocumentとして遷移する。
+    const loginPost = page.waitForRequest(
+      (request) =>
+        request.method() === "POST" &&
+        request.isNavigationRequest() &&
+        new URL(request.url()).pathname === "/auth/login",
+    );
+    const easyAuthNavigation = page.waitForRequest(
+      (request) =>
+        request.isNavigationRequest() &&
+        new URL(request.url()).pathname === "/.auth/login/aad",
+    );
+    await loginButton.click();
+    await loginPost;
+    await easyAuthNavigation;
+  });
+});
+
 test.describe("正常なログイン(設計 §4.1, §4.2)", () => {
   test("Userロール・複数所属コードでアプリを利用できる", async ({ browser }) => {
     const user = createPersona({
@@ -200,7 +248,15 @@ test.describe("ログアウト(設計 §5.1)", () => {
     const page = await context.newPage();
     await page.goto("/app");
 
+    // `/.auth/logout`はアプリのrouteではない。画面内の遷移(URLだけが変わり404になる)では
+    // なく、ブラウザがdocumentとして要求することを確認する。
+    const logoutNavigation = page.waitForRequest(
+      (request) =>
+        request.isNavigationRequest() &&
+        new URL(request.url()).pathname === "/.auth/logout",
+    );
     await page.getByRole("button", { name: "ログアウト" }).click();
+    await logoutNavigation;
     // Easy Authの`/.auth/logout`はこのE2E環境には実在しない(App Service platform
     // 機能のため)。ブラウザが最終的にそこへ遷移することだけを確認する
     // (実際のセッション破棄はEasy Auth側の責務、設計 §7.1)。

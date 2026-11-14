@@ -1,4 +1,8 @@
-import { createCookieSessionStorage, redirect } from "react-router";
+import {
+  createCookieSessionStorage,
+  redirect,
+  redirectDocument,
+} from "react-router";
 import { parseEasyAuthPrincipal } from "~/lib/auth/easy-auth.server";
 import { hasAppAccessRole } from "~/lib/auth/roles.server";
 import { env } from "~/lib/env.server";
@@ -73,8 +77,10 @@ export async function createUserSession(
 
 export async function destroyUserSession(request: Request): Promise<Response> {
   if (env.AUTH_MODE === "easyauth") {
+    // `/.auth/logout`はEasy Authのendpointで、アプリのrouteではない。画面内の遷移
+    // (client side navigation)として扱うと404になるため、document全体の遷移にする。
     const postLogoutUri = new URL("/", env.APP_ORIGIN).toString();
-    return redirect(
+    return redirectDocument(
       `/.auth/logout?post_logout_redirect_uri=${encodeURIComponent(postLogoutUri)}`,
     );
   }

@@ -118,6 +118,8 @@ Microsoft Graphは呼ばず、Token Storeも有効にしない。
 - ログイン済みの場合は初期画面へ遷移する。
 - ログアウトもアプリのPOST actionで同一オリジンを確認してから
   `/.auth/logout`へ遷移する。
+- `/.auth/login/aad`と`/.auth/logout`はEasy Authのendpointで、アプリのrouteではない。
+  ログインとログアウトは画面内の遷移にせず、document全体の遷移で行う。
 
 ### 5.2 初期画面
 
@@ -338,7 +340,10 @@ flowchart LR
   allowlistで扱う。未知のclaim typeは認証・認可へ使用しない
 - `tid`が構成値と異なる場合、または`User`・`Admin`がない場合は拒否する。所属は任意の属性で、
   無くても拒否しない
-- cookie認証のすべてのmutation actionで`assertSameOrigin(request)`を呼ぶ
+- cookie認証のすべてのmutation actionで`assertSameOrigin(request)`を呼ぶ。`Origin`を
+  設定済みの公開オリジン(`APP_ORIGIN`)と完全一致で比較し、`request.url`とは比較しない
+  (ingressがTLSを終端するため、Webから見た`request.url`のschemeは`http`になる)。
+  React Routerの組み込みCSRF検査にも、`APP_ORIGIN`のhostだけを許可Originとして渡す
 - URLパラメーター、FormData、検索条件をZodで検証する
 - アップロードは`POST /documents`へ`application/octet-stream`で送り、UTF-8
   ファイル名は`X-File-Name`へbase64urlで格納する
@@ -352,7 +357,12 @@ portal上の手変更を正本にしない。
 - platform authenticationを有効にし、Microsoft Entra ID providerだけを使用する
 - single-tenant issuerを指定し、許可するtoken audienceをこのWebアプリ登録に限定する
 - 未認証要求はWeb向けにMicrosoft Entra IDへ`302`でリダイレクトする
-- `/`、`/auth/login`、`/health`だけを認証除外pathとする。業務routeは除外しない
+- 認証除外pathは`/`、`/auth/login`、`/health`と、匿名で表示する画面が読み込む静的ファイル
+  (`/assets/*`、`/favicon.svg`)だけとする。業務routeは除外しない。`/assets/*`はbuildが出力する
+  CSS・JavaScriptで、秘密情報・業務データを含まない。除外しないと、ログイン前の画面で
+  CSS・JavaScriptがEntra IDへ転送されて読み込めない
+- ログイン前の画面からのfetch(`/auth/login.data`への送信、`/__manifest`のroute探索)は
+  認証除外pathに含めない。ログインformはブラウザ標準の送信(document全体の遷移)だけを使う
 - `/.auth/login/aad`と`/.auth/logout`を使用し、アプリ独自callbackを公開しない
 - Microsoft Graphを呼ばないためToken Storeを無効にし、client secretも設定しない
   (IDトークンだけを受け取る)

@@ -189,43 +189,54 @@ async function waitForHealth(port) {
   fail(`port ${port} の起動を確認できませんでした`);
 }
 
-startServer(
-  "Web",
-  ["node_modules/@react-router/serve/bin.cjs", "build/server/index.js"],
-  webEnv,
-);
-await waitForHealth(WEB_INTERNAL_PORT);
-
 /**
- * DisplayはWebのオリジン(`APP_ORIGIN`)と完全一致するOriginからの要求だけを受け付ける
- * (設計 §7.2)。ローカルではport転送の仕方によってブラウザから見たWebのオリジンが
- * 変わる(`localhost:3000`、composeが公開する`localhost:3001`、`127.0.0.1`など)ため、
- * ブラウザが実際に使ったHostに合わせてDisplayを起動し直す。Displayの検証そのものは
- * 緩めない。
+ * WebとDisplayは、Webの公開オリジン(`APP_ORIGIN`)と完全一致するOriginからの要求だけを
+ * 受け付ける(Webは`assertSameOrigin`とReact RouterのCSRF検査、Displayは設計 §7.2)。
+ * ローカルではport転送の仕方によってブラウザから見たWebのオリジンが変わる
+ * (`localhost:3000`、composeが公開する`localhost:3001`、`127.0.0.1`など)ため、
+ * ブラウザが実際に使ったHostに合わせてWebとDisplayを起動し直す。検証そのものは緩めない。
+ * 開発用セッションは署名付きcookieで、署名鍵は起動し直しても同じため、ログインは保たれる。
  */
+let webChild = null;
 let displayChild = null;
-let displayAppOrigin = null;
-let displaySwitch = Promise.resolve();
+let currentAppOrigin = null;
+let originSwitch = Promise.resolve();
 
-function ensureDisplayFor(appOrigin) {
-  displaySwitch = displaySwitch.then(async () => {
-    if (appOrigin === displayAppOrigin) return;
-    if (displayChild) {
-      const previous = displayChild;
-      previous.replaced = true;
-      const exited = new Promise((resolve) => previous.once("exit", resolve));
-      previous.kill("SIGTERM");
-      await exited;
-    }
-    displayAppOrigin = appOrigin;
-    displayChild = startServer("Display", ["build/services/display/index.js"], {
-      ...displayBaseEnv,
-      APP_ORIGIN: appOrigin,
-    });
-    await waitForHealth(DISPLAY_PORT);
-    console.log(`[local] Displayが受け付けるWebのオリジン: ${appOrigin}`);
+async function replaceServer(previous, label, args, env, port) {
+  if (previous) {
+    previous.replaced = true;
+    const exited = new Promise((resolve) => previous.once("exit", resolve));
+    previous.kill("SIGTERM");
+    await exited;
+  }
+  const child = startServer(label, args, env);
+  await waitForHealth(port);
+  return child;
+}
+
+function ensureServersFor(appOrigin) {
+  originSwitch = originSwitch.then(async () => {
+    if (appOrigin === currentAppOrigin) return;
+    currentAppOrigin = appOrigin;
+    [webChild, displayChild] = await Promise.all([
+      replaceServer(
+        webChild,
+        "Web",
+        ["node_modules/@react-router/serve/bin.cjs", "server/web-build.mjs"],
+        { ...webEnv, APP_ORIGIN: appOrigin },
+        WEB_INTERNAL_PORT,
+      ),
+      replaceServer(
+        displayChild,
+        "Display",
+        ["build/services/display/index.js"],
+        { ...displayBaseEnv, APP_ORIGIN: appOrigin },
+        DISPLAY_PORT,
+      ),
+    ]);
+    console.log(`[local] Web・Displayが受け付けるWebのオリジン: ${appOrigin}`);
   });
-  return displaySwitch;
+  return originSwitch;
 }
 
 const localHostPattern = /^(localhost|127\.0\.0\.1)(:\d{1,5})?$/;
@@ -238,7 +249,7 @@ proxy = http.createServer(async (request, response) => {
     return;
   }
   if (request.url !== "/health") {
-    await ensureDisplayFor(`http://${host}`);
+    await ensureServersFor(`http://${host}`);
   }
   const upstream = http.request(
     {
@@ -259,8 +270,8 @@ proxy = http.createServer(async (request, response) => {
   });
   request.pipe(upstream);
 });
+await ensureServersFor(`http://localhost:${WEB_PORT}`);
 proxy.listen(WEB_PORT);
-await ensureDisplayFor(`http://localhost:${WEB_PORT}`);
 
 // Preview Job: 1実行1メッセージ。Queueが空なら何もせず終わるので、出力は捨てる。
 function runPreviewOnce() {

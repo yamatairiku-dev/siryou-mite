@@ -69,7 +69,11 @@ export function SiteHeader({
           >
             {canUseAdminScreen && <AdminNav pathname={pathname} />}
             <span className="user-name">{userName}</span>
-            <Form action="/auth/logout" method="post">
+            {/*
+              ログアウトはブラウザ標準のform送信(document全体の遷移)で行う。遷移先は
+              Easy Authの`/.auth/logout`とEntra IDで、アプリのrouteではない。
+            */}
+            <Form action="/auth/logout" method="post" reloadDocument>
               <button className="button button-secondary" type="submit">
                 ログアウト
               </button>

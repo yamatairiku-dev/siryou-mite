@@ -231,5 +231,8 @@ describe("Easy Auth経路のrequireUser", () => {
       new Request("http://localhost:3000/auth/logout", { method: "POST" }),
     );
     expect(response.headers.get("Location")).toContain("/.auth/logout");
+    // `/.auth/logout`はアプリのrouteではないため、画面内の遷移ではなくdocument全体の
+    // 遷移にする(React Routerは`X-Remix-Reload-Document`で判断する)。
+    expect(response.headers.get("X-Remix-Reload-Document")).toBe("true");
   });
 });

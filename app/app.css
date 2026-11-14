@@ -390,6 +390,19 @@ dd {
   margin: 0;
 }
 
+/* 管理画面どうしを行き来する導線。 */
+.admin-nav {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 20px;
+}
+
+.admin-nav-back {
+  margin-left: auto;
+}
+
 /* 管理画面・監査履歴画面の検索フォーム(設計 §5.6, §5.7)。 */
 .admin-search-form {
   align-items: end;

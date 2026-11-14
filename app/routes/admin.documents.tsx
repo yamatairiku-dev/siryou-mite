@@ -23,6 +23,7 @@ import {
   formatJstDateTime,
   formatPreviewStatus,
 } from "~/lib/format/document-view";
+import { AdminNav } from "~/lib/format/admin-nav";
 import { PreviewImage } from "~/lib/format/preview-image";
 
 export async function loader({
@@ -60,6 +61,7 @@ export default function AdminDocuments({ loaderData }: Route.ComponentProps) {
     <section>
       <p className="eyebrow">資料みて！ 管理画面</p>
       <h1>全資料の検索</h1>
+      <AdminNav current="documents" />
       <p className="lead">
         資料ID、オーナーのメールアドレス、元ファイル名、アップロード日時で検索できます。
         条件を空欄にすると絞り込みません。

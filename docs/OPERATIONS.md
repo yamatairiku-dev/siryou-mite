@@ -378,10 +378,10 @@ devcontainerには導入済みです。CIで実行する場合は
   無いため、Container Apps環境のサブネットにNAT Gatewayを付ける
 
 概算費用(Japan East、1ドル150円、2026-10時点の公開価格からの目安。正式な見積もりは
-設計 §21 の未決事項): Container AppsのWeb(0.5 vCPU・1GiB・最小1レプリカ)約1,800円、
-PostgreSQL B1ms+32GB 約2,500円、private endpoint 4個 約4,400円、NAT Gateway+固定IP
-約5,500円(+通信量)、ACR Basic 約750円、Log Analytics・Display・各Job(従量)少額で、
-合計**月1.5万〜2万円程度**。
+設計 §21 の未決事項): Container AppsのWebとDisplay(各0.5 vCPU・1GiB・最小1レプリカ)
+各約1,800円、PostgreSQL B1ms+32GB 約2,500円、private endpoint 4個 約4,400円、
+NAT Gateway+固定IP 約5,500円(+通信量)、ACR Basic 約750円、Log Analytics・各Job(従量)
+少額で、合計**月1.5万〜2万円程度**。
 
 ### 0. 前提
 

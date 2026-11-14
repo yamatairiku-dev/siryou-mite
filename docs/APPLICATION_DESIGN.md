@@ -493,7 +493,8 @@ Azure Database for PostgreSQL Flexible Serverを使い、資料メタデータ�
 - production WebとDisplayはそれぞれ0.5 vCPU、1GB、最小1・最大3レプリカとする。
   アップロード上限の判定はDBで行うため、Webを複数レプリカにしても上限は崩れない。
 - staging WebはEasy Authの結合試験で起動待ちを避けるため最小1レプリカとする。
-  staging Displayは最小0レプリカとする。
+  staging Displayも最小1レプリカとする。0レプリカからの起動は最初の応答まで約45秒かかり
+  (2026-11-15にstagingで計測)、有効期間60秒の表示grant(§7.2)に対して余裕がないため。
 - Preview Jobは1 vCPU、2GB、最大2件並列とする。
 - Migration・Maintenance・DB初期設定Jobは0.5 vCPU、1GB、並列実行しない。
 - Container Apps環境のゾーン冗長はproduction、stagingとも使用しない。

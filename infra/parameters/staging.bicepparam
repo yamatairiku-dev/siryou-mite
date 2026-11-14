@@ -25,5 +25,5 @@ param webMinReplicas = 1
 param postgresSkuName = 'Standard_B1ms'
 param postgresSkuTier = 'Burstable'
 param postgresStorageAutoGrow = false
-param displayMinReplicas = 0
+param displayMinReplicas = 1
 param keyVaultPurgeProtection = false

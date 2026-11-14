@@ -169,7 +169,8 @@ Chromiumを含む別imageのQueue駆動Container Apps Jobで最大3回試行し�
   sidecarに限定し、sidecarを通らない経路になり得るDaprは有効にしない。Easy Auth設定
   (`authConfigs`)はBicepで管理する
 - Display: アップロードされたHTMLを別オリジンで配信し、Easy AuthのCookieを受け取らず
-  表示grantだけで制御するため、Easy Authは不要。stagingは0レプリカまで縮退する
+  表示grantだけで制御するため、Easy Authは不要。stagingも最小1レプリカにする
+  (0レプリカからの起動は約45秒かかり、60秒の表示grantに対して余裕がない)
 - Preview: Queueにメッセージがあるときだけ起動し、1実行1メッセージで使い捨てにし、
   CPU・メモリ上限と読み取り専用filesystemを付けたContainer Apps Jobで実行する
 - Migration・Maintenance・DB初期設定: 実行して終わる処理で、private endpointだけで公開する

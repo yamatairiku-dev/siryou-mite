@@ -297,8 +297,9 @@ resource rendererPool 'Microsoft.App/sessionPools@2025-01-01' = {
     dynamicPoolConfiguration: {
       lifecycleConfiguration: {
         lifecycleType: 'OnContainerExit'
-        // 撮影サービス自身の撮影上限(25秒)を超えて残ったセッションを破棄する
-        maxAlivePeriodInSeconds: 120
+        // 撮影後に終了しなかったセッションを破棄する上限。Azureの下限が300秒
+        // (撮影サービス自身は25秒で撮影を打ち切り、応答後に終了する)
+        maxAlivePeriodInSeconds: 300
       }
     }
     sessionNetworkConfiguration: { status: 'EgressDisabled' }

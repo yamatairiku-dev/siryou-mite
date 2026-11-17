@@ -168,7 +168,7 @@ Bicep(`infra/modules/container-apps.bicep`の`rendererPool`、名前`sp-<prefix>
 
 - `EgressDisabled`: セッションから外向きの通信を一切しない(設計 §8)
 - `OnContainerExit`: 撮影サービスは1件撮影したら終了し(`RENDERER_EXIT_AFTER_RENDER=true`)、
-  セッションが破棄される。残ったセッションも120秒(`maxAlivePeriodInSeconds`)で破棄される
+  セッションが破棄される。終了しなかったセッションも300秒(`maxAlivePeriodInSeconds`、Azureの下限)で破棄される
 - 待機セッション数は`rendererReadySessions`(既定1、最小1)。0にすると撮影のたびにimage
   (約1GB)の取得から始まり、Preview Jobの処理上限(30秒)に間に合わない
 - 同時セッションは最大4(Preview Jobの最大並列2に余裕を足した値)、各セッション1 vCPU・2GB

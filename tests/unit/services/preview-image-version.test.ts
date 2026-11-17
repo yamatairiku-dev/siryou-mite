@@ -3,11 +3,11 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Preview Job専用image(`Dockerfile.preview`)のbase imageのtagが、image内で
+ * 撮影サービス専用image(`Dockerfile.preview`)のbase imageのtagが、image内で
  * Chromiumを起動する`playwright-core`のversionと一致すること(設計 §7.5)。
  *
  * image内のbrowserはbase imageが配置したものを使うため、versionがずれると
- * Preview Jobの実行時にbrowserが見つからず起動できない。CIはこのimageの中で
+ * 撮影サービスの実行時にbrowserが見つからず起動できない。CIはこのimageの中で
  * Chromiumを起動しないため、Dependabotが`@playwright/test`だけを上げたときに
  * ここで検出する。
  */
@@ -24,7 +24,7 @@ function previewBaseImageVersion(): string | undefined {
   return match?.[1];
 }
 
-describe("Preview Job imageのPlaywright version(設計 §7.5)", () => {
+describe("撮影サービスimageのPlaywright version(設計 §7.5)", () => {
   it("base imageのtagが`package.json`の`@playwright/test`と一致する", () => {
     const packageJson = JSON.parse(readRepoFile("package.json")) as {
       devDependencies: Record<string, string>;

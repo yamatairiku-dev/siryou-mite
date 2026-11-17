@@ -34,6 +34,22 @@ describe("サービスのエントリーポイント", () => {
     logSpy.mockRestore();
   });
 
+  it("preview-renderer は公開する経路を説明し、importだけでは起動しない", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const service = await import("../../../services/preview-renderer/index");
+
+    expect(service.SERVICE_NAME).toBe("preview-renderer");
+    // 公開するのは`GET /health`と`POST /render`だけ(設計 §7.5)。
+    expect(service.describeService()).toContain("GET /health");
+    expect(service.describeService()).toContain("POST /render");
+
+    // 環境変数の検証もサーバー起動もimport時には行わない。
+    expect(logSpy).not.toHaveBeenCalled();
+
+    logSpy.mockRestore();
+  });
+
   it("display は公開する経路を説明し、importだけでは起動しない(T12で実装済み)", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 

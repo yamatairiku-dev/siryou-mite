@@ -68,6 +68,8 @@ function previewEnvironment(): ReturnType<typeof parsePreviewEnvironment> {
     AZURE_STORAGE_CONTAINER: containerName,
     AZURE_STORAGE_QUEUE_NAME: queueName,
     LOG_HMAC_KEY: Buffer.alloc(32, 9).toString("base64"),
+    // 撮影は`capturePreview`で差し替えるため、撮影サービスへは接続しない。
+    PREVIEW_RENDERER_URL: "http://127.0.0.1:9",
   });
 }
 

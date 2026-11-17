@@ -17,11 +17,12 @@ Node.jsプロセスで構成します。
 |---|---|
 | Web | React Router BFF。アップロード、資料一覧・表示画面・削除・管理画面(`app/`) |
 | Display | アップロードされたHTMLを別オリジンで配信するNode.js標準HTTPサーバー(`services/display/`) |
-| Preview Job | Playwright(Chromium)でHTMLの静止画プレビューを生成するQueue駆動Job(`services/preview/`) |
+| Preview Job | HTMLの静止画プレビューを生成するQueue駆動Job。撮影は撮影サービスへ任せる(`services/preview/`) |
+| 撮影サービス | Playwright(Chromium)でHTMLを撮影してJPEGを返す。Azureではdynamic sessionsのセッションで動く(`services/preview-renderer/`) |
 | Maintenance Job | Blob削除の再試行、監査・削除済み資料の保持期間経過後purgeなどを行う定期Job(`services/maintenance/`) |
 
-Web・Display・Migration・Maintenanceは同じNode.js image(`Dockerfile`)を使い、
-起動commandだけを切り替えます。Preview JobだけはChromiumを含む専用image
+Web・Display・Preview Job・Migration・Maintenanceは同じNode.js image(`Dockerfile`)を使い、
+起動commandだけを切り替えます。撮影サービスだけはChromiumを含む専用image
 (`Dockerfile.preview`)を使います。
 
 ## 前提
@@ -29,7 +30,7 @@ Web・Display・Migration・Maintenanceは同じNode.js image(`Dockerfile`)を�
 - Dev Container(`.devcontainer/`)での開発を前提とします。PostgreSQL(`postgres:5432`)と
   Azurite(`azurite:10000`/`10001`)がdevcontainerのcomposeで併せて起動します
 - Node.js `>=24.14.0`(`package.json`の`engines`)
-- Preview Jobの結合テスト・ローカル実行にはPlaywrightのChromium browser binaryが
+- 撮影サービスの結合テスト・ローカル実行にはPlaywrightのChromium browser binaryが
   必要です(devcontainerには導入済み)
 
 ## セットアップ
@@ -60,7 +61,7 @@ Dev Containerを起動するとPostgreSQLと併せてAdminerも常時起動し�
 
 ## ローカルで一通り動かす
 
-Web・Display・Preview Jobをまとめて起動し、ログイン → アップロード → プレビュー生成 →
+Web・Display・Preview Job・撮影サービスをまとめて起動し、ログイン → アップロード → プレビュー生成 →
 資料表示までをローカルで確認できます(Azureには接続しません)。
 
 ```bash
@@ -68,7 +69,8 @@ npm run local
 ```
 
 - `http://localhost:3000` を開き、開発ユーザーでログインします(`AUTH_MODE=dev`)
-- Displayは `http://localhost:3100`、Preview Jobは3秒おきにQueueを1件処理します
+- Displayは `http://localhost:3100`、Preview Jobは3秒おきにQueueを1件処理し、撮影は常駐させた
+  撮影サービス(`http://127.0.0.1:3200`)へ任せます
 - WebとDisplayは、ブラウザが実際に開いているWebのオリジン(`localhost:3000`、composeが公開する
   `localhost:3001`、`127.0.0.1` など)に合わせて自動で起動し直します。Origin検証は緩めていません
   (WebもDisplayも、`APP_ORIGIN`と完全一致するOriginだけを受け付けます)
@@ -98,7 +100,8 @@ Display・Preview Job・Maintenance JobはReact Routerに依存しない独立�
 ```bash
 npm run build:services
 node build/services/display/index.js       # HTML表示サービス(Display)
-node build/services/preview/index.js       # プレビュー生成ワーカー(1回の実行でQueueを1件処理)
+node build/services/preview-renderer/index.js # 撮影サービス(既定port 8080で常駐)
+node build/services/preview/index.js       # プレビュー生成ワーカー(1回の実行でQueueを1件処理。PREVIEW_RENDERER_URLが必要)
 node build/services/maintenance/index.js   # 定期保守Job(1回の実行で保守処理をまとめて実行)
 ```
 
@@ -140,7 +143,7 @@ Web・Display・Migration・Maintenance共通のimageを構築します。
 docker build --pull -t siryou-mite:検証 .
 ```
 
-Preview Job専用(Chromium同梱)のimageは別途構築します。
+撮影サービス専用(Chromium同梱)のimageは別途構築します。
 
 ```bash
 docker build --pull -f Dockerfile.preview -t siryou-mite-preview:検証 .

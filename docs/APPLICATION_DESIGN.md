@@ -319,6 +319,7 @@ flowchart LR
   APP --> BLOB["Azure Blob Storage<br>private"]
   APP --> QUEUE["Azure Storage Queue"]
   QUEUE --> WORKER["プレビュー生成Job<br>Azure Container Apps"]
+  WORKER -->|HTML / JPEG| RENDER["撮影サービス<br>Container Apps<br>dynamic sessions"]
   MAINT["保守Job<br>Azure Container Apps"] --> DB
   MAINT --> BLOB
   MIGRATE["Migration Job<br>Azure Container Apps"] --> DB
@@ -464,11 +465,22 @@ Azure Database for PostgreSQL Flexible Serverを使い、資料メタデータ�
 
 - 表示準備の完了後、Webアプリがプレビュー生成メッセージをStorage Queueへ送る。
 - Container Apps Jobはキューにメッセージがある場合だけ起動し、通常は停止する。
+- 撮影(Chromium)はPreview Jobの中では行わず、Container Appsのdynamic sessions
+  (カスタムコンテナのセッションプール。セッションごとにHyper-Vで分離される)で動く
+  撮影サービスへ任せる。Preview JobはHTMLを送り、JPEGを受け取るだけとする(Q-066)。
+  - 撮影サービスはQueue・DB・Blob・秘密値を持たず、Managed Identityもセッションの中から
+    使えない。外向きの通信は禁止する(セッションプールの`EgressDisabled`)。
+  - Preview Jobは資料ごとに新しいセッション識別子で呼び、撮影サービスは1件撮影したら
+    終了する。セッションは破棄され、別の資料の内容は残らない。
+  - Preview JobはManaged Identityでセッションプールを呼ぶ。呼び出し権限
+    (Azure ContainerApps Session Executor)はPreview Jobのidentityにだけ、プールの範囲で付ける。
+  - プールには撮影待ちのセッションを常に1つ以上用意する。待機セッションが無いと撮影のたびに
+    image取得から始まり、処理上限(30秒)に間に合わない。
 - 処理は同じメッセージを複数回受け取っても結果が壊れないようにする。
 - 最大3回試行し、3回失敗した場合はプレビュー状態を`failed`へ変更する。
 - 恒久失敗時はエラー分類を監査・運用ログへ記録してメッセージを削除し、
   専用の失敗キューは設けない。
-- ワーカーは非root、読み取り専用filesystem、短いtimeout、CPU・メモリ上限を使う。
+- 撮影サービスは非root、短いtimeout、CPU・メモリ上限を使う。
 - プレビュー生成ブラウザはJavaScript無効、外部ネットワーク接続なしで実行する。
 - ワーカーは処理ごとに破棄できる構成とする。
 - Queueメッセージは`schemaVersion`と`documentId`だけを含む。
@@ -480,22 +492,28 @@ Azure Database for PostgreSQL Flexible Serverを使い、資料メタデータ�
   Chromium sandbox有効、service worker無効、JavaScript無効で実行する。
 - 1280x720 viewport、白背景、animation無効、viewport範囲だけをJPEGで撮影する。
   描画timeoutは10秒とし、品質を下げても1MB以下にならない場合は`failed`とする。
-- Container Apps Job上でChromium sandboxが有効であることを確認するsecurity spikeを
-  Preview実装の完了条件とし、sandbox無効でしか起動できない構成は採用しない。
+- Chromium sandboxが有効であることを実行環境で確認するsecurity spikeをPreview実装の
+  完了条件とし、sandbox無効でしか起動できない構成は採用しない。Container Apps Jobでは
+  コンテナのseccompが非特権のuser namespaceの作成を拒否するためsandboxを使えず
+  (2026-11-15にstagingで確認)、dynamic sessionsでは使えることを2026-11-17に確認した(Q-066)。
 
 ### 7.6 実行単位とコンテナimage
 
 - Web、Display、各Jobはすべて同じContainer Apps環境で実行する(Q-064)。WebとDisplayは
   同じNode.js用Docker imageを異なるcommandとManaged Identityで使う。
-- Preview JobはChromiumを含む専用Dockerfileと専用imageを使う。
-- Migration Job、Maintenance Job、DB初期設定JobはWeb・Displayと同じNode.js imageを使う。
-- 6つのAzure実行単位に対し、コンテナimageは2種類だけとする。
+- 撮影サービス(dynamic sessionsのセッションプール)はChromiumを含む専用Dockerfileと
+  専用imageを使う。
+- Preview Job、Migration Job、Maintenance Job、DB初期設定JobはWeb・Displayと同じ
+  Node.js imageを使う。
+- 7つのAzure実行単位(撮影サービスのセッションプールを含む)に対し、コンテナimageは
+  2種類だけとする。
 - production WebとDisplayはそれぞれ0.5 vCPU、1GB、最小1・最大3レプリカとする。
   アップロード上限の判定はDBで行うため、Webを複数レプリカにしても上限は崩れない。
 - staging WebはEasy Authの結合試験で起動待ちを避けるため最小1レプリカとする。
   staging Displayも最小1レプリカとする。0レプリカからの起動は最初の応答まで約45秒かかり
   (2026-11-15にstagingで計測)、有効期間60秒の表示grant(§7.2)に対して余裕がないため。
-- Preview Jobは1 vCPU、2GB、最大2件並列とする。
+- Preview Jobは0.5 vCPU、1GB、最大2件並列とする。撮影サービスの各セッションは1 vCPU、2GB、
+  プール全体で同時4セッションまでとする。
 - Migration・Maintenance・DB初期設定Jobは0.5 vCPU、1GB、並列実行しない。
 - Container Apps環境のゾーン冗長はproduction、stagingとも使用しない。
 
@@ -518,7 +536,8 @@ Maintenance Jobを毎日UTC 18:00（JST 03:00）に実行する。Blob削除失�
   public network accessは無効化する。
 - ACRだけはGitHub-hosted runnerからpushするため、認証付きpublic endpointを有効にする。
   ACR管理者accountは無効化し、runtimeはManaged Identityの`AcrPull`を使う。
-- HTML表示サービスとプレビューワーカーから外部インターネットへの通信を禁止する。
+- HTML表示サービス、プレビューワーカー、撮影サービスから外部インターネットへの通信を
+  禁止する。撮影サービスはセッションプールの設定で外向きの通信を一切持たない。
 - Entra IDやAzure管理サービスへの必要な通信は、対象コンポーネントごとに限定する。
 - WebとDisplayには会社の異なるカスタムドメインを使う。正式なホスト名と証明書は
   環境別Bicepパラメーターとし、リポジトリへ実値を保存しない。
@@ -554,8 +573,9 @@ Maintenance Jobを毎日UTC 18:00（JST 03:00）に実行する。Blob削除失�
 productionへ設けない。Webでは、認証sidecarを通らずにアプリへ届く可能性があるDaprを
 有効にしない。同じ環境の他のアプリからの呼び出しもproxyと認証sidecarを通るが、同じ環境の
 コンテナがWebのレプリカへ直接接続できないことはAzureの文書で保証されていない。
-信頼できないHTMLを描画するPreview Jobと同じ環境に置くことによるこの分離の弱さは受け入れ、
-Preview JobのChromium sandbox有効化(§7.5)を前提とする(Q-064)。headerのJSON構造と
+信頼できないHTMLを描画するChromiumは、同じ環境のコンテナではなくdynamic sessionsの
+セッション(Hyper-Vで分離され、外向きの通信を持たない)で動かし、Chromium sandboxも
+有効にする(§7.5、Q-064、Q-066)。headerのJSON構造と
 必須claimはアプリでも検証するが、アプリ自身がトークン署名を再検証する構成ではない。
 
 ### 9.2 表示制御
@@ -992,7 +1012,8 @@ ZIP対応は初期リリースに含めないが、資料ID配下へ複数Blob�
 - Container Apps上のEasy Auth callbackと、内部環境での社内ネットワークからの到達性の検証結果
 - 運用担当者の共有メールアドレスと当番体制
 - Workload Identity向けConditional Accessのlicense・設定可否とreport-only検証結果
-- Container Apps Job上でのChromium sandbox security spike結果
+- dynamic sessions(撮影サービス)上でのChromium sandbox security spike結果(診断用の
+  セッションプールでは確認済み。stagingの撮影サービスでの確認が残る)
 - Azureサービスの正式な費用見積もり
 
 これらは環境固有値またはAzure上での検証結果であり、localでの業務機能実装開始を

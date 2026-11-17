@@ -4,6 +4,7 @@ import {
   assertSandboxArguments,
   blockAllRequests,
   capturePreviewJpeg,
+  classifyCaptureFailure,
   createPreviewBrowserLaunchOptions,
   createPreviewContextOptions,
   createPreviewScreenshotOptions,
@@ -428,5 +429,55 @@ describe("blockAllRequests", () => {
 
     expect(routes).toHaveLength(1);
     expect(routes[0]?.[0]).toBe("**/*");
+  });
+});
+
+describe("classifyCaptureFailure(運用ログへ出す撮影の失敗理由)", () => {
+  it("Chromiumがsandboxを使えない失敗をsandbox_unavailableにする(Container Appsで起きた失敗)", () => {
+    // Playwrightが返すmessageの形(Chromiumのstderrを含む)。
+    const error = new Error(
+      [
+        "browserType.launch: Target page, context or browser has been closed",
+        "Browser logs:",
+        "Chromium sandboxing failed!",
+        "[pid=19][err] [FATAL:content/browser/zygote_host/zygote_host_impl_linux.cc:130] No usable sandbox!",
+      ].join("\n"),
+    );
+
+    expect(classifyCaptureFailure(error)).toBe("sandbox_unavailable");
+  });
+
+  it("browserがimageに無い失敗をbrowser_missingにする(Playwrightとimageのversion不一致)", () => {
+    const error = new Error(
+      "browserType.launch: Executable doesn't exist at /ms-playwright/chromium-1/chrome",
+    );
+
+    expect(classifyCaptureFailure(error)).toBe("browser_missing");
+  });
+
+  it("描画・起動のtimeoutをtimeoutにする", () => {
+    const timeout = new Error("page.setContent: Timeout 10000ms exceeded.");
+    timeout.name = "TimeoutError";
+
+    expect(classifyCaptureFailure(timeout)).toBe("timeout");
+    expect(
+      classifyCaptureFailure(new Error("browserType.launch: Timeout 15000ms exceeded.")),
+    ).toBe("timeout");
+    expect(classifyCaptureFailure(AbortSignal.abort().reason)).toBe("timeout");
+  });
+
+  it("上限超過と危険な起動引数は専用の理由にする", () => {
+    expect(classifyCaptureFailure(new PreviewTooLargeError())).toBe("too_large");
+    expect(classifyCaptureFailure(new InsecureBrowserArgumentsError())).toBe(
+      "insecure_arguments",
+    );
+  });
+
+  it("それ以外はotherにし、例外のmessageを結果へ含めない", () => {
+    expect(
+      classifyCaptureFailure(new Error("page.screenshot: 秘密の資料タイトル")),
+    ).toBe("other");
+    expect(classifyCaptureFailure("文字列の例外")).toBe("other");
+    expect(classifyCaptureFailure(undefined)).toBe("other");
   });
 });

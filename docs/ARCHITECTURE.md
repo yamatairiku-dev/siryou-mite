@@ -158,8 +158,9 @@ grantはアプリJavaScriptがhidden formのPOST bodyでiframeへ送り、URL、
 
 Web、Display、Preview、Migration、Maintenance、DB初期設定はすべて同じContainer Apps環境で
 実行します。WebだけEasy Auth(Container Appsの組み込み認証)を有効にします。プレビュー生成は
-Chromiumを含む別imageのQueue駆動Container Apps Jobで最大3回試行し、JavaScriptと外部
-ネットワークを無効化します。
+Queue駆動のContainer Apps Jobで最大3回試行し、撮影そのものはdynamic sessions(セッション
+プール)で動くChromium入りの撮影サービスへ任せます。撮影はJavaScriptと外部ネットワークを
+無効にして行います。
 
 実行単位ごとの使い方は次のとおりです(設計 §7.1, §7.5, §7.6, §9.1)。
 
@@ -171,19 +172,25 @@ Chromiumを含む別imageのQueue駆動Container Apps Jobで最大3回試行し�
 - Display: アップロードされたHTMLを別オリジンで配信し、Easy AuthのCookieを受け取らず
   表示grantだけで制御するため、Easy Authは不要。stagingも最小1レプリカにする
   (0レプリカからの起動は約45秒かかり、60秒の表示grantに対して余裕がない)
-- Preview: Queueにメッセージがあるときだけ起動し、1実行1メッセージで使い捨てにし、
-  CPU・メモリ上限と読み取り専用filesystemを付けたContainer Apps Jobで実行する
+- Preview: Queueにメッセージがあるときだけ起動し、1実行1メッセージで使い捨てにする
+  Container Apps Job。Chromiumを持たず、HTMLを撮影サービスへ送ってJPEGを受け取る
+- 撮影サービス(`services/preview-renderer`): Container Appsのdynamic sessions(カスタム
+  コンテナのセッションプール)。セッションはHyper-Vで分離され、外向きの通信を持たず
+  (`EgressDisabled`)、Queue・DB・Blob・秘密値にも触れない。Preview Jobが資料ごとに新しい
+  セッション識別子で呼び、撮影サービスは1件撮影したら終了するため、セッションは使い回されない。
+  Container Apps Jobではコンテナのseccompがuser namespaceの作成を拒否し、Chromium sandboxを
+  使えなかったため、この形にした(Q-066)
 - Migration・Maintenance・DB初期設定: 実行して終わる処理で、private endpointだけで公開する
   PostgreSQLへ届く必要があるため、VNet内のContainer Apps Jobで実行する
 
 以前はWebだけをApp Serviceで実行する設計でした。Container AppsにもApp Serviceと同じ
 Easy Authがあり、client secretなし・Token Store無効・除外pathという本アプリの構成をそのまま
 取れるため、運用・ネットワーク・デプロイ方法を1種類にまとめる目的でContainer Appsへ
-寄せました。信頼できないHTMLを描画するPreview Jobと同じ環境に置くことによる分離の弱さは
-受け入れ、Preview JobのChromium sandbox有効化を前提にしています(Q-064)。
+寄せました。信頼できないHTMLを描画するChromiumは、Web・Displayと同じ環境のコンテナではなく
+dynamic sessionsのセッションで動かします(Q-064、Q-066)。
 
-container imageはNode.js用とPreview用(Chromium入り)の2種類だけで、Node.js用imageを
-commandとManaged Identityの違いでWeb・Display・各Jobに使い回します。
+container imageはNode.js用と撮影サービス用(Chromium入り、`Dockerfile.preview`)の2種類だけで、
+Node.js用imageをcommandとManaged Identityの違いでWeb・Display・各Jobに使い回します。
 
 ## データとAzure境界
 
@@ -409,7 +416,11 @@ services/
   display/env.ts          Display用環境変数schema
   preview/index.ts        Preview Job（プレビュー生成ワーカー）のエントリーポイント(環境変数検証・Job実行上限・終了コード)
   preview/worker.ts       1実行1メッセージの処理手順(dequeueCount判定・冪等性・失敗分類)
-  preview/capture.ts      Playwright(Chromium)での撮影と安全設定(sandbox有効・JS無効・通信遮断)
+  preview/capture.ts      Playwright(Chromium)での撮影と安全設定(sandbox有効・JS無効・通信遮断)。撮影サービスが使う
+  preview/renderer-client.ts 撮影サービス(セッションプール)の呼び出しと応答の検証
+  preview-renderer/index.ts  撮影サービスのエントリーポイント(1件撮影したら終了する設定を含む)
+  preview-renderer/server.ts 撮影サービスのHTTP処理(`GET /health`・`POST /render`)
+  preview-renderer/env.ts    撮影サービス用環境変数schema
   preview/dependencies.ts PreviewのQueue・DB・Blob・撮影の組み立て
   preview/env.ts          Preview Job用環境変数schema
   maintenance/index.ts    Maintenance Job（定期保守）のエントリーポイント(環境変数検証・Job実行上限・終了コード)
@@ -424,13 +435,13 @@ services/
   db-bootstrap/env.ts     DB初期設定Job用環境変数schema(対象identityの一覧)
   shared/db/entra-auth.ts Managed IdentityのEntra ID access tokenをpgのpasswordとして供給
 tsconfig.services.json    services/専用のTypeScript設定。build/services/へ出力
-Dockerfile                Web・Display・Migration・Maintenance・DB初期設定共通のNode.js image
-Dockerfile.preview        Preview Job専用image（Playwright公式Ubuntu image + Chromium）
+Dockerfile                Web・Display・Preview Job・Migration・Maintenance・DB初期設定共通のNode.js image
+Dockerfile.preview        撮影サービス専用image（Playwright公式Ubuntu image + Chromium）
 ```
 
 - `services/<name>/index.ts`をコンテナのentrypointとし、Web・Migration・Maintenanceと
   同じNode.js用Docker imageから`node build/services/<name>/index.js`を異なるcommandで
-  起動する想定にする（設計 §7.6）。Preview Jobだけは別途Chromiumを含む専用image
+  起動する想定にする（設計 §7.6）。撮影サービスだけは別途Chromiumを含む専用image
   (`Dockerfile.preview`、Playwright公式Ubuntu imageを`@playwright/test`と同じversionで固定)を
   使う。imageは合計2種類。
 - `tsconfig.services.json`は`app/`を含めず、Node.js 24のESM(`module`/`moduleResolution`:
@@ -539,8 +550,24 @@ frameworkは追加しません。
 ## プレビュー生成ワーカー(`services/preview/`)
 
 プレビュー画像は、Storage Queueのメッセージを1実行1件だけ処理するContainer Apps Jobで
-生成します(設計 §7.5, §10.2)。Chromiumを含む専用image(`Dockerfile.preview`)で動く
-唯一の実行単位です。
+生成します(設計 §7.5, §10.2)。撮影はJobの中では行わず、dynamic sessionsで動く撮影サービス
+(`services/preview-renderer/`、Chromiumを含む専用image `Dockerfile.preview`)へHTMLを送り、
+JPEGを受け取ります(Q-066)。
+
+- 撮影サービスの呼び出し(`renderer-client.ts`): `POST <プールの管理endpoint>/render?identifier=<UUID>`。
+  識別子を資料ごとに新しくするため、毎回別のセッションが割り当てられます。認証はPreview Jobの
+  Managed Identityのaccess token(scope `https://dynamicsessions.io/.default`。
+  `PREVIEW_RENDERER_AUTH=entra`、本番では必須)。200は`image/jpeg`かつ上限byte数以下の
+  ときだけ受け取り、422(`too_large`)は`PreviewTooLargeError`(再試行しない決定的失敗)、
+  それ以外は`PreviewRendererError`です。失敗の理由は撮影サービスが返す既知の固定値
+  (`sandbox_unavailable`など)だけを受け取り、運用ログ`preview_capture_failed`へ出します。
+- 撮影サービス(`services/preview-renderer/server.ts`): `GET /health`と`POST /render`だけを
+  公開します。HTMLの上限は10MB、同時に撮影するのは1件だけ(撮影中は503)、1件の撮影上限は
+  25秒(Preview Jobの処理上限30秒より短い)。要求元が接続を切ったらChromiumを閉じます。
+  `RENDERER_EXIT_AFTER_RENDER=true`(セッションプールの設定)では応答を返し終えたら終了し、
+  セッションプールの`OnContainerExit`でセッションが破棄されます。
+- ローカル(`npm run local`)では撮影サービスを常駐させ(port 3200)、Preview Jobは認証なしで
+  呼びます。
 
 - 責務を3つに分けています。`index.ts`が環境変数検証・Job実行上限(45秒)・終了コード、
   `worker.ts`が処理手順と判定(外部I/Oはすべて注入)、`capture.ts`がPlaywright(Chromium)
@@ -569,14 +596,14 @@ frameworkは追加しません。
   ページ取得にネットワークも`file://`も使わない (2)context単位の`route("**/*")`で
   すべてのsubresource要求を`abort`する (3)context を`offline: true`にする
   (4)JavaScript無効でスクリプト経由の通信を発生させない。加えてChromium起動引数で
-  telemetry・component update・Safe Browsingの背景通信を止めます。本番ではネットワーク側でも
-  egressを禁止します(設計 §8)。実際に遮断されることは、ローカルHTTPサーバーが撮影中に
+  telemetry・component update・Safe Browsingの背景通信を止めます。本番ではセッションプールの
+  `EgressDisabled`で、セッションからの外向きの通信をすべて禁止します(設計 §8)。実際に遮断されることは、ローカルHTTPサーバーが撮影中に
   1件も要求を受けないことで結合テストが確認します。
 - **メッセージ削除の失敗で業務結果を巻き戻しません**。`ready`更新後に削除だけ失敗した
   場合にそれを処理全体の失敗として扱うと、試行上限に達していれば成功済みのプレビューを
   `failed`へ書き換えてしまいます。削除失敗は分類だけを運用ログへ残し、再配信されたときに
   `pending`以外の資料として撮影せず削除します。
-- 多重timeout: 描画10秒(`capture.ts`) < 1メッセージの処理上限30秒(`withProcessingDeadline`)
+- 多重timeout: 描画10秒(`capture.ts`) < 撮影サービスの1件の上限25秒 < 1メッセージの処理上限30秒(`withProcessingDeadline`)
   < Job実行上限45秒(`index.ts`) < visibility timeout 60秒。環境変数schema(`env.ts`)が
   検証するのは**処理上限 + 後始末の見込み(`PREVIEW_FINALIZE_BUDGET_SECONDS`)が
   Job実行上限とvisibility timeoutの両方に収まること**で、満たさない設定ではJobが

@@ -5,8 +5,9 @@
 // - WebだけEasy Auth(authConfigs)を有効にする。Webでは認証sidecarを通らない経路になり得る
 //   Daprを有効にしない(設計 §9.1)
 // - 各実行単位は専用のManaged IdentityでACR・DB・Storage・Key Vaultへ接続する
-// - Web・Display・Migration・Maintenance・DB初期設定は同じNode.js imageをcommandだけ変えて使い、
-//   Preview Jobだけ専用image(設計 §7.6)
+// - Web・Display・Preview Job・Migration・Maintenance・DB初期設定は同じNode.js imageをcommandだけ
+//   変えて使う。Chromiumを含む専用imageは撮影サービス(dynamic sessionsのセッションプール)だけ
+//   (設計 §7.5, §7.6, Q-066)
 
 param namePrefix string
 param location string
@@ -19,7 +20,11 @@ param logAnalyticsSharedKey string
 param identities object
 param registryLoginServer string
 param appImage string
-param previewImage string
+@description('撮影サービス(services/preview-renderer)のimage。Chromiumを含む')
+param rendererImage string
+@description('撮影サービスのセッションプールで待機させるセッション数')
+@minValue(1)
+param rendererReadySessions int = 1
 
 param allowedClientIpRanges array
 @description('Webの最小レプリカ数。Easy Authのログインで起動待ちを避けるため1以上(設計 §7.6)')
@@ -264,8 +269,79 @@ resource display 'Microsoft.App/containerApps@2025-01-01' = {
   }
 }
 
+// 撮影サービス: Container Appsのdynamic sessions(カスタムコンテナのセッションプール)。
+// 各セッションはHyper-Vで分離され、Chromium sandboxを有効にしたまま動く(Container Apps Jobでは
+// seccompによりsandboxを使えない。2026-11-17にstagingで確認、Q-066)。
+// - 外向きの通信を禁止する(`EgressDisabled`、設計 §8)
+// - imageの取得にだけ専用identityを使い、セッションの中からは使えない(`lifecycle: 'None'`)
+// - 撮影サービスは1件撮影したら終了し(`RENDERER_EXIT_AFTER_RENDER`)、`OnContainerExit`で
+//   セッションが破棄される。Preview Jobは資料ごとに新しい識別子でセッションを割り当てるため、
+//   別の資料の内容がセッションに残らない
+resource rendererPool 'Microsoft.App/sessionPools@2025-01-01' = {
+  name: 'sp-${namePrefix}-renderer'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: { '${identities.renderer.id}': {} }
+  }
+  properties: {
+    environmentId: environment.id
+    poolManagementType: 'Dynamic'
+    containerType: 'CustomContainer'
+    scaleConfiguration: {
+      // Preview Jobの最大並列(2)に、セッション破棄の遅れを見込んだ余裕を足す
+      maxConcurrentSessions: 4
+      readySessionInstances: rendererReadySessions
+    }
+    dynamicPoolConfiguration: {
+      lifecycleConfiguration: {
+        lifecycleType: 'OnContainerExit'
+        // 撮影サービス自身の撮影上限(25秒)を超えて残ったセッションを破棄する
+        maxAlivePeriodInSeconds: 120
+      }
+    }
+    sessionNetworkConfiguration: { status: 'EgressDisabled' }
+    managedIdentitySettings: [
+      { identity: identities.renderer.id, lifecycle: 'None' }
+    ]
+    customContainerTemplate: {
+      registryCredentials: {
+        server: registryLoginServer
+        identity: identities.renderer.id
+      }
+      ingress: { targetPort: 8080 }
+      containers: [
+        {
+          name: 'renderer'
+          image: rendererImage
+          resources: { cpu: json('1'), memory: '2Gi' }
+          env: [
+            { name: 'NODE_ENV', value: 'production' }
+            { name: 'RENDERER_EXIT_AFTER_RENDER', value: 'true' }
+          ]
+        }
+      ]
+    }
+  }
+}
+
+// Preview Jobのidentityにだけ、このセッションプールを呼ぶ権限を付ける
+var sessionExecutorRole = '0fb8eba5-a2bb-4abe-b1c1-49dfad359bb0'
+
+resource rendererPoolExecutor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: rendererPool
+  name: guid(rendererPool.id, identities.preview.principalId, sessionExecutorRole)
+  properties: {
+    principalId: identities.preview.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', sessionExecutorRole)
+  }
+}
+
 // Preview Job: Queueにメッセージがある場合だけ起動し、1実行で1メッセージを処理する(設計 §7.5)。
-// 再試行はQueueの再配信で行うため、Job側の再試行は0にする。
+// 再試行はQueueの再配信で行うため、Job側の再試行は0にする。撮影は撮影サービスへ任せるため、
+// Chromiumを持たないNode.js imageで動く。
 resource previewJob 'Microsoft.App/jobs@2025-01-01' = {
   name: 'caj-${namePrefix}-preview'
   location: location
@@ -309,21 +385,21 @@ resource previewJob 'Microsoft.App/jobs@2025-01-01' = {
       containers: [
         {
           name: 'preview'
-          image: previewImage
+          image: appImage
           command: [ 'node', 'build/services/preview/index.js' ]
-          resources: { cpu: json('1'), memory: '2Gi' }
+          resources: { cpu: json('0.5'), memory: '1Gi' }
           env: concat(commonEnv, storageEnv, hmacSecretEnv, [
             { name: 'AZURE_CLIENT_ID', value: identities.preview.clientId }
             { name: 'DATABASE_URL', value: databaseUrls.preview }
             { name: 'AZURE_STORAGE_QUEUE_NAME', value: storageQueueName }
+            { name: 'PREVIEW_RENDERER_URL', value: rendererPool.properties.poolManagementEndpoint }
+            { name: 'PREVIEW_RENDERER_AUTH', value: 'entra' }
           ])
-          // Chromiumは書き込み可能な/tmpを必要とする(OPERATIONS.md「Preview Job専用image」)
-          volumeMounts: [ { volumeName: 'tmp', mountPath: '/tmp' } ]
         }
       ]
-      volumes: [ { name: 'tmp', storageType: 'EmptyDir' } ]
     }
   }
+  dependsOn: [ rendererPoolExecutor ]
 }
 
 // Maintenance Job: 毎日UTC 18:00(JST 03:00)に1回、並列実行しない(設計 §7.7)。
@@ -444,6 +520,7 @@ resource dbBootstrapJob 'Microsoft.App/jobs@2025-01-01' = {
 output webOrigin string = webOrigin
 output displayOrigin string = displayOrigin
 output environmentName string = environment.name
+output rendererPoolName string = rendererPool.name
 output jobNames object = {
   preview: previewJob.name
   maintenance: maintenanceJob.name

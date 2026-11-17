@@ -11,6 +11,8 @@
  *   子プロセスの環境変数としてだけ渡す(`.env`は読まず、ファイルにも書かない)
  * - Preview Jobは本番ではQueue駆動のJob(1実行1メッセージ)。ここでは同じ
  *   エントリーポイントを数秒おきに起動して代用する
+ * - 撮影サービスは本番ではdynamic sessionsのセッション(1件撮影したら破棄)。ここでは
+ *   常駐させ、Preview Jobから認証なしで呼ぶ
  */
 import { spawn, spawnSync } from "node:child_process";
 import { generateKeyPairSync, randomBytes } from "node:crypto";
@@ -24,6 +26,7 @@ const DISPLAY_PORT = Number(process.env.LOCAL_DISPLAY_PORT ?? 3100);
 // Web本体はコンテナ内だけで使うportで動かし、WEB_PORTにはこのスクリプトの中継を置く。
 const WEB_INTERNAL_PORT = WEB_PORT + 80;
 const DISPLAY_ORIGIN = `http://localhost:${DISPLAY_PORT}`;
+const RENDERER_PORT = Number(process.env.LOCAL_RENDERER_PORT ?? 3200);
 const PREVIEW_INTERVAL_MS = 3_000;
 const STORAGE_CONTAINER = "documents";
 const STORAGE_QUEUE_NAME = "preview-generation";
@@ -142,6 +145,15 @@ const displayBaseEnv = {
 const previewEnv = {
   ...commonEnv,
   AZURE_STORAGE_QUEUE_NAME: STORAGE_QUEUE_NAME,
+  PREVIEW_RENDERER_URL: `http://127.0.0.1:${RENDERER_PORT}`,
+};
+
+// 撮影サービスはDB・Storage・秘密値を持たないため、共通の環境変数を渡さない。
+const rendererEnv = {
+  PATH: process.env.PATH ?? "",
+  HOME: process.env.HOME ?? "",
+  NODE_ENV: "development",
+  PORT: String(RENDERER_PORT),
   ...(process.env.PLAYWRIGHT_BROWSERS_PATH
     ? { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH }
     : {}),
@@ -273,6 +285,9 @@ proxy = http.createServer(async (request, response) => {
 await ensureServersFor(`http://localhost:${WEB_PORT}`);
 proxy.listen(WEB_PORT);
 
+startServer("撮影サービス", ["build/services/preview-renderer/index.js"], rendererEnv);
+await waitForHealth(RENDERER_PORT);
+
 // Preview Job: 1実行1メッセージ。Queueが空なら何もせず終わるので、出力は捨てる。
 function runPreviewOnce() {
   if (stopping) return;
@@ -297,5 +312,5 @@ console.log(`
   Web     : http://localhost:${WEB_PORT}
             (composeが公開するport経由の http://localhost:3001 などでも開けます)
   Display : ${DISPLAY_ORIGIN}
-  Preview : ${PREVIEW_INTERVAL_MS / 1000}秒おきにQueueを1件処理
+  Preview : ${PREVIEW_INTERVAL_MS / 1000}秒おきにQueueを1件処理(撮影は http://127.0.0.1:${RENDERER_PORT})
 `);

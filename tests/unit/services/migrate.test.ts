@@ -106,4 +106,34 @@ describe("describeFailure", () => {
     ).toEqual({ errorName: "Error" });
     expect(describeFailure("string error")).toEqual({ errorName: "unknown" });
   });
+
+  it("Node.jsとAzure SDKのエラーコード、HTTP statusを返す(messageは含めない)", () => {
+    expect(
+      describeFailure(
+        Object.assign(new Error("getaddrinfo ENOTFOUND secret-host.example"), {
+          code: "ENOTFOUND",
+        }),
+      ),
+    ).toEqual({ errorName: "Error", errorCode: "ENOTFOUND" });
+
+    const restError = Object.assign(new Error("https://account.queue.example/q?sig=secret"), {
+      name: "RestError",
+      code: "AuthorizationFailure",
+      statusCode: 403,
+    });
+    expect(describeFailure(restError)).toEqual({
+      errorName: "RestError",
+      errorCode: "AuthorizationFailure",
+      statusCode: 403,
+    });
+    expect(JSON.stringify(describeFailure(restError))).not.toContain("secret");
+  });
+
+  it("statusCodeがHTTP statusの範囲に無い値・数値以外なら出さない", () => {
+    for (const statusCode of [0, 99, 600, 403.5, "403", null]) {
+      expect(
+        describeFailure(Object.assign(new Error("x"), { statusCode })),
+      ).toEqual({ errorName: "Error" });
+    }
+  });
 });

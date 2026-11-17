@@ -24,6 +24,14 @@ resource preview 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' =
   tags: tags
 }
 
+// 撮影サービスのセッションプールがACRからimageを取得するためだけに使う。セッションの中からは
+// 使えない(`managedIdentitySettings`の`lifecycle: 'None'`)。DB・Storageの権限は付けない。
+resource renderer 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'id-${namePrefix}-renderer'
+  location: location
+  tags: tags
+}
+
 resource maintenance 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: 'id-${namePrefix}-maintenance'
   location: location
@@ -60,6 +68,12 @@ output identities object = {
     name: preview.name
     clientId: preview.properties.clientId
     principalId: preview.properties.principalId
+  }
+  renderer: {
+    id: renderer.id
+    name: renderer.name
+    clientId: renderer.properties.clientId
+    principalId: renderer.properties.principalId
   }
   maintenance: {
     id: maintenance.id

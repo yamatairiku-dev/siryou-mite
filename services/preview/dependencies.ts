@@ -1,5 +1,5 @@
 /**
- * Preview Jobの外部I/O(Storage Queue・Blob Storage・PostgreSQL・Chromium)の組み立て。
+ * Preview Jobの外部I/O(Storage Queue・Blob Storage・PostgreSQL・撮影サービス)の組み立て。
  *
  * 設計: docs/APPLICATION_DESIGN.md §7.3, §7.4, §7.5, §15.1
  *
@@ -39,7 +39,13 @@ import {
   resolveStorageConnectionConfig,
   uploadDocumentPreview,
 } from "../shared/storage.js";
-import { capturePreviewJpeg } from "./capture.js";
+import { DefaultAzureCredential } from "@azure/identity";
+import { createAccessTokenProvider } from "../shared/db/entra-auth.js";
+import { classifyCaptureFailure } from "./capture.js";
+import {
+  capturePreviewRemote,
+  DYNAMIC_SESSIONS_SCOPE,
+} from "./renderer-client.js";
 import type { PreviewEnvironment } from "./env.js";
 import type {
   PreviewWorkerDependencies,
@@ -63,6 +69,38 @@ export const PREVIEW_QUEUE_TIMEOUT_MS = 10_000;
  */
 export const PREVIEW_AUDIT_ACTION = "upload" as const;
 
+/**
+ * 撮影の失敗理由を運用ログへ残す。
+ *
+ * 直後に`worker.ts`が出す`preview_generation_retry_scheduled`・`preview_generation_failed`
+ * (相関ID・資料ID付き)は、撮影の失敗をすべて`preview_failed`にまとめる。実行環境の問題
+ * (`sandbox_unavailable`・`renderer_unavailable`など)を見分けられるよう、理由と撮影サービスの
+ * HTTP statusだけを固定の値で出す。例外のmessage・資料の内容は出さない(設計 §15.2)。
+ */
+function logCaptureFailure(error: unknown): void {
+  const statusCode =
+    error instanceof Error && "statusCode" in error
+      ? (error as { statusCode?: unknown }).statusCode
+      : undefined;
+  console.log(
+    JSON.stringify({
+      time: new Date().toISOString(),
+      event: "preview_capture_failed",
+      result: "failed",
+      reason: classifyCaptureFailure(error),
+      ...(typeof statusCode === "number" && statusCode > 0 ? { statusCode } : {}),
+    }),
+  );
+}
+
+/** 撮影サービスのaccess tokenを取得できなかった場合。原因の詳細は含めない。 */
+export class RendererTokenError extends Error {
+  constructor() {
+    super("撮影サービスのaccess tokenを取得できませんでした");
+    this.name = "RendererTokenError";
+  }
+}
+
 export type PreviewRuntime = {
   dependencies: PreviewWorkerDependencies;
   /** 実行終了時に接続を閉じる。 */
@@ -71,7 +109,7 @@ export type PreviewRuntime = {
 
 export type PreviewRuntimeOverrides = {
   /**
-   * 撮影処理。省略時はPlaywright + Chromium。結合テストではChromiumを起動せずに
+   * 撮影処理。省略時は撮影サービス(`PREVIEW_RENDERER_URL`)を呼ぶ。結合テストではChromiumを起動せずに
    * 前後の手順(Queue・DB・Blob)を検証するために差し替える。
    */
   capturePreview?: (html: Buffer, signal: AbortSignal) => Promise<Buffer>;
@@ -100,6 +138,16 @@ export function createPreviewRuntime(
   );
 
   const logger: OperationLogger = createOperationLogger(env.LOG_HMAC_KEY);
+
+  // セッションプールはPreview JobのManaged Identity(`AZURE_CLIENT_ID`)で呼ぶ。
+  const getRendererToken =
+    env.PREVIEW_RENDERER_AUTH === "entra"
+      ? createAccessTokenProvider(
+          DYNAMIC_SESSIONS_SCOPE,
+          new DefaultAzureCredential(),
+          { createError: () => new RendererTokenError() },
+        )
+      : undefined;
 
   const dependencies: PreviewWorkerDependencies = {
     maxDequeueCount: env.QUEUE_MAX_DEQUEUE_COUNT,
@@ -152,13 +200,18 @@ export function createPreviewRuntime(
 
     capturePreview:
       overrides.capturePreview ??
-      ((html: Buffer, signal: AbortSignal) =>
-        // HTMLはアップロード時にUTF-8として検証済み(設計 §6.1)。
-        capturePreviewJpeg(html.toString("utf8"), {
-          maxBytes: env.MAX_PREVIEW_IMAGE_BYTES,
-          // 処理上限を超えたらChromiumを閉じて撮影を打ち切る(設計 §7.5)。
-          signal,
-        })),
+      (async (html: Buffer, signal: AbortSignal) => {
+        try {
+          return await capturePreviewRemote(html, signal, {
+            endpoint: env.PREVIEW_RENDERER_URL,
+            maxBytes: env.MAX_PREVIEW_IMAGE_BYTES,
+            ...(getRendererToken ? { getAccessToken: getRendererToken } : {}),
+          });
+        } catch (error) {
+          logCaptureFailure(error);
+          throw error;
+        }
+      }),
 
     async savePreview(documentId, jpeg, signal) {
       await uploadDocumentPreview(containerClient, documentId, jpeg, {

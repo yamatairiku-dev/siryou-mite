@@ -55,6 +55,8 @@ param displayMinReplicas int = 1
 @minValue(1)
 param rendererReadySessions int = 1
 param keyVaultPurgeProtection bool = false
+@description('Container Apps環境の公開IP(staticIp)。NSGで撮影サービスのセッションプールへの通信を許可するのに使う。環境の作成後に設定し、もう一度デプロイする(docs/OPERATIONS.md)')
+param containerAppsEnvironmentIp string = ''
 
 var namePrefix = '${appPrefix}-${environmentName}'
 var uniqueSuffix = uniqueString(resourceGroup().id)
@@ -70,6 +72,7 @@ module network 'modules/network.bicep' = {
     namePrefix: namePrefix
     location: location
     tags: tags
+    containerAppsEnvironmentIp: containerAppsEnvironmentIp
   }
 }
 

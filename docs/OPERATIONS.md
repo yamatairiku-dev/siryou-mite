@@ -177,6 +177,13 @@ Bicep(`infra/modules/container-apps.bicep`の`rendererPool`、名前`sp-<prefix>
 - Preview Jobのidentityにだけ、このプールの範囲で「Azure ContainerApps Session Executor」を付ける
 - 費用: 待機セッションは使っていなくても課金される(1 vCPU・2GBを常時1つ)。正式な見積もりは
   設計 §21
+- 通信: 管理endpointは環境の既定ドメイン配下にあり、環境の公開IP(`staticIp`)へ解決される。
+  Container Apps環境のサブネットのNSGはインターネット宛てを拒否しているため、このIPへの443
+  だけを`AllowSessionPoolOutbound`で許可する。IPは環境を作るまで決まらないので、
+  `containerAppsEnvironmentIp`(stagingでは環境変数`SIRYOU_CAE_STATIC_IP`)で渡す。
+  未設定だとルールが作られず、Preview Jobのログに`preview_capture_failed`
+  (`reason=renderer_unavailable`、statusCode無し)が出る。NSGのルールはBicepの定義で
+  まとめて上書きされるため、portalや`az`で個別に足さない
 
 | 変数 | 内容 |
 |---|---|
@@ -513,6 +520,17 @@ az deployment group create --resource-group "$RG" --name siryou-mite-apps \
 REDIRECT=$(az deployment group show -g "$RG" -n siryou-mite-apps \
   --query properties.outputs.entraRedirectUri.value -o tsv)
 az ad app update --id "$APP_ID" --web-redirect-uris "$REDIRECT"
+```
+
+Container Apps環境の公開IPをNSGへ反映するため、IPを渡してもう一度デプロイする
+(Preview Jobから撮影サービスのセッションプールへ届くようにする)。2回目以降のデプロイでも
+毎回`SIRYOU_CAE_STATIC_IP`を設定する(未設定だと許可ルールが消える)。
+
+```bash
+export SIRYOU_CAE_STATIC_IP=$(az containerapp env show -g "$RG" -n cae-siryou-mite-stg \
+  --query properties.staticIp -o tsv)
+az deployment group create --resource-group "$RG" --name siryou-mite-apps \
+  --parameters infra/parameters/staging.bicepparam
 ```
 
 ### 6. DB初期設定 → マイグレーション

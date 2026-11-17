@@ -550,7 +550,8 @@ Maintenance Jobを毎日UTC 18:00（JST 03:00）に実行する。Blob削除失�
   (`*.azurecontainerapps.io`)を使う
 - VNet、サブネット、Private DNSゾーンはBicepで新規作成する。新しいVNetには既定の
   外向き通信が無いため、Container Apps環境のサブネットにNAT Gatewayを付け、
-  NSGでインターネットへの通信を拒否する(イメージ取得・Entra ID・監視の宛先だけ許可)
+  NSGでインターネットへの通信を拒否する(イメージ取得・Entra ID・監視の宛先と、撮影サービスの
+  セッションプールの管理endpoint(Container Apps環境の公開IPの443)だけ許可)
 - PostgreSQL、Storage、Key Vaultのprivate endpoint限定とManaged Identity接続は設計どおり
 
 ## 9. セキュリティ設計

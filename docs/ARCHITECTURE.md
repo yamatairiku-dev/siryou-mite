@@ -223,11 +223,13 @@ object IDで作り、`siryou_mite_runtime`・`siryou_mite_maintenance`(login不�
 実行します(逆順を検出した場合は失敗にします)。
 
 Infrastructure as Codeは`infra/`のBicepです。`main.bicep`がモジュール(`infra/modules/`:
-network・monitoring・identities・storage・keyvault・postgres・registry・container-apps)を
-組み合わせ、環境ごとの値は`infra/parameters/<環境>.bicepparam`で切り替えます。実値(tenant・
+network・monitoring・identities・storage・keyvault・postgres・registry・container-apps・
+job-alerts)を組み合わせ、環境ごとの値は`infra/parameters/<環境>.bicepparam`で切り替えます。実値(tenant・
 client ID、許可IP、通知先、鍵)はparameter fileへ書かず、デプロイ時の環境変数から読みます。
 鍵は`infra/scripts/generate-keys.mjs`で生成し、Entraのアプリ登録の定義は`infra/entra/`に
 置きます。CIの`bicep` jobがbuild・lint・parameterのbuildを検証します。
+Jobの失敗通知(設計 §17)は`job-alerts`のLog Analyticsログ検索アラートで、Jobとログのtableが
+できる2段階目(`deployApps=true`)で作ります。
 
 CI/CDはGitHub ActionsのOIDCを使います。GitHub-hosted
 runnerからprivate data planeへ直接接続せず、migrationとsmoke testはVNet内の

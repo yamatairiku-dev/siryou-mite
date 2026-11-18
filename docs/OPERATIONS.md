@@ -30,6 +30,32 @@
 - 監査書き込み失敗
 
 health checkは生存確認だけを返し、設定値や依存サービスの詳細を公開しません。
+
+### 作成済みの通知(Azure Monitor)
+
+通知先はAction Group `ag-<prefix>`(`SIRYOU_ALERT_EMAIL`のメールアドレス)。
+
+| アラート | 条件 | 定義 |
+|---|---|---|
+| `alert-<prefix>-psql-storage-warning` / `-critical` | PostgreSQL storage使用率70%以上 / 85%以上 | `infra/modules/postgres.bicep` |
+| `alert-<prefix>-job-execution-failed` | Migration・Maintenance・DB初期設定Jobの実行失敗(システムログ`BackoffLimitExceeded`)、または全Jobの実行上限超過(`DeadlineExceeded`) | `infra/modules/job-alerts.bicep` |
+| `alert-<prefix>-preview-failed` | プレビューの恒久失敗(運用ログ`preview_generation_failed`)、Preview Jobの想定外の例外(`preview_job_failed`) | `infra/modules/job-alerts.bicep` |
+
+- Job系の2つはLog Analyticsのログ検索アラートで、15分ごとに直近15分を調べ、Job(または
+  イベント)ごとに通知する。失敗のたびに通知し、解決の通知は送らない
+- Preview Jobは再試行に回すときも終了コード1で終わるため、実行の失敗では通知しない。
+  再試行中の失敗は`preview_generation_retry_scheduled`と`preview_capture_failed`の`reason`で確認する
+- `preview_generation_failed`には、資料側の理由(`too_large`など)で失敗したものも含む。
+  理由は同じ実行の`preview_capture_failed`で確認する
+- 通知を受けたら、Log Analyticsで次を見る(`<job>`はJob名)
+
+```kusto
+ContainerAppSystemLogs_CL | where JobName_s == "<job>" | order by TimeGenerated desc
+ContainerAppConsoleLogs_CL | where ContainerJobName_s == "<job>" | order by TimeGenerated desc
+```
+
+- `DeadlineExceeded`(実行上限の超過)はstagingでまだ発生しておらず、システムログの理由名は
+  Kubernetesの既定に基づく想定。実際に発生したら理由名を確認する
 Azure Monitor Action Groupから運用担当者の共有メールアドレスへ通知します。通知先は
 環境別Bicepパラメーターで渡し、repositoryへ実値を保存しません。
 
@@ -573,8 +599,9 @@ Bicepは構文・型・lintまで検証済み(CIの`bicep` job)で、Azureへの
    `preview_capture_failed`の`reason`が`renderer_unavailable`になる)
 7. Container AppsはコンテナのファイルシステムをRead-onlyにする設定を持たないため、設計 §7.5
    「読み取り専用filesystem」は満たせない(`/tmp`だけ書き込み可能にする構成は維持)
-8. Job失敗(Preview・Migration・Maintenance)の通知(設計 §17)は未作成。ログの形を確認してから
-   Log Analyticsのアラートを追加する
+8. Job失敗(Preview・Migration・Maintenance)の通知(設計 §17)は`infra/modules/job-alerts.bicep`で
+   作成済み(「作成済みの通知」)。クエリはstagingの過去ログ(DB初期設定Jobの失敗、プレビューの
+   恒久失敗)で検出できることを確認済み。実行上限超過の理由名`DeadlineExceeded`は未確認
 9. Key Vault(public network access無効・`bypass: None`)へ、デプロイ(ARM)で秘密値を
    登録できる(秘密値の登録は管理プレーン経由のため可能な想定)
 

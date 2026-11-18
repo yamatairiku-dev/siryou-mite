@@ -54,6 +54,17 @@ const schema = z
       .default(45),
     // `dequeueCount`で判定する最大試行回数(設計 §7.5)。
     QUEUE_MAX_DEQUEUE_COUNT: z.coerce.number().int().min(1).max(10).default(3),
+    // 撮影サービスのendpoint(設計 §7.5)。本番・stagingはdynamic sessionsのセッションプールの
+    // 管理endpoint、ローカルは常駐させた撮影サービス(`services/preview-renderer`)。
+    PREVIEW_RENDERER_URL: z
+      .string()
+      .trim()
+      .url()
+      .refine((value) => /^https?:\/\/[^?#]+$/.test(value), {
+        message: "PREVIEW_RENDERER_URL はクエリ文字列の無いhttp(s)のURLである必要があります",
+      }),
+    // `entra`: Managed Identityのaccess tokenで呼ぶ(セッションプール)。`none`: ローカル。
+    PREVIEW_RENDERER_AUTH: z.enum(["none", "entra"]).default("none"),
     // プレビュー画像1件あたりの上限(設計 §6.1)。超える場合は`failed`にする。
     MAX_PREVIEW_IMAGE_BYTES: z.coerce
       .number()
@@ -63,6 +74,23 @@ const schema = z
   })
   .superRefine((value, context) => {
     validateCommonConfig(value, context);
+
+    if (value.NODE_ENV === "production") {
+      if (value.PREVIEW_RENDERER_AUTH !== "entra") {
+        context.addIssue({
+          code: "custom",
+          path: ["PREVIEW_RENDERER_AUTH"],
+          message: "本番環境では PREVIEW_RENDERER_AUTH=entra が必須です",
+        });
+      }
+      if (!value.PREVIEW_RENDERER_URL.startsWith("https://")) {
+        context.addIssue({
+          code: "custom",
+          path: ["PREVIEW_RENDERER_URL"],
+          message: "本番環境では PREVIEW_RENDERER_URL にhttpsのURLが必要です",
+        });
+      }
+    }
 
     // 処理上限そのものではなく、「処理上限 + 後始末」がvisibility timeoutと
     // Job実行上限に収まることを検証する(設計 §7.5)。等号を許して

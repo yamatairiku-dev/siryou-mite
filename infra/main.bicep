@@ -51,7 +51,12 @@ param postgresSkuName string = 'Standard_B1ms'
 param postgresSkuTier string = 'Burstable'
 param postgresStorageAutoGrow bool = false
 param displayMinReplicas int = 1
+@description('撮影サービスのセッションプールで待機させるセッション数。0にすると撮影のたびにimage取得から始まり、処理上限(30秒)に間に合わない(設計 §7.6)')
+@minValue(1)
+param rendererReadySessions int = 1
 param keyVaultPurgeProtection bool = false
+@description('Container Apps環境の公開IP(staticIp)。NSGで撮影サービスのセッションプールへの通信を許可するのに使う。環境の作成後に設定し、もう一度デプロイする(docs/OPERATIONS.md)')
+param containerAppsEnvironmentIp string = ''
 
 var namePrefix = '${appPrefix}-${environmentName}'
 var uniqueSuffix = uniqueString(resourceGroup().id)
@@ -67,6 +72,7 @@ module network 'modules/network.bicep' = {
     namePrefix: namePrefix
     location: location
     tags: tags
+    containerAppsEnvironmentIp: containerAppsEnvironmentIp
   }
 }
 
@@ -161,6 +167,7 @@ module registry 'modules/registry.bicep' = {
       ids.web.principalId
       ids.display.principalId
       ids.preview.principalId
+      ids.renderer.principalId
       ids.maintenance.principalId
       ids.migrate.principalId
       ids.dbadmin.principalId
@@ -171,7 +178,8 @@ module registry 'modules/registry.bicep' = {
 // ---- 2段階目: アプリとJob ---------------------------------------------------
 
 var appImage = '${registry.outputs.loginServer}/siryou-mite:${imageTag}'
-var previewImage = '${registry.outputs.loginServer}/siryou-mite-preview:${imageTag}'
+// 撮影サービス(dynamic sessionsのセッションプール)のimage。Chromiumを含む(設計 §7.6)
+var rendererImage = '${registry.outputs.loginServer}/siryou-mite-preview:${imageTag}'
 
 // Managed Identityの名前がPostgreSQLの利用者名になる(passwordは書かない。DATABASE_AUTH=entra)。
 func databaseUrl(identityName string, host string, database string) string =>
@@ -213,7 +221,8 @@ module containerApps 'modules/container-apps.bicep' = if (deployApps) {
     identities: ids
     registryLoginServer: registry.outputs.loginServer
     appImage: appImage
-    previewImage: previewImage
+    rendererImage: rendererImage
+    rendererReadySessions: rendererReadySessions
     allowedClientIpRanges: allowedClientIpRanges
     webMinReplicas: webMinReplicas
     displayMinReplicas: displayMinReplicas

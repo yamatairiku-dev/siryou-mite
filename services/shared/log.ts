@@ -83,18 +83,35 @@ export function createOperationLogger(logHmacKeyBase64: string): OperationLogger
 
 /**
  * Jobの失敗ログに残す分類。例外のmessage・stack・接続情報(SQLや接続文字列を含み得る)は
- * 出さず、例外の種類とPostgreSQLのエラーコード(SQLSTATE)等の短いcodeだけを返す。
+ * 出さず、例外の種類と、ライブラリが定める短い識別子だけを返す。
+ *
+ * - `errorCode`: PostgreSQLのSQLSTATE(`42P01`)、Node.jsのエラーコード(`ENOTFOUND`)、
+ *   Azure SDKのエラーコード(`AuthorizationFailure`)など。英数字と`_`だけの短い値に限る
+ * - `statusCode`: Azure SDKの`RestError`が持つHTTP status
  */
 export function describeFailure(error: unknown): {
   errorName: string;
   errorCode?: string;
+  statusCode?: number;
 } {
   const errorName = error instanceof Error ? error.name : "unknown";
-  const code =
-    typeof error === "object" && error !== null && "code" in error
-      ? (error as { code?: unknown }).code
-      : undefined;
-  return typeof code === "string" && /^[A-Z0-9_]{1,40}$/.test(code)
-    ? { errorName, errorCode: code }
-    : { errorName };
+  const fields =
+    typeof error === "object" && error !== null
+      ? (error as { code?: unknown; statusCode?: unknown })
+      : {};
+  const code = fields.code;
+  const statusCode = fields.statusCode;
+
+  return {
+    errorName,
+    ...(typeof code === "string" && /^[A-Za-z0-9_]{1,64}$/.test(code)
+      ? { errorCode: code }
+      : {}),
+    ...(typeof statusCode === "number" &&
+    Number.isInteger(statusCode) &&
+    statusCode >= 100 &&
+    statusCode <= 599
+      ? { statusCode }
+      : {}),
+  };
 }

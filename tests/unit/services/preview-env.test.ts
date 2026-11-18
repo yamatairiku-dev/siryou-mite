@@ -4,6 +4,8 @@ import {
   PREVIEW_FINALIZE_BUDGET_SECONDS,
 } from "../../../services/preview/env";
 
+const productionRendererUrl =
+  "https://sp-renderer.example.japaneast.azurecontainerapps.io";
 const validLogHmacKey = Buffer.alloc(32, 3).toString("base64");
 
 const baseEnvironment: NodeJS.ProcessEnv = {
@@ -12,6 +14,7 @@ const baseEnvironment: NodeJS.ProcessEnv = {
     "postgres://dbuser:sup3r-secret-db-password@localhost:5432/siryou_mite",
   AZURE_STORAGE_CONNECTION_STRING: "UseDevelopmentStorage=true",
   LOG_HMAC_KEY: validLogHmacKey,
+  PREVIEW_RENDERER_URL: "http://127.0.0.1:8090",
 };
 
 describe("parsePreviewEnvironment", () => {
@@ -137,8 +140,55 @@ describe("parsePreviewEnvironment", () => {
         AZURE_STORAGE_ACCOUNT_NAME: "storageaccount1",
         DATABASE_URL: "postgres://id-siryou-mite@db.example.com:5432/siryou_mite",
         DATABASE_AUTH: "entra",
+        PREVIEW_RENDERER_URL: productionRendererUrl,
+        PREVIEW_RENDERER_AUTH: "entra",
       }),
     ).not.toThrow();
+  });
+
+  it("撮影サービスのendpointは必須で、既定では認証なし(ローカル)", () => {
+    const environment = { ...baseEnvironment };
+    delete environment.PREVIEW_RENDERER_URL;
+    expect(() => parsePreviewEnvironment(environment)).toThrow(
+      "PREVIEW_RENDERER_URL",
+    );
+
+    expect(parsePreviewEnvironment(baseEnvironment).PREVIEW_RENDERER_AUTH).toBe(
+      "none",
+    );
+  });
+
+  it.each(["ftp://renderer.example.com", "https://renderer.example.com/?identifier=x", "not-a-url"])(
+    "撮影サービスのendpointにhttp(s)以外・クエリ付きのURLを拒否する: %s",
+    (url) => {
+      expect(() =>
+        parsePreviewEnvironment({ ...baseEnvironment, PREVIEW_RENDERER_URL: url }),
+      ).toThrow("PREVIEW_RENDERER_URL");
+    },
+  );
+
+  it("本番は撮影サービスをManaged Identityとhttpsで呼ぶことを必須にする(設計 §7.5)", () => {
+    const environment = { ...baseEnvironment };
+    delete environment.AZURE_STORAGE_CONNECTION_STRING;
+    const production = {
+      ...environment,
+      NODE_ENV: "production",
+      AZURE_STORAGE_ACCOUNT_NAME: "storageaccount1",
+      DATABASE_URL: "postgres://id-siryou-mite@db.example.com:5432/siryou_mite",
+      DATABASE_AUTH: "entra",
+      PREVIEW_RENDERER_URL: productionRendererUrl,
+      PREVIEW_RENDERER_AUTH: "entra",
+    };
+
+    expect(() =>
+      parsePreviewEnvironment({ ...production, PREVIEW_RENDERER_AUTH: "none" }),
+    ).toThrow("PREVIEW_RENDERER_AUTH=entra");
+    expect(() =>
+      parsePreviewEnvironment({
+        ...production,
+        PREVIEW_RENDERER_URL: "http://sp-renderer.example.azurecontainerapps.io",
+      }),
+    ).toThrow("httpsのURL");
   });
 
   it("AZURE_STORAGE_ACCOUNT_NAMEが空文字の場合は未設定として扱う", () => {

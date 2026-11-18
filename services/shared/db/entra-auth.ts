@@ -44,6 +44,26 @@ export function createEntraPasswordProvider(
   credential: AccessTokenSource = new DefaultAzureCredential(),
   options: EntraPasswordProviderOptions = {},
 ): () => Promise<string> {
+  return createAccessTokenProvider(POSTGRES_ENTRA_SCOPE, credential, {
+    ...options,
+    createError: () => new DatabaseTokenError(),
+  });
+}
+
+export type AccessTokenProviderOptions = EntraPasswordProviderOptions & {
+  /** 取得に失敗したときに投げる例外。原因の詳細は含めない。 */
+  createError: () => Error;
+};
+
+/**
+ * 指定したscopeのaccess tokenを返す関数を作る。有効期限の手前までは同じtokenを使い回し、
+ * 同時に呼ばれた場合も取得は1回にまとめる。tokenとエラーの詳細はログへ出さない(設計 §9.5)。
+ */
+export function createAccessTokenProvider(
+  scope: string,
+  credential: AccessTokenSource,
+  options: AccessTokenProviderOptions,
+): () => Promise<string> {
   const refreshMarginMs = options.refreshMarginMs ?? 5 * 60_000;
   const timeoutMs = options.timeoutMs ?? 10_000;
   const now = options.now ?? Date.now;
@@ -54,14 +74,14 @@ export function createEntraPasswordProvider(
   async function fetchToken(): Promise<string> {
     let result: Awaited<ReturnType<AccessTokenSource["getToken"]>>;
     try {
-      result = await credential.getToken(POSTGRES_ENTRA_SCOPE, {
+      result = await credential.getToken(scope, {
         abortSignal: AbortSignal.timeout(timeoutMs),
       });
     } catch {
-      throw new DatabaseTokenError();
+      throw options.createError();
     }
     if (!result || result.token === "") {
-      throw new DatabaseTokenError();
+      throw options.createError();
     }
     cached = { token: result.token, expiresOnTimestamp: result.expiresOnTimestamp };
     return result.token;

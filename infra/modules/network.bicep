@@ -15,6 +15,8 @@ param location string
 param tags object
 @description('VNetのアドレス空間')
 param addressPrefix string = '10.40.0.0/16'
+@description('Container Apps環境の公開IP(staticIp)。撮影サービスのセッションプールの管理endpointがこのIPにあるため、Preview Jobからの443を許可する。環境の作成前(初回の基盤デプロイ)は空')
+param containerAppsEnvironmentIp string = ''
 
 var privateDnsZoneNames = [
   'privatelink.postgres.database.azure.com'
@@ -149,6 +151,25 @@ resource caeNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
           destinationPortRange: '443'
         }
       }
+      // 撮影サービスのセッションプール(dynamic sessions)の管理endpoint。環境の既定ドメイン
+      // 配下にあり、環境の公開IPへ解決される(設計 §7.5, §8)。IPが未確定の間はルールを作らない
+      ...(empty(containerAppsEnvironmentIp)
+        ? []
+        : [
+            {
+              name: 'AllowSessionPoolOutbound'
+              properties: {
+                priority: 160
+                direction: 'Outbound'
+                access: 'Allow'
+                protocol: 'Tcp'
+                sourceAddressPrefix: 'VirtualNetwork'
+                sourcePortRange: '*'
+                destinationAddressPrefix: '${containerAppsEnvironmentIp}/32'
+                destinationPortRange: '443'
+              }
+            }
+          ])
       {
         name: 'DenyInternetOutbound'
         properties: {

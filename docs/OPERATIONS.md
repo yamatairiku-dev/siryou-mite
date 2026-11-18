@@ -136,30 +136,70 @@ Web・Display・Migration Job・Maintenance Jobは**同じNode.js image**を使�
 DisplayはWebと同じ`/health`(`GET`のみ)を持つため、imageのHEALTHCHECKは両方で使えます。
 Displayは`SIGTERM`・`SIGINT`で待受けを止め、DB接続を閉じてから終了します(猶予10秒)。
 
-#### Preview Job専用image(`Dockerfile.preview`)
+#### 撮影サービス専用image(`Dockerfile.preview`)
 
-Preview JobだけはChromiumを含む専用image(`Dockerfile.preview`)を使います(設計 §7.6。
-imageは合計2種類)。起動commandは`node build/services/preview/index.js`です。
+Chromiumを含む専用image(`Dockerfile.preview`)は撮影サービス(`services/preview-renderer`)
+だけが使います(設計 §7.6。imageは合計2種類)。Preview Job自体はWeb・Displayと同じ
+Node.js用imageで`node build/services/preview/index.js`を実行し、Chromiumを持ちません。
+撮影サービスの起動commandはimageの既定CMD(`node build/services/preview-renderer/index.js`)です。
 
 - base imageは`mcr.microsoft.com/playwright:v1.64.0-noble`で、tagは`package.json`の
   `@playwright/test`のversionと**必ず一致**させます。`@playwright/test`を更新するときは
-  同じPRでbase imageのtagも上げます(不一致だとPreview Jobの起動時にbrowserが見つからず
+  同じPRでbase imageのtagも上げます(不一致だと撮影サービスの起動時にbrowserが見つからず
   失敗します)。一致は単体テスト(`tests/unit/services/preview-image-version.test.ts`)が
   CIで確認するため、Dependabotが`@playwright/test`だけを上げたPRはCIが失敗します。
-- ローカルのDocker(既定のseccomp profile)では、Chromium sandbox有効のままだと
-  `No usable sandbox!`で起動できません(2026-09-30に確認。`--security-opt seccomp=unconfined`
-  なら起動する)。Container Apps上でsandboxが使えるかは設計 §21のsecurity spikeで確認します。
-- 非rootの`pwuser`で実行します(設計 §7.5「ワーカーは非root」)。
+- 非rootの`pwuser`で実行し、Chromium sandboxを有効にしたまま起動します(`--no-sandbox`は
+  使いません。設計 §7.5)。
+- sandboxが使えるかは実行環境で決まります。
+  - ローカルのDocker(既定のseccomp profile): `No usable sandbox!`で起動できない
+    (2026-09-30に確認。`--security-opt seccomp=unconfined`なら起動する)
+  - Container Apps Job: 起動できない(2026-11-15にstagingで確認。`Seccomp: 2`・`NoNewPrivs: 1`で
+    `unshare --user`が`EPERM`。利用者はこの制限を変えられない)
+  - Container Appsのdynamic sessions(カスタムコンテナのセッションプール): 起動・撮影できる
+    (2026-11-17に診断用のプールで確認。`Seccomp: 0`、`unshare --user`成功。Q-066)
 - browser binaryはbase imageの`/ms-playwright`を使い、`npm ci`時は
   `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`でダウンロードしません。本番依存(`npm ci --omit=dev`)に
   加えて`node_modules/playwright-core`だけをdev install stageからコピーします。
-- Chromium sandboxを有効にしたまま起動します(`--no-sandbox`は使いません)。Container Apps
-  Jobの設定でsandboxが起動できない場合でも、sandboxを無効にする回避はしません(設計 §7.5)。
-- Container Apps Job側では**読み取り専用filesystem**、1 vCPU・2GB、最大2件並列、
-  `replicaTimeout`はJob実行上限(45秒)に合わせます。Chromiumは書き込み可能な`/tmp`を
-  必要とするため、`/tmp`だけをemptyDir相当の書き込み可能volumeにします。
+
+#### 撮影サービスのセッションプール
+
+Bicep(`infra/modules/container-apps.bicep`の`rendererPool`、名前`sp-<prefix>-renderer`)で
+作ります。
+
+- `EgressDisabled`: セッションから外向きの通信を一切しない(設計 §8)
+- `OnContainerExit`: 撮影サービスは1件撮影したら終了し(`RENDERER_EXIT_AFTER_RENDER=true`)、
+  セッションが破棄される。終了しなかったセッションも300秒(`maxAlivePeriodInSeconds`、Azureの下限)で破棄される
+- 待機セッション数は`rendererReadySessions`(既定1、最小1)。0にすると撮影のたびにimage
+  (約1GB)の取得から始まり、Preview Jobの処理上限(30秒)に間に合わない
+- 同時セッションは最大4(Preview Jobの最大並列2に余裕を足した値)、各セッション1 vCPU・2GB
+- imageの取得には専用identity `id-<prefix>-renderer`(AcrPullだけ)を使い、セッションの中から
+  は使えない(`managedIdentitySettings`の`lifecycle: None`)
+- Preview Jobのidentityにだけ、このプールの範囲で「Azure ContainerApps Session Executor」を付ける
+- 費用: 待機セッションは使っていなくても課金される(1 vCPU・2GBを常時1つ)。正式な見積もりは
+  設計 §21
+- 通信: 管理endpointは環境の既定ドメイン配下にあり、環境の公開IP(`staticIp`)へ解決される。
+  Container Apps環境のサブネットのNSGはインターネット宛てを拒否しているため、このIPへの443
+  だけを`AllowSessionPoolOutbound`で許可する。IPは環境を作るまで決まらないので、
+  `containerAppsEnvironmentIp`(stagingでは環境変数`SIRYOU_CAE_STATIC_IP`)で渡す。
+  未設定だとルールが作られず、Preview Jobのログに`preview_capture_failed`
+  (`reason=renderer_unavailable`、statusCode無し)が出る。NSGのルールはBicepの定義で
+  まとめて上書きされるため、portalや`az`で個別に足さない
+
+| 変数 | 内容 |
+|---|---|
+| `PORT` | 待受けるport(既定8080。セッションプールの`targetPort`と一致させる) |
+| `RENDERER_EXIT_AFTER_RENDER` | `true`なら1件撮影したら終了する(セッションプールでは必須。既定`false`はローカル用) |
+| `PREVIEW_RENDER_MAX_SECONDS` | 1件の撮影上限(既定25秒。Preview Jobの処理上限30秒より短くする) |
+| `MAX_HTML_UPLOAD_BYTES` | 受け付けるHTMLの上限(既定10MB。Webのアップロード上限と同じ値) |
+
+#### Preview Job
+
 - 再試行はStorage Queueの再配信で行うため、Job側の再試行(`replicaRetryLimit`)は0にします。
   ワーカーは再試行に回した実行だけ終了コード1で終わります(監視用)。
+- 0.5 vCPU・1GB、最大2件並列、`replicaTimeout`はJob実行上限(45秒)に合わせます。
+- 撮影に失敗した理由は運用ログ`preview_capture_failed`の`reason`で分かります
+  (`renderer_unavailable`: プールへ届かない・権限が無い、`sandbox_unavailable`: セッション内で
+  sandboxを使えない、`too_large`: 画像が上限に収まらない、など)。
 
 ### Display / Preview Job / Maintenance Job
 
@@ -181,7 +221,9 @@ Managed Identity必須(`DATABASE_AUTH=entra`、`AZURE_CLIENT_ID`)・接続文字
 | `QUEUE_MESSAGE_PROCESSING_TIMEOUT_SECONDS` | Preview | 1メッセージの処理上限(既定30秒) |
 | `PREVIEW_JOB_MAX_RUNTIME_SECONDS` | Preview | Job実行上限(既定45秒) |
 | `QUEUE_MAX_DEQUEUE_COUNT` | Preview | `dequeueCount`による最大試行回数(既定3回) |
-| `MAX_PREVIEW_IMAGE_BYTES` | Preview | プレビュー画像1件あたりの上限(既定1MB) |
+| `MAX_PREVIEW_IMAGE_BYTES` | Preview | プレビュー画像1件あたりの上限(既定1MB)。撮影サービスへ`X-Max-Preview-Bytes`で渡す |
+| `PREVIEW_RENDERER_URL` | Preview | 撮影サービスのendpoint(必須)。本番・stagingはセッションプールの管理endpoint(Bicepが設定)、ローカルは`http://127.0.0.1:3200` |
+| `PREVIEW_RENDERER_AUTH` | Preview | `entra`ならManaged Identity(`AZURE_CLIENT_ID`)のaccess tokenで呼ぶ。本番は`entra`必須(既定`none`はローカル用) |
 | `MAINTENANCE_JOB_MAX_RUNTIME_SECONDS` | Maintenance | Job実行上限(既定900秒)。超えたら新しいバッチを始めずに終了する |
 | `MAINTENANCE_BATCH_SIZE` | Maintenance | DBの抽出・削除1回あたりの件数(既定500) |
 | `MAINTENANCE_BLOB_LIST_PAGE_SIZE` | Maintenance | Blob一覧1ページの件数(既定200) |
@@ -452,7 +494,7 @@ az deployment group create --resource-group "$RG" --name siryou-mite-infra \
   --parameters infra/parameters/staging.bicepparam
 ```
 
-VNet、NAT Gateway、Private DNS、Log Analytics、Managed Identity 6個、Storage、
+VNet、NAT Gateway、Private DNS、Log Analytics、Managed Identity 7個、Storage、
 Key Vault(鍵を登録)、PostgreSQL(Entra管理者はDB初期設定Job用identity)、ACRを作る。
 
 ### 4. イメージのbuildとpush
@@ -478,6 +520,17 @@ az deployment group create --resource-group "$RG" --name siryou-mite-apps \
 REDIRECT=$(az deployment group show -g "$RG" -n siryou-mite-apps \
   --query properties.outputs.entraRedirectUri.value -o tsv)
 az ad app update --id "$APP_ID" --web-redirect-uris "$REDIRECT"
+```
+
+Container Apps環境の公開IPをNSGへ反映するため、IPを渡してもう一度デプロイする
+(Preview Jobから撮影サービスのセッションプールへ届くようにする)。2回目以降のデプロイでも
+毎回`SIRYOU_CAE_STATIC_IP`を設定する(未設定だと許可ルールが消える)。
+
+```bash
+export SIRYOU_CAE_STATIC_IP=$(az containerapp env show -g "$RG" -n cae-siryou-mite-stg \
+  --query properties.staticIp -o tsv)
+az deployment group create --resource-group "$RG" --name siryou-mite-apps \
+  --parameters infra/parameters/staging.bicepparam
 ```
 
 ### 6. DB初期設定 → マイグレーション
@@ -514,7 +567,10 @@ Bicepは構文・型・lintまで検証済み(CIの`bicep` job)で、Azureへの
 3. Preview JobのKEDA scaler(azure-queue、Managed Identity)がprivate endpointのみのQueueの長さを読める
 4. DB初期設定Jobの`pgaadauth_create_principal_with_oid`と、Entra管理者による業務DB作成・権限付与
 5. Container Apps環境のNSG(インターネット拒否)でイメージ取得・Managed Identityのtoken取得ができる
-6. Container Apps Job上でChromium sandboxが有効のまま起動できる(設計 §21 のsecurity spike)
+6. 撮影サービスのセッションプール上でChromium sandboxが有効のまま起動できる(設計 §21 の
+   security spike。診断用のプールでは2026-11-17に確認済み)。あわせて、インターネットを拒否した
+   Container Apps環境のNSGのまま、Preview Jobがプールの管理endpointへ届くこと(届かなければ
+   `preview_capture_failed`の`reason`が`renderer_unavailable`になる)
 7. Container AppsはコンテナのファイルシステムをRead-onlyにする設定を持たないため、設計 §7.5
    「読み取り専用filesystem」は満たせない(`/tmp`だけ書き込み可能にする構成は維持)
 8. Job失敗(Preview・Migration・Maintenance)の通知(設計 §17)は未作成。ログの形を確認してから
@@ -526,8 +582,9 @@ Bicepは構文・型・lintまで検証済み(CIの`bicep` job)で、Azureへの
 
 - Preview Jobは1実行1メッセージ、最大3回試行する(`dequeueCount`で判定し、3回目の
   失敗でプレビュー状態を`failed`にして監査を保存してからメッセージを削除する)
-- Preview Jobは専用image(`Dockerfile.preview`)で動き、Chromium sandbox有効・
-  JavaScript無効・外部ネットワーク接続なしで撮影する
+- Preview Jobは撮影を撮影サービス(dynamic sessionsのセッションプール、専用image
+  `Dockerfile.preview`)へ任せる。撮影はChromium sandbox有効・JavaScript無効・
+  外部ネットワーク接続なしで行う
 - Migration Jobはdeploy前に1回実行し、失敗時はrevisionを更新しない
 - Maintenance Jobは毎日UTC 18:00（JST 03:00）に実行し、並列実行しない
   (`parallelism: 1`。同時に2つ動いても結果は壊れないが、無駄な競合を避ける)

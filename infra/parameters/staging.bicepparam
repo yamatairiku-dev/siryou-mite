@@ -14,6 +14,8 @@ param alertEmailAddress = readEnvironmentVariable('SIRYOU_ALERT_EMAIL')
 
 param deployApps = bool(readEnvironmentVariable('SIRYOU_DEPLOY_APPS', 'false'))
 param imageTag = readEnvironmentVariable('SIRYOU_IMAGE_TAG', 'latest')
+// Container Apps環境の公開IP。環境の作成後に設定する(docs/OPERATIONS.md)
+param containerAppsEnvironmentIp = readEnvironmentVariable('SIRYOU_CAE_STATIC_IP', '')
 
 param grantSigningKeyId = readEnvironmentVariable('SIRYOU_GRANT_KEY_ID')
 param grantSigningPrivateKey = readEnvironmentVariable('SIRYOU_GRANT_PRIVATE_KEY')

@@ -312,6 +312,73 @@ async function screenshotWithinLimit(
   throw new PreviewTooLargeError();
 }
 
+/** 撮影の失敗理由。運用ログへ出す固定の値で、例外のmessageそのものは出さない。 */
+export const CAPTURE_FAILURE_REASONS = [
+  "sandbox_unavailable",
+  "browser_missing",
+  "insecure_arguments",
+  "too_large",
+  "timeout",
+  "renderer_busy",
+  "renderer_unavailable",
+  "other",
+] as const;
+
+export type CaptureFailureReason = (typeof CAPTURE_FAILURE_REASONS)[number];
+
+/**
+ * 撮影サービス(`services/preview-renderer`)が撮影に失敗した、または想定外の応答を
+ * 返した場合。理由は撮影サービスが返した固定の値だけを持つ(設計 §7.5, §15.2)。
+ */
+export class PreviewRendererError extends Error {
+  readonly reason: CaptureFailureReason;
+  readonly statusCode: number;
+
+  constructor(reason: CaptureFailureReason, statusCode: number) {
+    super("撮影サービスでプレビューを撮影できませんでした");
+    this.name = "PreviewRendererError";
+    this.reason = reason;
+    this.statusCode = statusCode;
+  }
+}
+
+/**
+ * 撮影の失敗を、運用で対処が分かれる理由へ分類する。
+ *
+ * 運用ログの`errorCategory`は撮影の失敗をすべて`preview_failed`にまとめるため、実行環境の
+ * 問題(sandboxを使えない、browserが無い)と資料側の問題を区別できない。Container Apps上で
+ * Chromiumがsandboxを使えずに失敗したとき、ログから原因を特定できなかった(Q-066)。
+ * 例外のmessageにはChromiumの起動引数やstderrが含まれるため、そのまま出さずに、既知の文言と
+ * 照合した固定の値だけを返す。
+ */
+export function classifyCaptureFailure(error: unknown): CaptureFailureReason {
+  if (error instanceof PreviewRendererError) {
+    return error.reason;
+  }
+  if (error instanceof PreviewTooLargeError) {
+    return "too_large";
+  }
+  if (error instanceof InsecureBrowserArgumentsError) {
+    return "insecure_arguments";
+  }
+  const message = error instanceof Error ? error.message : "";
+  // Chromium: "No usable sandbox!"、Playwright: "Chromium sandboxing failed!"
+  if (/No usable sandbox|sandboxing failed/i.test(message)) {
+    return "sandbox_unavailable";
+  }
+  if (/Executable doesn't exist/i.test(message)) {
+    return "browser_missing";
+  }
+  if (
+    (error instanceof Error &&
+      (error.name === "TimeoutError" || error.name === "AbortError")) ||
+    /Timeout \d+ms exceeded/i.test(message)
+  ) {
+    return "timeout";
+  }
+  return "other";
+}
+
 /**
  * Chromiumのlauncherを読み込む。
  *

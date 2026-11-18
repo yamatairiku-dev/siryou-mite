@@ -241,6 +241,19 @@ module containerApps 'modules/container-apps.bicep' = if (deployApps) {
   }
 }
 
+// Jobの失敗通知(設計 §17)。Jobとログのtableができてから作る
+module jobAlerts 'modules/job-alerts.bicep' = if (deployApps) {
+  name: 'job-alerts'
+  params: {
+    namePrefix: namePrefix
+    location: location
+    tags: tags
+    logAnalyticsWorkspaceId: monitoring.outputs.logAnalyticsWorkspaceId
+    actionGroupId: monitoring.outputs.actionGroupId
+    jobNames: containerApps!.outputs.jobNames
+  }
+}
+
 var appOrigin = deployApps ? containerApps!.outputs.webOrigin : ''
 
 output registryName string = registry.outputs.registryName

@@ -15,6 +15,8 @@ services:
       - node_modules:/workspace/node_modules
       # Claude Code のログイン情報・設定をコンテナ再作成後も保持する
       - claude_config:/home/node/.claude
+      # stagingデプロイ用の鍵・設定(envファイル)をコンテナ再作成後も保持する。リポジトリには置かない
+      - stg_secrets:/home/node/.siryou-mite-stg
     ports:
       - "127.0.0.1:3001:3000"
     env_file:
@@ -88,6 +90,7 @@ services:
 
 volumes:
   claude_config:
+  stg_secrets:
   node_modules:
   postgres_data:
   azurite_data:

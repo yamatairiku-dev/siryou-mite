@@ -498,11 +498,14 @@ az ad sp update --id "$APP_ID" --set appRoleAssignmentRequired=true
 ### 2. 鍵の生成(リポジトリの外へ)
 
 ```bash
-node infra/scripts/generate-keys.mjs ~/siryou-mite-stg-keys.env
+node infra/scripts/generate-keys.mjs ~/.siryou-mite-stg/keys.env
 ```
 
 grant署名用Ed25519鍵ペアとログ用HMAC鍵を、所有者だけが読める(600)ファイルへ書き出す
 (画面には表示しない)。このファイルはcommit・共有しない。
+開発コンテナでは`~/.siryou-mite-stg`がvolume(`stg_secrets`)なので、コンテナを再作成しても残る。
+手順3の`SIRYOU_TENANT_ID`などの設定値も`~/.siryou-mite-stg/settings.env`に置いておける。
+volumeを削除すると鍵は戻せないため、パスワードマネージャー等にも控えを残す。
 
 ### 3. 基盤のデプロイ(1段階目)
 
@@ -514,7 +517,7 @@ export SIRYOU_TENANT_ID=$(az account show --query tenantId -o tsv)
 export SIRYOU_ENTRA_CLIENT_ID="$APP_ID"
 export SIRYOU_ALLOWED_IP_RANGES="<許可するIP>/32"      # カンマ区切りで複数可
 export SIRYOU_ALERT_EMAIL="<通知先メールアドレス>"
-set -a; . ~/siryou-mite-stg-keys.env; set +a
+set -a; . ~/.siryou-mite-stg/keys.env; set +a
 
 az deployment group create --resource-group "$RG" --name siryou-mite-infra \
   --parameters infra/parameters/staging.bicepparam

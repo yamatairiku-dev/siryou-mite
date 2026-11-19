@@ -43,7 +43,8 @@ RUN apt-get update \
 USER node
 
 # volume をnodeユーザー所有で初期化するため先に作成しておく
-RUN mkdir -p /home/node/.claude
+RUN mkdir -p /home/node/.claude \
+  && mkdir -m 700 /home/node/.siryou-mite-stg
 RUN curl -fsSL https://claude.ai/install.sh | bash
 RUN curl -fsSL https://chatgpt.com/codex/install.sh | sh
 

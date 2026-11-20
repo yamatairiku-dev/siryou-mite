@@ -106,8 +106,19 @@ export function ErrorBoundary({
     } else if (error.status === 404) {
       title = "ページが見つかりません";
     }
-    message =
-      typeof error.data === "string" ? error.data : error.statusText || message;
+    // React Router自身が作ったエラー(`internal`。一致するrouteが無い場合など)の`data`は
+    // 「Error: No route matches URL "..."」のような内部向けの文言なので表示しない。
+    // アプリのloader・actionが投げた文言(`internal`でない)だけを利用者へ見せる。
+    // `internal`は公開の型(`ErrorResponse`)に無いが、実体(`ErrorResponseImpl`)は
+    // SSR・hydration後とも持つ。
+    const internal = "internal" in error && error.internal === true;
+    if (!internal && typeof error.data === "string") {
+      message = error.data;
+    } else if (error.status === 404) {
+      message = "URLが正しいか確認してください。";
+    } else {
+      message = error.statusText || message;
+    }
   } else if (import.meta.env.DEV && error instanceof Error) {
     message = error.message;
   }

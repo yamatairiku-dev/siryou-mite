@@ -631,8 +631,10 @@ az containerapp job execution list -g "$RG" -n caj-siryou-mite-stg-migrate \
   「読み取り専用filesystem」は満たせない(`/tmp`だけ書き込み可能にする構成は維持)
 - Job失敗(Preview・Migration・Maintenance)の通知(設計 §17)は`infra/modules/job-alerts.bicep`で
   作成済み(「作成済みの通知」)。クエリはstagingの過去ログ(DB初期設定Jobの失敗、プレビューの
-  恒久失敗)で検出できることを確認済み。実行上限超過の理由名`DeadlineExceeded`と、通知メールの
-  到達は未確認
+  恒久失敗)で検出できることを確認済み。通知メールの到達は、Action Groupのテスト通知
+  (`az monitor action-group test-notifications create ... --alert-type budget --add-action email operations <宛先>`)
+  で確認済み(2026-11-20)。実行上限超過の理由名`DeadlineExceeded`と、実際のアラート発火から
+  メールまでの通しの確認は未実施
 
 ## 定期Job
 

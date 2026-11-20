@@ -619,12 +619,13 @@ az containerapp job execution list -g "$RG" -n caj-siryou-mite-stg-migrate \
 6. Key Vault(public network access無効・`bypass: None`)へ、デプロイ(ARM)で秘密値を登録できる
 7. Easy Authのトークンストアを無効にしているため、`/.auth/me`は使えない(アプリの404になる。
    QUESTIONS Q-063)。ロール・所属は監査履歴で確認する
+8. 撮影サービスをACIへ移した構成(2026-11-20、Q-066): ACIがsnet-aciのNSG(外向きすべて拒否)の
+   ままACRからimageを取得できる。Chromium sandbox有効のまま撮影でき、Preview JobからHTTPS
+   (固定のDNS名で証明書を検証)・共有トークンで届く(`preview_render_finished`・
+   `preview_generation_succeeded`、`preview_capture_failed`なし)。ACIのIPはデプロイで更新する
+   たびに変わった(10.40.4.174→10.40.4.110)が、BicepがPreview Jobへ実際のIPを渡すため影響は無い
 
 残っている点:
-
-- 撮影サービスをACIへ移した構成(2026-11-20、Q-066)での確認: ACIがsnet-aciのNSG(外向き
-  すべて拒否)のままACRからimageを取得できる(2026-11-20に確認)、Chromium sandbox
-  有効のまま撮影できる(`preview_capture_failed`が無い)、Preview JobからHTTPS・トークンで届く
 
 - Container AppsはコンテナのファイルシステムをRead-onlyにする設定を持たないため、設計 §7.5
   「読み取り専用filesystem」は満たせない(`/tmp`だけ書き込み可能にする構成は維持)

@@ -220,7 +220,6 @@ module previewRenderer 'modules/preview-renderer-aci.bicep' = if (deployApps) {
     location: location
     tags: tags
     subnetId: network.outputs.containerInstancesSubnetId
-    rendererIp: network.outputs.rendererIp
     rendererPort: network.outputs.rendererPort
     logAnalyticsCustomerId: monitoring.outputs.logAnalyticsCustomerId
     logAnalyticsSharedKey: logs.listKeys().primarySharedKey

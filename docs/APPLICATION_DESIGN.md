@@ -474,8 +474,9 @@ Azure Database for PostgreSQL Flexible Serverを使い、資料メタデータ�
   常駐する撮影サービスへ任せる。Preview JobはHTMLを送り、JPEGを受け取るだけとする(Q-066)。
   - 撮影サービスはQueue・DB・Blob・Key Vaultの権限を持たない。Managed IdentityはACRからの
     image取得にだけ使う。外向きの通信はNSGですべて拒否する(§8)。
-  - 撮影サービスはVNet内の固定のプライベートIPで待ち受け、Preview Jobのサブネットからの
-    HTTPSだけを受け付ける。証明書は自己署名で、Preview Jobはその証明書だけを信頼する。
+  - 撮影サービスはVNet内のプライベートIP(ACIが割り当てる)で待ち受け、Preview Jobの
+    サブネットからのHTTPSだけを受け付ける。証明書は自己署名で、Preview Jobはその証明書だけを
+    信頼する。
     呼び出し元は共有トークン(`Authorization: Bearer`)で確かめる(§9.5)。
   - 撮影のたびにChromiumを起動し、撮影が終わったら閉じる。コンテナは使い回すため、
     Chromium sandboxが破られた場合は、仕込まれたプログラムがコンテナの再起動まで残り、
@@ -652,7 +653,8 @@ sandbox allow-popups allow-popups-to-escape-sandbox;
 - 保存時暗号化はAzure標準のMicrosoft管理キーを使用する。
 - アプリ、表示サービス、Azureサービス間の通信はTLSとする。Preview Jobと撮影サービス(ACI)の
   間はVNet内だが、利用者のHTMLが載るためTLSにする。撮影サービスの証明書は自己署名
-  (ECDSA P-256、SANに撮影サービスのIP、有効期限10年)とし、Preview Jobはその証明書だけを
+  (ECDSA P-256、SANに固定のDNS名`preview-renderer.siryou-mite.internal`、有効期限10年。
+  ACIのIPは指定できず変わり得るため、IPは入れない)とし、Preview Jobはその証明書だけを
   信頼する。証明書・秘密鍵・共有トークンは`infra/scripts/generate-renderer-tls.mjs`で作り、
   デプロイ時の環境変数から渡す(ACIはKey Vault参照を持たないため、秘密鍵とトークンは
   secure環境変数で渡す)。

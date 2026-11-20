@@ -23,10 +23,6 @@ param rendererPort int = 8443
 
 var containerAppsSubnetPrefix = cidrSubnet(addressPrefix, 23, 1)
 var containerInstancesSubnetPrefix = cidrSubnet(addressPrefix, 24, 4)
-// 撮影サービスのプライベートIP。Azureは各サブネットの先頭4つ(.0〜.3)を予約するため、
-// 使える最初のアドレス(cidrHostは0が.1)を固定で割り当てる。証明書のSAN
-// (infra/scripts/generate-renderer-tls.mjs の既定値 10.40.4.4)と一致させる。
-var rendererIp = cidrHost(containerInstancesSubnetPrefix, 3)
 
 var privateDnsZoneNames = [
   'privatelink.postgres.database.azure.com'
@@ -319,7 +315,6 @@ output vnetId string = vnet.id
 output privateEndpointSubnetId string = vnet.properties.subnets[0].id
 output containerAppsSubnetId string = vnet.properties.subnets[1].id
 output containerInstancesSubnetId string = vnet.properties.subnets[2].id
-output rendererIp string = rendererIp
 output rendererPort int = rendererPort
 output postgresDnsZoneId string = dnsZones[0].id
 output blobDnsZoneId string = dnsZones[1].id

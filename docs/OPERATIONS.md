@@ -195,12 +195,19 @@ Node.js用imageで`node build/services/preview/index.js`を実行し、Chromium�
 
 Bicep(`infra/modules/preview-renderer-aci.bicep`、名前`ci-<prefix>-renderer`)で作ります。
 
-- 配置: VNetの専用サブネット`snet-aci`(ACIへ委任)に、固定のプライベートIP `10.40.4.4`
-  (サブネットの使える最初のアドレス)で置く。port 8443(HTTPS)だけを開ける
+- 配置: VNetの専用サブネット`snet-aci`(10.40.4.0/24、ACIへ委任)に置く。port 8443(HTTPS)
+  だけを開ける。プライベートIPはACIが割り当てる(VNet内のACIはIPを指定できず、Bicepで指定しても
+  無視された。2026-11-20)。Bicepは割り当てられたIPを`PREVIEW_RENDERER_URL`としてPreview Jobへ渡す
+- IPが変わる場合: コンテナグループがAzure側の保守などで別のホストへ移されると、IPが変わることが
+  ある。変わるとPreview Jobが接続できず`renderer_unavailable`で失敗し、`preview-failed`アラートが
+  鳴る。アプリのデプロイ(手順5)をやり直すと、新しいIPがPreview Jobへ渡る。現在のIPは
+  `az container show -g <rg> -n ci-<prefix>-renderer --query ipAddress.ip -o tsv`、Preview Jobの接続先は
+  `az containerapp job show -g <rg> -n caj-<prefix>-preview --query "properties.template.containers[0].env[?name=='PREVIEW_RENDERER_URL'].value" -o tsv`で確認する
 - 通信: `nsg-<prefix>-aci`で、受信は`snet-cae`(Preview Job)からの8443だけを許可し、
   外向きの通信はすべて拒否する(設計 §8)。imageの取得はACIの基盤が行う
-- TLS: 自己署名証明書(ECDSA P-256、SANに`10.40.4.4`、有効期限10年)で待ち受ける。
-  Preview Jobは`PREVIEW_RENDERER_CA_CERT`の証明書だけを信頼する
+- TLS: 自己署名証明書(ECDSA P-256、SANに固定のDNS名`preview-renderer.siryou-mite.internal`、
+  有効期限10年)で待ち受ける。Preview Jobは`PREVIEW_RENDERER_CA_CERT`の証明書だけを信頼し、
+  証明書の名前はこのDNS名で検証する(DNSには登録しない。IPが変わっても証明書は作り直さない)
 - 認証: Preview Jobは共有トークンを`Authorization: Bearer`で送る。違えば401
   (Preview Jobのログでは`preview_capture_failed`の`reason=renderer_unavailable`、`statusCode: 401`)
 - identity: 専用の`id-<prefix>-renderer`(AcrPullだけ)。Queue・DB・Blob・Key Vaultの権限は無い
@@ -219,8 +226,7 @@ Bicep(`infra/modules/preview-renderer-aci.bicep`、名前`ci-<prefix>-renderer`)
 撮影サービスへ接続できなくなります(`renderer_unavailable`)。期限が近づいたとき、または
 秘密鍵・トークンの漏えいが疑われるときは、`generate-renderer-tls.mjs`で作り直して
 アプリのデプロイ(手順5)を行います。撮影サービスとPreview Jobは同じデプロイで入れ替わります。
-入れ替わりの間の撮影は失敗し得ますが、Queueの再配信で回復します。撮影サービスのIPを変える
-場合は証明書も作り直します(SANにIPが入っているため)。
+入れ替わりの間の撮影は失敗し得ますが、Queueの再配信で回復します。
 
 | 変数 | 内容 |
 |---|---|
@@ -262,7 +268,7 @@ Managed Identity必須(`DATABASE_AUTH=entra`、`AZURE_CLIENT_ID`)・接続文字
 | `PREVIEW_JOB_MAX_RUNTIME_SECONDS` | Preview | Job実行上限(既定45秒) |
 | `QUEUE_MAX_DEQUEUE_COUNT` | Preview | `dequeueCount`による最大試行回数(既定3回) |
 | `MAX_PREVIEW_IMAGE_BYTES` | Preview | プレビュー画像1件あたりの上限(既定1MB)。撮影サービスへ`X-Max-Preview-Bytes`で渡す |
-| `PREVIEW_RENDERER_URL` | Preview | 撮影サービスのendpoint(必須)。本番・stagingは`https://10.40.4.4:8443`(Bicepが設定)、ローカルは`http://127.0.0.1:3200` |
+| `PREVIEW_RENDERER_URL` | Preview | 撮影サービスのendpoint(必須)。本番・stagingは`https://<ACIが割り当てたIP>:8443`(Bicepが設定)、ローカルは`http://127.0.0.1:3200` |
 | `PREVIEW_RENDERER_AUTH` | Preview | `token`なら`PREVIEW_RENDERER_TOKEN`を`Authorization: Bearer`で送る。本番は`token`必須(既定`none`はローカル用) |
 | `PREVIEW_RENDERER_TOKEN` | Preview | 撮影サービスとの共有トークン(32文字以上。Bicepがsecretとして設定) |
 | `PREVIEW_RENDERER_CA_CERT` | Preview | 撮影サービスの自己署名証明書(PEM)。指定するとこの証明書だけを信頼して接続する。本番は必須 |
@@ -617,7 +623,7 @@ az containerapp job execution list -g "$RG" -n caj-siryou-mite-stg-migrate \
 残っている点:
 
 - 撮影サービスをACIへ移した構成(2026-11-20、Q-066)での確認: ACIがsnet-aciのNSG(外向き
-  すべて拒否)のままACRからimageを取得できる、固定のプライベートIPで起動する、Chromium sandbox
+  すべて拒否)のままACRからimageを取得できる(2026-11-20に確認)、Chromium sandbox
   有効のまま撮影できる(`preview_capture_failed`が無い)、Preview JobからHTTPS・トークンで届く
 
 - Container AppsはコンテナのファイルシステムをRead-onlyにする設定を持たないため、設計 §7.5

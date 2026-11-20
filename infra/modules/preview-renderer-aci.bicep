@@ -6,8 +6,13 @@
 // 最低1つ置く必要があり、専用のE16インスタンスが常時課金される(stagingで約245円/時)。
 // ACIの標準SKUではsandbox有効のままChromiumを起動できる(2026-11-15に確認)。
 //
-// - snet-aciへ固定のプライベートIPで置く。NSGでPreview Job(snet-cae)からのHTTPSだけを受け付け、
-//   外向きの通信はすべて拒否する(infra/modules/network.bicep)
+// - snet-aciへプライベートIPで置く。IPはACIが割り当てる(VNet内のACIはIPを指定できず、
+//   指定しても無視される。2026-11-20にstagingで確認)。割り当てられたIPをendpointとして出力し、
+//   Preview Jobへ渡す。コンテナグループが別のホストへ移されるとIPが変わることがあり、その場合は
+//   再デプロイするまでプレビュー生成が失敗する(preview-failedアラートで気付く、docs/OPERATIONS.md)
+// - NSGでPreview Job(snet-cae)からのHTTPSだけを受け付け、外向きの通信はすべて拒否する
+//   (infra/modules/network.bicep)
+// - 証明書のSANはIPではなく固定のDNS名にし、Preview Jobはその名前で検証する(DNSには登録しない)
 // - 自己署名証明書でHTTPSを待ち受け、共有トークンで呼び出し元を確かめる(設計 §9.5)。
 //   秘密鍵とトークンはsecure環境変数で渡す(リソースのプロパティにもデプロイ履歴にも出ない)
 // - Managed IdentityはACRからのimage取得にだけ使う。Queue・DB・Blob・Key Vaultの権限は持たない
@@ -19,8 +24,6 @@ param location string
 param tags object
 @description('ACIへ委任したサブネット(snet-aci)')
 param subnetId string
-@description('撮影サービスに割り当てるプライベートIP(証明書のSANと一致させる)')
-param rendererIp string
 param rendererPort int
 param logAnalyticsCustomerId string
 @secure()
@@ -55,7 +58,6 @@ resource renderer 'Microsoft.ContainerInstance/containerGroups@2023-05-01' = {
     subnetIds: [ { id: subnetId } ]
     ipAddress: {
       type: 'Private'
-      ip: rendererIp
       ports: [ { port: rendererPort, protocol: 'TCP' } ]
     }
     imageRegistryCredentials: [
@@ -97,4 +99,4 @@ resource renderer 'Microsoft.ContainerInstance/containerGroups@2023-05-01' = {
 }
 
 output containerGroupName string = renderer.name
-output endpoint string = 'https://${rendererIp}:${rendererPort}'
+output endpoint string = 'https://${renderer.properties.ipAddress.ip}:${rendererPort}'

@@ -175,7 +175,7 @@ Queue駆動のContainer Apps Jobで最大3回試行し、撮影そのものはAz
 - Preview: Queueにメッセージがあるときだけ起動し、1実行1メッセージで使い捨てにする
   Container Apps Job。Chromiumを持たず、HTMLを撮影サービスへ送ってJPEGを受け取る
 - 撮影サービス(`services/preview-renderer`): ACI(標準SKU)で常駐するコンテナ。VNet内の専用
-  サブネット(snet-aci)に固定のプライベートIPで置き、Preview Jobのサブネットからの
+  サブネット(snet-aci)にプライベートIP(ACIが割り当て、Bicepが実際のIPをPreview Jobへ渡す)で置き、Preview Jobのサブネットからの
   HTTPSだけを受け付ける。外向きの通信はNSGですべて拒否し、Queue・DB・Blob・Key Vaultの
   権限も持たない(Managed IdentityはACRからのimage取得だけ)。証明書は自己署名で、Preview Jobは
   その証明書だけを信頼し、共有トークンで呼ぶ。Container Apps Jobではコンテナのseccompが
@@ -560,7 +560,8 @@ JPEGを受け取ります(Q-066)。
 
 - 撮影サービスの呼び出し(`renderer-client.ts`): `POST https://<撮影サービスのIP>:8443/render`。
   `PREVIEW_RENDERER_CA_CERT`の自己署名証明書だけを信頼して接続し(公開の認証局は使わない。
-  証明書のSANのIPとURLのhostが違えば接続しない)、共有トークンを`Authorization: Bearer`で
+  証明書のSANが固定のDNS名`preview-renderer.siryou-mite.internal`でなければ接続しない。
+  ACIのIPは指定できず変わり得るため、名前の検証はURLのhostではなくこのDNS名で行う)、共有トークンを`Authorization: Bearer`で
   送ります(`PREVIEW_RENDERER_AUTH=token`。本番ではhttps・トークン・証明書が必須)。
   Node.jsの`fetch`は信頼する証明書を要求ごとに指定できないため、`node:https`で呼びます。200は`image/jpeg`かつ上限byte数以下の
   ときだけ受け取り、422(`too_large`)は`PreviewTooLargeError`(再試行しない決定的失敗)、

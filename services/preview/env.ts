@@ -56,7 +56,7 @@ const schema = z
     // `dequeueCount`で判定する最大試行回数(設計 §7.5)。
     QUEUE_MAX_DEQUEUE_COUNT: z.coerce.number().int().min(1).max(10).default(3),
     // 撮影サービスのendpoint(設計 §7.5)。本番・stagingはAzure Container Instancesの
-    // プライベートIP(例: https://10.40.4.4:8443)、ローカルは常駐させた撮影サービス。
+    // プライベートIP(例: https://10.40.4.174:8443)、ローカルは常駐させた撮影サービス。
     PREVIEW_RENDERER_URL: z
       .string()
       .trim()

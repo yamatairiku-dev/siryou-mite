@@ -5,9 +5,9 @@ import {
 } from "../../../services/preview/env";
 import { createSelfSignedTls } from "../../support/self-signed-tls";
 
-const productionRendererUrl = "https://10.40.4.4:8443";
+const productionRendererUrl = "https://10.40.4.174:8443";
 const rendererToken = "t".repeat(43);
-const rendererCaCert = createSelfSignedTls("10.40.4.4").cert;
+const rendererCaCert = createSelfSignedTls().cert;
 const validLogHmacKey = Buffer.alloc(32, 3).toString("base64");
 
 const baseEnvironment: NodeJS.ProcessEnv = {
@@ -192,7 +192,7 @@ describe("parsePreviewEnvironment", () => {
     expect(() =>
       parsePreviewEnvironment({
         ...production,
-        PREVIEW_RENDERER_URL: "http://10.40.4.4:8443",
+        PREVIEW_RENDERER_URL: "http://10.40.4.174:8443",
       }),
     ).toThrow("httpsのURL");
     expect(() =>

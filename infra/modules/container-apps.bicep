@@ -20,7 +20,7 @@ param logAnalyticsSharedKey string
 param identities object
 param registryLoginServer string
 param appImage string
-@description('撮影サービス(ACI)のendpoint(例: https://10.40.4.4:8443)')
+@description('撮影サービス(ACI)のendpoint(ACIが割り当てたプライベートIP。例: https://10.40.4.174:8443)')
 param rendererEndpoint string
 @description('撮影サービスの自己署名証明書(PEM)。Preview Jobはこの証明書だけを信頼する')
 param rendererTlsCertificate string

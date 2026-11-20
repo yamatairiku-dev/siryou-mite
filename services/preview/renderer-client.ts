@@ -5,7 +5,9 @@
  *
  * 本番・stagingでは、Azure Container Instances(VNet内のプライベートIP)で常駐する撮影サービスを
  * HTTPSで呼ぶ。撮影サービスの証明書は自己署名で、`caCert`に渡した証明書だけを信頼する
- * (公開の認証局は信頼しない)。呼び出し元は共有トークン(`Authorization: Bearer`)で示す。
+ * (公開の認証局は信頼しない)。証明書の名前は固定のDNS名(`RENDERER_TLS_SERVER_NAME`)で
+ * 確かめる。ACIのプライベートIPは指定できず、作り直すと変わることがあるため、IPは証明書に入れない。
+ * 呼び出し元は共有トークン(`Authorization: Bearer`)で示す。
  * ローカルでは常駐させた撮影サービスをHTTP・認証なしで呼ぶ。
  *
  * 応答の検証:
@@ -24,11 +26,17 @@ import {
 
 export const MAX_PREVIEW_BYTES_HEADER = "X-Max-Preview-Bytes";
 
+/**
+ * 撮影サービスの証明書のSubject Alternative Name(DNS名)。接続先はIPのまま、TLSの検証だけ
+ * この名前で行う(DNSには登録しない)。`infra/scripts/generate-renderer-tls.mjs`の値と一致させる。
+ */
+export const RENDERER_TLS_SERVER_NAME = "preview-renderer.siryou-mite.internal";
+
 /** 撮影サービスの応答として読む最大byte数。プレビュー画像の上限(最大10MB)に余裕を足す。 */
 const MAX_RESPONSE_BYTES = 11 * 1024 * 1024;
 
 export type RendererClientOptions = {
-  /** 撮影サービスのendpoint(例: `https://10.40.4.4:8443`)。 */
+  /** 撮影サービスのendpoint(例: `https://10.40.4.174:8443`)。 */
   endpoint: string;
   maxBytes: number;
   /** 共有トークン。省略時は認証なし(ローカル)。 */
@@ -104,9 +112,13 @@ export function buildRenderUrl(endpoint: string): URL {
  *
  * Node.jsの`fetch`は信頼する証明書を要求ごとに指定できないため、`node:https`で実装する。
  * `ca`を指定すると既定の認証局は使われず、この証明書で署名された相手だけに接続する。
- * 証明書のSubject Alternative Name(撮影サービスのIP)とURLのhostが一致しない場合も拒否する。
+ * 証明書のSubject Alternative Nameが`serverName`と一致しない場合も拒否する
+ * (Node.jsは`servername`を指定すると、その名前で証明書を検証する)。
  */
-export function createPinnedFetch(caCert: string): typeof fetch {
+export function createPinnedFetch(
+  caCert: string,
+  serverName: string = RENDERER_TLS_SERVER_NAME,
+): typeof fetch {
   return ((input: URL | string, init: RequestInit = {}) =>
     new Promise<Response>((resolve, reject) => {
       const url = typeof input === "string" ? new URL(input) : input;
@@ -124,6 +136,7 @@ export function createPinnedFetch(caCert: string): typeof fetch {
             ...(body ? { "Content-Length": String(body.byteLength) } : {}),
           },
           ca: caCert,
+          servername: serverName,
           // 撮影のたびに接続し直す(接続を使い回さない)。
           agent: false,
           ...(init.signal ? { signal: init.signal } : {}),

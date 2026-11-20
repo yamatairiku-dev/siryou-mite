@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:https";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,12 +10,13 @@ import {
 import {
   buildRenderUrl,
   capturePreviewRemote,
+  RENDERER_TLS_SERVER_NAME,
   type RendererClientOptions,
 } from "../../../services/preview/renderer-client";
 import { createSelfSignedTls } from "../../support/self-signed-tls";
 
 const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
-const endpoint = "https://10.40.4.4:8443";
+const endpoint = "https://10.40.4.174:8443";
 const TOKEN = "t".repeat(43);
 
 function options(
@@ -244,8 +246,9 @@ describe("自己署名証明書を信頼して呼ぶ(設計 §9.5)", () => {
     expect(classifyCaptureFailure(error)).toBe("renderer_unavailable");
   });
 
-  it("証明書のIPとURLのhostが違う相手には接続しない", async () => {
-    const tls = createSelfSignedTls("10.40.4.4");
+  it("証明書のDNS名が撮影サービスの名前と違う相手には接続しない", async () => {
+    // URLのhost(127.0.0.1)はSANに入っているが、名前の検証は固定のDNS名で行う。
+    const tls = createSelfSignedTls("other-renderer.siryou-mite.internal");
     const origin = await startHttps(tls);
 
     const error = await capturePreviewRemote(
@@ -267,5 +270,12 @@ describe("自己署名証明書を信頼して呼ぶ(設計 §9.5)", () => {
     ).catch((caught: unknown) => caught);
     expect(classifyCaptureFailure(error)).toBe("renderer_unavailable");
     expect((error as PreviewRendererError).statusCode).toBe(401);
+  });
+});
+
+describe("撮影サービスの証明書の名前", () => {
+  it("証明書を作るscriptと同じDNS名で検証する", () => {
+    const script = readFileSync("infra/scripts/generate-renderer-tls.mjs", "utf8");
+    expect(script).toContain(`const SERVER_NAME = "${RENDERER_TLS_SERVER_NAME}";`);
   });
 });

@@ -14,13 +14,16 @@ param alertEmailAddress = readEnvironmentVariable('SIRYOU_ALERT_EMAIL')
 
 param deployApps = bool(readEnvironmentVariable('SIRYOU_DEPLOY_APPS', 'false'))
 param imageTag = readEnvironmentVariable('SIRYOU_IMAGE_TAG', 'latest')
-// Container Apps環境の公開IP。環境の作成後に設定する(docs/OPERATIONS.md)
-param containerAppsEnvironmentIp = readEnvironmentVariable('SIRYOU_CAE_STATIC_IP', '')
 
 param grantSigningKeyId = readEnvironmentVariable('SIRYOU_GRANT_KEY_ID')
 param grantSigningPrivateKey = readEnvironmentVariable('SIRYOU_GRANT_PRIVATE_KEY')
 param grantVerificationKeys = readEnvironmentVariable('SIRYOU_GRANT_VERIFICATION_KEYS')
 param logHmacKey = readEnvironmentVariable('SIRYOU_LOG_HMAC_KEY')
+// 撮影サービスのTLS証明書・秘密鍵・共有トークン(infra/scripts/generate-renderer-tls.mjs)。
+// 基盤だけのデプロイ(1段階目)では使わない
+param rendererTlsCertificate = readEnvironmentVariable('SIRYOU_RENDERER_TLS_CERT', '')
+param rendererTlsPrivateKey = readEnvironmentVariable('SIRYOU_RENDERER_TLS_KEY', '')
+param rendererAuthToken = readEnvironmentVariable('SIRYOU_RENDERER_AUTH_TOKEN', '')
 
 // 設計 §7.4, §7.6 のstaging値
 param webMinReplicas = 1

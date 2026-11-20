@@ -169,7 +169,7 @@ Chromiumを含む専用image(`Dockerfile.preview`)は撮影サービス(`service
 Node.js用imageで`node build/services/preview/index.js`を実行し、Chromiumを持ちません。
 撮影サービスの起動commandはimageの既定CMD(`node build/services/preview-renderer/index.js`)です。
 
-- base imageは`mcr.microsoft.com/playwright:v1.64.0-noble`で、tagは`package.json`の
+- base imageは`mcr.microsoft.com/playwright:v1.65.0-noble`で、tagは`package.json`の
   `@playwright/test`のversionと**必ず一致**させます。`@playwright/test`を更新するときは
   同じPRでbase imageのtagも上げます(不一致だと撮影サービスの起動時にbrowserが見つからず
   失敗します)。一致は単体テスト(`tests/unit/services/preview-image-version.test.ts`)が
@@ -181,40 +181,59 @@ Node.js用imageで`node build/services/preview/index.js`を実行し、Chromium�
     (2026-09-30に確認。`--security-opt seccomp=unconfined`なら起動する)
   - Container Apps Job: 起動できない(2026-11-15にstagingで確認。`Seccomp: 2`・`NoNewPrivs: 1`で
     `unshare --user`が`EPERM`。利用者はこの制限を変えられない)
+  - Azure Container Instances(標準SKU): 起動・撮影できる(2026-11-15に診断用のACIで確認)。
+    本番・stagingの撮影サービスはこれを使う(Q-066)
   - Container Appsのdynamic sessions(カスタムコンテナのセッションプール): 起動・撮影できる
-    (2026-11-17に診断用のプールで確認。`Seccomp: 0`、`unshare --user`成功。Q-066)
+    (2026-11-17に確認)が、待機セッションを最低1つ置く必要があり(0はAzureが拒否する)、
+    専用のE16インスタンス(16 vCPU・128GiB)が常時課金される(stagingの実績で約245円/時、
+    月約18万円)ため使わない(Q-066)
 - browser binaryはbase imageの`/ms-playwright`を使い、`npm ci`時は
   `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`でダウンロードしません。本番依存(`npm ci --omit=dev`)に
   加えて`node_modules/playwright-core`だけをdev install stageからコピーします。
 
-#### 撮影サービスのセッションプール
+#### 撮影サービス(Azure Container Instances)
 
-Bicep(`infra/modules/container-apps.bicep`の`rendererPool`、名前`sp-<prefix>-renderer`)で
-作ります。
+Bicep(`infra/modules/preview-renderer-aci.bicep`、名前`ci-<prefix>-renderer`)で作ります。
 
-- `EgressDisabled`: セッションから外向きの通信を一切しない(設計 §8)
-- `OnContainerExit`: 撮影サービスは1件撮影したら終了し(`RENDERER_EXIT_AFTER_RENDER=true`)、
-  セッションが破棄される。終了しなかったセッションも300秒(`maxAlivePeriodInSeconds`、Azureの下限)で破棄される
-- 待機セッション数は`rendererReadySessions`(既定1、最小1)。0にすると撮影のたびにimage
-  (約1GB)の取得から始まり、Preview Jobの処理上限(30秒)に間に合わない
-- 同時セッションは最大4(Preview Jobの最大並列2に余裕を足した値)、各セッション1 vCPU・2GB
-- imageの取得には専用identity `id-<prefix>-renderer`(AcrPullだけ)を使い、セッションの中から
-  は使えない(`managedIdentitySettings`の`lifecycle: None`)
-- Preview Jobのidentityにだけ、このプールの範囲で「Azure ContainerApps Session Executor」を付ける
-- 費用: 待機セッションは使っていなくても課金される(1 vCPU・2GBを常時1つ)。正式な見積もりは
-  設計 §21
-- 通信: 管理endpointは環境の既定ドメイン配下にあり、環境の公開IP(`staticIp`)へ解決される。
-  Container Apps環境のサブネットのNSGはインターネット宛てを拒否しているため、このIPへの443
-  だけを`AllowSessionPoolOutbound`で許可する。IPは環境を作るまで決まらないので、
-  `containerAppsEnvironmentIp`(stagingでは環境変数`SIRYOU_CAE_STATIC_IP`)で渡す。
-  未設定だとルールが作られず、Preview Jobのログに`preview_capture_failed`
-  (`reason=renderer_unavailable`、statusCode無し)が出る。NSGのルールはBicepの定義で
-  まとめて上書きされるため、portalや`az`で個別に足さない
+- 配置: VNetの専用サブネット`snet-aci`(10.40.4.0/24、ACIへ委任)に置く。port 8443(HTTPS)
+  だけを開ける。プライベートIPはACIが割り当てる(VNet内のACIはIPを指定できず、Bicepで指定しても
+  無視された。2026-11-20)。Bicepは割り当てられたIPを`PREVIEW_RENDERER_URL`としてPreview Jobへ渡す
+- IPが変わる場合: コンテナグループがAzure側の保守などで別のホストへ移されると、IPが変わることが
+  ある。変わるとPreview Jobが接続できず`renderer_unavailable`で失敗し、`preview-failed`アラートが
+  鳴る。アプリのデプロイ(手順5)をやり直すと、新しいIPがPreview Jobへ渡る。現在のIPは
+  `az container show -g <rg> -n ci-<prefix>-renderer --query ipAddress.ip -o tsv`、Preview Jobの接続先は
+  `az containerapp job show -g <rg> -n caj-<prefix>-preview --query "properties.template.containers[0].env[?name=='PREVIEW_RENDERER_URL'].value" -o tsv`で確認する
+- 通信: `nsg-<prefix>-aci`で、受信は`snet-cae`(Preview Job)からの8443だけを許可し、
+  外向きの通信はすべて拒否する(設計 §8)。imageの取得はACIの基盤が行う
+- TLS: 自己署名証明書(ECDSA P-256、SANに固定のDNS名`preview-renderer.siryou-mite.internal`、
+  有効期限10年)で待ち受ける。Preview Jobは`PREVIEW_RENDERER_CA_CERT`の証明書だけを信頼し、
+  証明書の名前はこのDNS名で検証する(DNSには登録しない。IPが変わっても証明書は作り直さない)
+- 認証: Preview Jobは共有トークンを`Authorization: Bearer`で送る。違えば401
+  (Preview Jobのログでは`preview_capture_failed`の`reason=renderer_unavailable`、`statusCode: 401`)
+- identity: 専用の`id-<prefix>-renderer`(AcrPullだけ)。Queue・DB・Blob・Key Vaultの権限は無い
+- 1 vCPU・2GB、`restartPolicy: Always`。`/health`をHTTPSでliveness probeする
+- 撮影は1件ずつ。撮影中の要求は503(`renderer_busy`)で断り、Queueの再配信で再試行する
+- 撮影のたびにChromiumを起動して閉じるが、コンテナは使い回す。sandboxが破られた場合の
+  残留リスクは受け入れている(設計 §7.5、Q-066)
+- 費用: 1 vCPU・2GBを常時1つ(ACIの従量課金)
+
+証明書・秘密鍵・共有トークンは`infra/scripts/generate-renderer-tls.mjs`で作り、
+`~/.siryou-mite-stg/renderer.env`に置きます(「2. 鍵の生成」)。ACIはKey Vault参照を持たない
+ため、秘密鍵とトークンはsecure環境変数で渡します(リソースのプロパティにもデプロイ履歴にも
+表示されません)。Preview Jobへはトークンをsecret、証明書を通常の環境変数で渡します。
+
+**証明書の有効期限**: 生成から10年(staging: 2036-11ごろ)。期限が切れるとPreview Jobが
+撮影サービスへ接続できなくなります(`renderer_unavailable`)。期限が近づいたとき、または
+秘密鍵・トークンの漏えいが疑われるときは、`generate-renderer-tls.mjs`で作り直して
+アプリのデプロイ(手順5)を行います。撮影サービスとPreview Jobは同じデプロイで入れ替わります。
+入れ替わりの間の撮影は失敗し得ますが、Queueの再配信で回復します。
 
 | 変数 | 内容 |
 |---|---|
-| `PORT` | 待受けるport(既定8080。セッションプールの`targetPort`と一致させる) |
-| `RENDERER_EXIT_AFTER_RENDER` | `true`なら1件撮影したら終了する(セッションプールでは必須。既定`false`はローカル用) |
+| `PORT` | 待受けるport(既定8080。Azureでは8443) |
+| `RENDERER_TLS_CERT` | TLS証明書(PEM)。`RENDERER_TLS_KEY`と両方を指定するとHTTPSで待ち受ける。本番は必須 |
+| `RENDERER_TLS_KEY` | TLS秘密鍵(PEM)。本番は必須 |
+| `RENDERER_AUTH_TOKEN` | Preview Jobとの共有トークン(32文字以上)。本番は必須 |
 | `PREVIEW_RENDER_MAX_SECONDS` | 1件の撮影上限(既定25秒。Preview Jobの処理上限30秒より短くする) |
 | `MAX_HTML_UPLOAD_BYTES` | 受け付けるHTMLの上限(既定10MB。Webのアップロード上限と同じ値) |
 
@@ -224,7 +243,8 @@ Bicep(`infra/modules/container-apps.bicep`の`rendererPool`、名前`sp-<prefix>
   ワーカーは再試行に回した実行だけ終了コード1で終わります(監視用)。
 - 0.5 vCPU・1GB、最大2件並列、`replicaTimeout`はJob実行上限(45秒)に合わせます。
 - 撮影に失敗した理由は運用ログ`preview_capture_failed`の`reason`で分かります
-  (`renderer_unavailable`: プールへ届かない・権限が無い、`sandbox_unavailable`: セッション内で
+  (`renderer_unavailable`: 撮影サービスへ届かない・証明書やトークンが合わない、
+  `renderer_busy`: 撮影サービスが別の撮影中、`sandbox_unavailable`: 撮影サービスで
   sandboxを使えない、`too_large`: 画像が上限に収まらない、など)。
 
 ### Display / Preview Job / Maintenance Job
@@ -248,8 +268,10 @@ Managed Identity必須(`DATABASE_AUTH=entra`、`AZURE_CLIENT_ID`)・接続文字
 | `PREVIEW_JOB_MAX_RUNTIME_SECONDS` | Preview | Job実行上限(既定45秒) |
 | `QUEUE_MAX_DEQUEUE_COUNT` | Preview | `dequeueCount`による最大試行回数(既定3回) |
 | `MAX_PREVIEW_IMAGE_BYTES` | Preview | プレビュー画像1件あたりの上限(既定1MB)。撮影サービスへ`X-Max-Preview-Bytes`で渡す |
-| `PREVIEW_RENDERER_URL` | Preview | 撮影サービスのendpoint(必須)。本番・stagingはセッションプールの管理endpoint(Bicepが設定)、ローカルは`http://127.0.0.1:3200` |
-| `PREVIEW_RENDERER_AUTH` | Preview | `entra`ならManaged Identity(`AZURE_CLIENT_ID`)のaccess tokenで呼ぶ。本番は`entra`必須(既定`none`はローカル用) |
+| `PREVIEW_RENDERER_URL` | Preview | 撮影サービスのendpoint(必須)。本番・stagingは`https://<ACIが割り当てたIP>:8443`(Bicepが設定)、ローカルは`http://127.0.0.1:3200` |
+| `PREVIEW_RENDERER_AUTH` | Preview | `token`なら`PREVIEW_RENDERER_TOKEN`を`Authorization: Bearer`で送る。本番は`token`必須(既定`none`はローカル用) |
+| `PREVIEW_RENDERER_TOKEN` | Preview | 撮影サービスとの共有トークン(32文字以上。Bicepがsecretとして設定) |
+| `PREVIEW_RENDERER_CA_CERT` | Preview | 撮影サービスの自己署名証明書(PEM)。指定するとこの証明書だけを信頼して接続する。本番は必須 |
 | `MAINTENANCE_JOB_MAX_RUNTIME_SECONDS` | Maintenance | Job実行上限(既定900秒)。超えたら新しいバッチを始めずに終了する |
 | `MAINTENANCE_BATCH_SIZE` | Maintenance | DBの抽出・削除1回あたりの件数(既定500) |
 | `MAINTENANCE_BLOB_LIST_PAGE_SIZE` | Maintenance | Blob一覧1ページの件数(既定200) |
@@ -501,10 +523,13 @@ az ad sp update --id "$APP_ID" --set appRoleAssignmentRequired=true
 
 ```bash
 node infra/scripts/generate-keys.mjs ~/.siryou-mite-stg/keys.env
+node infra/scripts/generate-renderer-tls.mjs ~/.siryou-mite-stg/renderer.env
 ```
 
-grant署名用Ed25519鍵ペアとログ用HMAC鍵を、所有者だけが読める(600)ファイルへ書き出す
-(画面には表示しない)。このファイルはcommit・共有しない。
+grant署名用Ed25519鍵ペアとログ用HMAC鍵(`keys.env`)と、撮影サービスのTLS証明書・秘密鍵・
+共有トークン(`renderer.env`、証明書の有効期限10年。「撮影サービス(Azure Container Instances)」)を、
+所有者だけが読める(600)ファイルへ書き出す(画面には表示しない)。どちらのスクリプトも既存の
+ファイルを上書きしない。これらのファイルはcommit・共有しない。
 開発コンテナでは`~/.siryou-mite-stg`がvolume(`stg_secrets`)なので、コンテナを再作成しても残る。
 手順3の`SIRYOU_TENANT_ID`などの設定値も`~/.siryou-mite-stg/settings.env`に置いておける。
 volumeを削除すると鍵は戻せないため、パスワードマネージャー等にも控えを残す。
@@ -543,6 +568,7 @@ az acr build --registry "$ACR" --image "siryou-mite-preview:$TAG" --file Dockerf
 ### 5. アプリとJobのデプロイ(2段階目)
 
 ```bash
+set -a; . ~/.siryou-mite-stg/renderer.env; set +a
 export SIRYOU_DEPLOY_APPS=true SIRYOU_IMAGE_TAG="$TAG"
 az deployment group create --resource-group "$RG" --name siryou-mite-apps \
   --parameters infra/parameters/staging.bicepparam
@@ -553,16 +579,9 @@ REDIRECT=$(az deployment group show -g "$RG" -n siryou-mite-apps \
 az ad app update --id "$APP_ID" --web-redirect-uris "$REDIRECT"
 ```
 
-Container Apps環境の公開IPをNSGへ反映するため、IPを渡してもう一度デプロイする
-(Preview Jobから撮影サービスのセッションプールへ届くようにする)。2回目以降のデプロイでも
-毎回`SIRYOU_CAE_STATIC_IP`を設定する(未設定だと許可ルールが消える)。
-
-```bash
-export SIRYOU_CAE_STATIC_IP=$(az containerapp env show -g "$RG" -n cae-siryou-mite-stg \
-  --query properties.staticIp -o tsv)
-az deployment group create --resource-group "$RG" --name siryou-mite-apps \
-  --parameters infra/parameters/staging.bicepparam
-```
+撮影サービス(ACI `ci-siryou-mite-stg-renderer`)は、Container Appsより先に作られる。
+`renderer.env`を読み込まずにデプロイすると、証明書・トークンが空のため撮影サービスが起動しない
+(`RENDERER_TLS_CERT`が必須のため)。
 
 ### 6. DB初期設定 → マイグレーション
 
@@ -597,11 +616,14 @@ az containerapp job execution list -g "$RG" -n caj-siryou-mite-stg-migrate \
    読み、アップロード後にJobが起動する
 4. DB初期設定Jobの`pgaadauth_create_principal_with_oid`と、Entra管理者による業務DB作成・権限付与
 5. Container Apps環境のNSG(インターネット拒否)でイメージ取得・Managed Identityのtoken取得ができる
-6. 撮影サービスのセッションプール上でChromium sandboxが有効のまま撮影できる。Preview Jobから
-   プールの管理endpointへの通信は、NSGの`AllowSessionPoolOutbound`(環境の公開IPの443)で許可する
-7. Key Vault(public network access無効・`bypass: None`)へ、デプロイ(ARM)で秘密値を登録できる
-8. Easy Authのトークンストアを無効にしているため、`/.auth/me`は使えない(アプリの404になる。
+6. Key Vault(public network access無効・`bypass: None`)へ、デプロイ(ARM)で秘密値を登録できる
+7. Easy Authのトークンストアを無効にしているため、`/.auth/me`は使えない(アプリの404になる。
    QUESTIONS Q-063)。ロール・所属は監査履歴で確認する
+8. 撮影サービスをACIへ移した構成(2026-11-20、Q-066): ACIがsnet-aciのNSG(外向きすべて拒否)の
+   ままACRからimageを取得できる。Chromium sandbox有効のまま撮影でき、Preview JobからHTTPS
+   (固定のDNS名で証明書を検証)・共有トークンで届く(`preview_render_finished`・
+   `preview_generation_succeeded`、`preview_capture_failed`なし)。ACIのIPはデプロイで更新する
+   たびに変わった(10.40.4.174→10.40.4.110)が、BicepがPreview Jobへ実際のIPを渡すため影響は無い
 
 残っている点:
 
@@ -616,7 +638,7 @@ az containerapp job execution list -g "$RG" -n caj-siryou-mite-stg-migrate \
 
 - Preview Jobは1実行1メッセージ、最大3回試行する(`dequeueCount`で判定し、3回目の
   失敗でプレビュー状態を`failed`にして監査を保存してからメッセージを削除する)
-- Preview Jobは撮影を撮影サービス(dynamic sessionsのセッションプール、専用image
+- Preview Jobは撮影を撮影サービス(Azure Container Instances、専用image
   `Dockerfile.preview`)へ任せる。撮影はChromium sandbox有効・JavaScript無効・
   外部ネットワーク接続なしで行う
 - Migration Jobはdeploy前に1回実行し、失敗時はrevisionを更新しない

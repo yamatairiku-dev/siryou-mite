@@ -17,7 +17,7 @@ async function listening(server: ReturnType<typeof startRenderer>): Promise<stri
 }
 
 function renderRequest(origin: string): Promise<Response> {
-  return fetch(`${origin}/render?identifier=x`, {
+  return fetch(`${origin}/render`, {
     method: "POST",
     headers: { "X-Max-Preview-Bytes": "1024" },
     body: "<h1>x</h1>",
@@ -25,28 +25,7 @@ function renderRequest(origin: string): Promise<Response> {
 }
 
 describe("startRenderer(設計 §7.5)", () => {
-  it("セッションでは1件撮影したら終了する(RENDERER_EXIT_AFTER_RENDER=true)", async () => {
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const exit = vi.fn();
-    const server = startRenderer({
-      env: { ...parseRendererEnvironment({ RENDERER_EXIT_AFTER_RENDER: "true" }), PORT: 0 },
-      render: async () => jpeg,
-      exit,
-    });
-    const origin = await listening(server);
-
-    const response = await renderRequest(origin);
-    expect(response.status).toBe(200);
-    await response.arrayBuffer();
-
-    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
-    expect(server.listening).toBe(false);
-    const events = logSpy.mock.calls.map(([line]) => JSON.parse(String(line)).event);
-    expect(events).toContain("preview_renderer_started");
-    expect(events).toContain("preview_renderer_exiting");
-  });
-
-  it("ローカル(既定)では撮影後も常駐し、終了要求で止まる", async () => {
+  it("撮影後も常駐し、終了要求で止まる", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const exit = vi.fn();
     const server = startRenderer({

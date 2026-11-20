@@ -10,6 +10,7 @@ import {
   formatZodError,
   validateCommonConfig,
 } from "../shared/env.js";
+import { MIN_RENDERER_TOKEN_LENGTH } from "../preview-renderer/env.js";
 import { PREVIEW_FINALIZE_TIMEOUT_MS } from "./worker.js";
 
 /**
@@ -54,8 +55,8 @@ const schema = z
       .default(45),
     // `dequeueCount`で判定する最大試行回数(設計 §7.5)。
     QUEUE_MAX_DEQUEUE_COUNT: z.coerce.number().int().min(1).max(10).default(3),
-    // 撮影サービスのendpoint(設計 §7.5)。本番・stagingはdynamic sessionsのセッションプールの
-    // 管理endpoint、ローカルは常駐させた撮影サービス(`services/preview-renderer`)。
+    // 撮影サービスのendpoint(設計 §7.5)。本番・stagingはAzure Container Instancesの
+    // プライベートIP(例: https://10.40.4.174:8443)、ローカルは常駐させた撮影サービス。
     PREVIEW_RENDERER_URL: z
       .string()
       .trim()
@@ -63,8 +64,22 @@ const schema = z
       .refine((value) => /^https?:\/\/[^?#]+$/.test(value), {
         message: "PREVIEW_RENDERER_URL はクエリ文字列の無いhttp(s)のURLである必要があります",
       }),
-    // `entra`: Managed Identityのaccess tokenで呼ぶ(セッションプール)。`none`: ローカル。
-    PREVIEW_RENDERER_AUTH: z.enum(["none", "entra"]).default("none"),
+    // `token`: 共有トークンで呼ぶ(本番・staging)。`none`: ローカル。
+    PREVIEW_RENDERER_AUTH: z.enum(["none", "token"]).default("none"),
+    PREVIEW_RENDERER_TOKEN: z
+      .string()
+      .optional()
+      .transform((value) => (value === "" ? undefined : value)),
+    // 撮影サービスの自己署名証明書(PEM)。指定すると、この証明書だけを信頼する(設計 §9.5)。
+    PREVIEW_RENDERER_CA_CERT: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value) => (value === "" ? undefined : value))
+      .refine(
+        (value) => value === undefined || value.includes("-----BEGIN CERTIFICATE"),
+        { message: "PEM形式(CERTIFICATE)である必要があります" },
+      ),
     // プレビュー画像1件あたりの上限(設計 §6.1)。超える場合は`failed`にする。
     MAX_PREVIEW_IMAGE_BYTES: z.coerce
       .number()
@@ -75,12 +90,34 @@ const schema = z
   .superRefine((value, context) => {
     validateCommonConfig(value, context);
 
+    if (
+      value.PREVIEW_RENDERER_AUTH === "token" &&
+      (value.PREVIEW_RENDERER_TOKEN === undefined ||
+        value.PREVIEW_RENDERER_TOKEN.length < MIN_RENDERER_TOKEN_LENGTH)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["PREVIEW_RENDERER_TOKEN"],
+        message: `PREVIEW_RENDERER_AUTH=token では ${MIN_RENDERER_TOKEN_LENGTH}文字以上の PREVIEW_RENDERER_TOKEN が必要です`,
+      });
+    }
+    if (
+      value.PREVIEW_RENDERER_CA_CERT !== undefined &&
+      !value.PREVIEW_RENDERER_URL.startsWith("https://")
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["PREVIEW_RENDERER_URL"],
+        message: "PREVIEW_RENDERER_CA_CERT を指定する場合は PREVIEW_RENDERER_URL にhttpsのURLが必要です",
+      });
+    }
+
     if (value.NODE_ENV === "production") {
-      if (value.PREVIEW_RENDERER_AUTH !== "entra") {
+      if (value.PREVIEW_RENDERER_AUTH !== "token") {
         context.addIssue({
           code: "custom",
           path: ["PREVIEW_RENDERER_AUTH"],
-          message: "本番環境では PREVIEW_RENDERER_AUTH=entra が必須です",
+          message: "本番環境では PREVIEW_RENDERER_AUTH=token が必須です",
         });
       }
       if (!value.PREVIEW_RENDERER_URL.startsWith("https://")) {
@@ -88,6 +125,13 @@ const schema = z
           code: "custom",
           path: ["PREVIEW_RENDERER_URL"],
           message: "本番環境では PREVIEW_RENDERER_URL にhttpsのURLが必要です",
+        });
+      }
+      if (value.PREVIEW_RENDERER_CA_CERT === undefined) {
+        context.addIssue({
+          code: "custom",
+          path: ["PREVIEW_RENDERER_CA_CERT"],
+          message: "本番環境では PREVIEW_RENDERER_CA_CERT が必須です",
         });
       }
     }

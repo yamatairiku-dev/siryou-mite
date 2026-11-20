@@ -5,6 +5,9 @@
 //   private endpoint経由。NSGでインターネットへの通信を拒否し、
 //   コンテナイメージの取得・Entra ID・監視など必要な宛先だけを許可する(設計 §8)
 // - snet-pe: private endpoint用
+// - snet-aci: 撮影サービス(Azure Container Instances)専用。利用者のHTMLを描画するChromiumを
+//   動かすため、受け付けるのはsnet-cae(Preview Job)からのHTTPSだけにし、外向きの通信は
+//   すべて拒否する(設計 §7.5, §8、Q-066)。ACIへ委任したサブネットにはコンテナグループ以外を置けない
 //
 // 2025年9月30日以降に作るVNetは既定の外向き通信(default outbound access)が無いため、
 // 外向き通信が必要なsnet-caeにはNAT Gatewayを付ける。宛先の制限はNSGで行う。
@@ -15,8 +18,11 @@ param location string
 param tags object
 @description('VNetのアドレス空間')
 param addressPrefix string = '10.40.0.0/16'
-@description('Container Apps環境の公開IP(staticIp)。撮影サービスのセッションプールの管理endpointがこのIPにあるため、Preview Jobからの443を許可する。環境の作成前(初回の基盤デプロイ)は空')
-param containerAppsEnvironmentIp string = ''
+@description('撮影サービスが待ち受けるport(HTTPS)')
+param rendererPort int = 8443
+
+var containerAppsSubnetPrefix = cidrSubnet(addressPrefix, 23, 1)
+var containerInstancesSubnetPrefix = cidrSubnet(addressPrefix, 24, 4)
 
 var privateDnsZoneNames = [
   'privatelink.postgres.database.azure.com'
@@ -151,25 +157,6 @@ resource caeNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
           destinationPortRange: '443'
         }
       }
-      // 撮影サービスのセッションプール(dynamic sessions)の管理endpoint。環境の既定ドメイン
-      // 配下にあり、環境の公開IPへ解決される(設計 §7.5, §8)。IPが未確定の間はルールを作らない
-      ...(empty(containerAppsEnvironmentIp)
-        ? []
-        : [
-            {
-              name: 'AllowSessionPoolOutbound'
-              properties: {
-                priority: 160
-                direction: 'Outbound'
-                access: 'Allow'
-                protocol: 'Tcp'
-                sourceAddressPrefix: 'VirtualNetwork'
-                sourcePortRange: '*'
-                destinationAddressPrefix: '${containerAppsEnvironmentIp}/32'
-                destinationPortRange: '443'
-              }
-            }
-          ])
       {
         name: 'DenyInternetOutbound'
         properties: {
@@ -180,6 +167,71 @@ resource caeNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
           sourceAddressPrefix: '*'
           sourcePortRange: '*'
           destinationAddressPrefix: 'Internet'
+          destinationPortRange: '*'
+        }
+      }
+    ]
+  }
+}
+
+// 撮影サービス(ACI)のサブネット。Preview Job(snet-cae)からのHTTPSだけを受け付け、
+// 外向きの通信はすべて拒否する(Chromiumから資料の保存先・インターネットへ届かないようにする)。
+// イメージの取得とManaged Identityのtoken取得はACIの基盤が行う。
+resource aciNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
+  name: 'nsg-${namePrefix}-aci'
+  location: location
+  tags: tags
+  properties: {
+    securityRules: [
+      {
+        name: 'AllowPreviewJobInbound'
+        properties: {
+          priority: 100
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: containerAppsSubnetPrefix
+          sourcePortRange: '*'
+          destinationAddressPrefix: containerInstancesSubnetPrefix
+          destinationPortRange: string(rendererPort)
+        }
+      }
+      {
+        name: 'AllowAzureLoadBalancerInbound'
+        properties: {
+          priority: 110
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: '*'
+          sourceAddressPrefix: 'AzureLoadBalancer'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '*'
+        }
+      }
+      {
+        name: 'DenyAllInbound'
+        properties: {
+          priority: 4000
+          direction: 'Inbound'
+          access: 'Deny'
+          protocol: '*'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '*'
+        }
+      }
+      {
+        name: 'DenyAllOutbound'
+        properties: {
+          priority: 4000
+          direction: 'Outbound'
+          access: 'Deny'
+          protocol: '*'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
           destinationPortRange: '*'
         }
       }
@@ -214,12 +266,27 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
         // workload profiles環境の最小は/27。Jobの並列実行に備えて/23を確保する
         name: 'snet-cae'
         properties: {
-          addressPrefix: cidrSubnet(addressPrefix, 23, 1)
+          addressPrefix: containerAppsSubnetPrefix
           defaultOutboundAccess: false
           networkSecurityGroup: { id: caeNsg.id }
           natGateway: { id: nat.id }
           delegations: [
             { name: 'cae', properties: { serviceName: 'Microsoft.App/environments' } }
+          ]
+        }
+      }
+      {
+        // ACIの推奨は/24以上(小さいとアドレスの再利用が間に合わず作成に失敗することがある)
+        name: 'snet-aci'
+        properties: {
+          addressPrefix: containerInstancesSubnetPrefix
+          defaultOutboundAccess: false
+          networkSecurityGroup: { id: aciNsg.id }
+          delegations: [
+            {
+              name: 'aci'
+              properties: { serviceName: 'Microsoft.ContainerInstance/containerGroups' }
+            }
           ]
         }
       }
@@ -247,6 +314,8 @@ resource dnsLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06
 output vnetId string = vnet.id
 output privateEndpointSubnetId string = vnet.properties.subnets[0].id
 output containerAppsSubnetId string = vnet.properties.subnets[1].id
+output containerInstancesSubnetId string = vnet.properties.subnets[2].id
+output rendererPort int = rendererPort
 output postgresDnsZoneId string = dnsZones[0].id
 output blobDnsZoneId string = dnsZones[1].id
 output queueDnsZoneId string = dnsZones[2].id

@@ -6,8 +6,8 @@
  * 責務:
  *   - Storage Queueから1メッセージだけを受信し、1実行で1メッセージを処理する
  *   - `dequeueCount` で最大3回まで試行し、3回目の失敗でDBの状態を`failed`にする
- *   - HTMLを撮影サービス(`services/preview-renderer`、dynamic sessionsのセッション)へ
- *     送り、1280x720のJPEGプレビュー(1MB以下)を受け取る。撮影サービスはJavaScript無効・
+ *   - HTMLを撮影サービス(`services/preview-renderer`、Azure Container Instances)へ
+ *     HTTPS・共有トークンで送り、1280x720のJPEGプレビュー(1MB以下)を受け取る。撮影サービスはJavaScript無効・
  *     外部ネットワーク接続なし・Chromium sandbox有効のPlaywrightで撮影する
  *   - 成否を監査・運用ログへ記録する
  *

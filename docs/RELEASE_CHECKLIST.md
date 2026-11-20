@@ -27,7 +27,7 @@
 - [ ] 表示サービスの応答にCSPとsandboxのヘッダーが付き、外部resourceを読みに行かない(ブラウザの開発者ツールで確認)
 - [ ] 資料内の外部リンク(target省略)が、右クリックの「新しいタブで開く」とCtrl+クリックで新しいタブに開く。普通にクリックするとiframe内でブロックされ、「表示をやり直す」で資料が元に戻る(右クリック操作はE2E対象外。設計 §6.3)
 - [ ] Preview Jobがアップロード後にプレビューを生成し、状態が`ready`または`failed`へ変わる(E2E対象外)
-- [ ] 撮影サービスのセッションプールでChromium sandboxが有効のまま撮影でき(Log Analyticsに`preview_capture_failed`が無い)、撮影後にセッションが残っていない
+- [ ] 撮影サービス(ACI)でChromium sandboxが有効のまま撮影でき(Log Analyticsに`preview_capture_failed`が無い)、撮影サービスから外向きの通信ができない
 - [ ] セッション期限切れ
 - [ ] 権限あり／なし
 - [ ] 主要業務フロー

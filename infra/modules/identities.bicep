@@ -24,8 +24,8 @@ resource preview 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' =
   tags: tags
 }
 
-// 撮影サービスのセッションプールがACRからimageを取得するためだけに使う。セッションの中からは
-// 使えない(`managedIdentitySettings`の`lifecycle: 'None'`)。DB・Storageの権限は付けない。
+// 撮影サービス(ACI)がACRからimageを取得するためだけに使う。DB・Storage・Key Vaultの権限は
+// 付けない(利用者のHTMLを描画するChromiumから業務データへ届かないようにする。Q-066)。
 resource renderer 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: 'id-${namePrefix}-renderer'
   location: location

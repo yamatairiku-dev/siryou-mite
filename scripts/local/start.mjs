@@ -11,8 +11,8 @@
  *   子プロセスの環境変数としてだけ渡す(`.env`は読まず、ファイルにも書かない)
  * - Preview Jobは本番ではQueue駆動のJob(1実行1メッセージ)。ここでは同じ
  *   エントリーポイントを数秒おきに起動して代用する
- * - 撮影サービスは本番ではdynamic sessionsのセッション(1件撮影したら破棄)。ここでは
- *   常駐させ、Preview Jobから認証なしで呼ぶ
+ * - 撮影サービスは本番ではACIで常駐し、HTTPS・共有トークンで呼ぶ。ここではHTTP・
+ *   認証なしで常駐させる
  */
 import { spawn, spawnSync } from "node:child_process";
 import { generateKeyPairSync, randomBytes } from "node:crypto";

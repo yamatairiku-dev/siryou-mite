@@ -158,8 +158,8 @@ grantはアプリJavaScriptがhidden formのPOST bodyでiframeへ送り、URL、
 
 Web、Display、Preview、Migration、Maintenance、DB初期設定はすべて同じContainer Apps環境で
 実行します。WebだけEasy Auth(Container Appsの組み込み認証)を有効にします。プレビュー生成は
-Queue駆動のContainer Apps Jobで最大3回試行し、撮影そのものはdynamic sessions(セッション
-プール)で動くChromium入りの撮影サービスへ任せます。撮影はJavaScriptと外部ネットワークを
+Queue駆動のContainer Apps Jobで最大3回試行し、撮影そのものはAzure Container Instances(ACI)で
+常駐するChromium入りの撮影サービスへ任せます。撮影はJavaScriptと外部ネットワークを
 無効にして行います。
 
 実行単位ごとの使い方は次のとおりです(設計 §7.1, §7.5, §7.6, §9.1)。
@@ -174,12 +174,14 @@ Queue駆動のContainer Apps Jobで最大3回試行し、撮影そのものはdy
   (0レプリカからの起動は約45秒かかり、60秒の表示grantに対して余裕がない)
 - Preview: Queueにメッセージがあるときだけ起動し、1実行1メッセージで使い捨てにする
   Container Apps Job。Chromiumを持たず、HTMLを撮影サービスへ送ってJPEGを受け取る
-- 撮影サービス(`services/preview-renderer`): Container Appsのdynamic sessions(カスタム
-  コンテナのセッションプール)。セッションはHyper-Vで分離され、外向きの通信を持たず
-  (`EgressDisabled`)、Queue・DB・Blob・秘密値にも触れない。Preview Jobが資料ごとに新しい
-  セッション識別子で呼び、撮影サービスは1件撮影したら終了するため、セッションは使い回されない。
-  Container Apps Jobではコンテナのseccompがuser namespaceの作成を拒否し、Chromium sandboxを
-  使えなかったため、この形にした(Q-066)
+- 撮影サービス(`services/preview-renderer`): ACI(標準SKU)で常駐するコンテナ。VNet内の専用
+  サブネット(snet-aci)にプライベートIP(ACIが割り当て、Bicepが実際のIPをPreview Jobへ渡す)で置き、Preview Jobのサブネットからの
+  HTTPSだけを受け付ける。外向きの通信はNSGですべて拒否し、Queue・DB・Blob・Key Vaultの
+  権限も持たない(Managed IdentityはACRからのimage取得だけ)。証明書は自己署名で、Preview Jobは
+  その証明書だけを信頼し、共有トークンで呼ぶ。Container Apps Jobではコンテナのseccompが
+  user namespaceの作成を拒否し、Chromium sandboxを使えなかった。dynamic sessionsでは使えたが、
+  専用のE16インスタンスが常時課金される(約245円/時)ため、ACIにした(Q-066)。コンテナを
+  使い回すため、sandboxが破られた場合に他の資料の撮影へ影響し得る残留リスクは受け入れている
 - Migration・Maintenance・DB初期設定: 実行して終わる処理で、private endpointだけで公開する
   PostgreSQLへ届く必要があるため、VNet内のContainer Apps Jobで実行する
 
@@ -187,7 +189,7 @@ Queue駆動のContainer Apps Jobで最大3回試行し、撮影そのものはdy
 Easy Authがあり、client secretなし・Token Store無効・除外pathという本アプリの構成をそのまま
 取れるため、運用・ネットワーク・デプロイ方法を1種類にまとめる目的でContainer Appsへ
 寄せました。信頼できないHTMLを描画するChromiumは、Web・Displayと同じ環境のコンテナではなく
-dynamic sessionsのセッションで動かします(Q-064、Q-066)。
+ACIの撮影サービスで動かします(Q-064、Q-066)。
 
 container imageはNode.js用と撮影サービス用(Chromium入り、`Dockerfile.preview`)の2種類だけで、
 Node.js用imageをcommandとManaged Identityの違いでWeb・Display・各Jobに使い回します。
@@ -419,8 +421,8 @@ services/
   preview/index.ts        Preview Job（プレビュー生成ワーカー）のエントリーポイント(環境変数検証・Job実行上限・終了コード)
   preview/worker.ts       1実行1メッセージの処理手順(dequeueCount判定・冪等性・失敗分類)
   preview/capture.ts      Playwright(Chromium)での撮影と安全設定(sandbox有効・JS無効・通信遮断)。撮影サービスが使う
-  preview/renderer-client.ts 撮影サービス(セッションプール)の呼び出しと応答の検証
-  preview-renderer/index.ts  撮影サービスのエントリーポイント(1件撮影したら終了する設定を含む)
+  preview/renderer-client.ts 撮影サービス(ACI)の呼び出し(自己署名証明書の固定・共有トークン)と応答の検証
+  preview-renderer/index.ts  撮影サービスのエントリーポイント(TLS・共有トークンの設定)
   preview-renderer/server.ts 撮影サービスのHTTP処理(`GET /health`・`POST /render`)
   preview-renderer/env.ts    撮影サービス用環境変数schema
   preview/dependencies.ts PreviewのQueue・DB・Blob・撮影の組み立て
@@ -552,22 +554,26 @@ frameworkは追加しません。
 ## プレビュー生成ワーカー(`services/preview/`)
 
 プレビュー画像は、Storage Queueのメッセージを1実行1件だけ処理するContainer Apps Jobで
-生成します(設計 §7.5, §10.2)。撮影はJobの中では行わず、dynamic sessionsで動く撮影サービス
+生成します(設計 §7.5, §10.2)。撮影はJobの中では行わず、ACIで常駐する撮影サービス
 (`services/preview-renderer/`、Chromiumを含む専用image `Dockerfile.preview`)へHTMLを送り、
 JPEGを受け取ります(Q-066)。
 
-- 撮影サービスの呼び出し(`renderer-client.ts`): `POST <プールの管理endpoint>/render?identifier=<UUID>`。
-  識別子を資料ごとに新しくするため、毎回別のセッションが割り当てられます。認証はPreview Jobの
-  Managed Identityのaccess token(scope `https://dynamicsessions.io/.default`。
-  `PREVIEW_RENDERER_AUTH=entra`、本番では必須)。200は`image/jpeg`かつ上限byte数以下の
+- 撮影サービスの呼び出し(`renderer-client.ts`): `POST https://<撮影サービスのIP>:8443/render`。
+  `PREVIEW_RENDERER_CA_CERT`の自己署名証明書だけを信頼して接続し(公開の認証局は使わない。
+  証明書のSANが固定のDNS名`preview-renderer.siryou-mite.internal`でなければ接続しない。
+  ACIのIPは指定できず変わり得るため、名前の検証はURLのhostではなくこのDNS名で行う)、共有トークンを`Authorization: Bearer`で
+  送ります(`PREVIEW_RENDERER_AUTH=token`。本番ではhttps・トークン・証明書が必須)。
+  Node.jsの`fetch`は信頼する証明書を要求ごとに指定できないため、`node:https`で呼びます。200は`image/jpeg`かつ上限byte数以下の
   ときだけ受け取り、422(`too_large`)は`PreviewTooLargeError`(再試行しない決定的失敗)、
   それ以外は`PreviewRendererError`です。失敗の理由は撮影サービスが返す既知の固定値
   (`sandbox_unavailable`など)だけを受け取り、運用ログ`preview_capture_failed`へ出します。
 - 撮影サービス(`services/preview-renderer/server.ts`): `GET /health`と`POST /render`だけを
   公開します。HTMLの上限は10MB、同時に撮影するのは1件だけ(撮影中は503)、1件の撮影上限は
   25秒(Preview Jobの処理上限30秒より短い)。要求元が接続を切ったらChromiumを閉じます。
-  `RENDERER_EXIT_AFTER_RENDER=true`(セッションプールの設定)では応答を返し終えたら終了し、
-  セッションプールの`OnContainerExit`でセッションが破棄されます。
+  撮影のたびにChromiumを起動し、終わったら閉じます。`RENDERER_TLS_CERT`・`RENDERER_TLS_KEY`を
+  渡すとHTTPSで待ち受け、`RENDERER_AUTH_TOKEN`を渡すと`POST /render`にトークンを求めます
+  (違えば本文を読まずに401。比較はSHA-256のdigest同士を`timingSafeEqual`で行う)。
+  本番(`NODE_ENV=production`)ではTLSとトークンが必須です。
 - ローカル(`npm run local`)では撮影サービスを常駐させ(port 3200)、Preview Jobは認証なしで
   呼びます。
 
@@ -598,8 +604,8 @@ JPEGを受け取ります(Q-066)。
   ページ取得にネットワークも`file://`も使わない (2)context単位の`route("**/*")`で
   すべてのsubresource要求を`abort`する (3)context を`offline: true`にする
   (4)JavaScript無効でスクリプト経由の通信を発生させない。加えてChromium起動引数で
-  telemetry・component update・Safe Browsingの背景通信を止めます。本番ではセッションプールの
-  `EgressDisabled`で、セッションからの外向きの通信をすべて禁止します(設計 §8)。実際に遮断されることは、ローカルHTTPサーバーが撮影中に
+  telemetry・component update・Safe Browsingの背景通信を止めます。本番では撮影サービスの
+  サブネット(snet-aci)のNSGで、外向きの通信をすべて禁止します(設計 §8)。実際に遮断されることは、ローカルHTTPサーバーが撮影中に
   1件も要求を受けないことで結合テストが確認します。
 - **メッセージ削除の失敗で業務結果を巻き戻しません**。`ready`更新後に削除だけ失敗した
   場合にそれを処理全体の失敗として扱うと、試行上限に達していれば成功済みのプレビューを

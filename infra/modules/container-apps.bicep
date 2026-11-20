@@ -158,16 +158,21 @@ resource web 'Microsoft.App/containerApps@2025-01-01' = {
             { name: 'GRANT_SIGNING_KEY_ID', value: grantSigningKeyId }
             { name: 'GRANT_SIGNING_PRIVATE_KEY', secretRef: 'grant-signing-private-key' }
           ])
+          // 既定のtimeout(1秒)では、0.5 vCPUで応答が一時的に遅れたときにprobe失敗が散発した
+          // (stagingで4時間に15回程度、再起動なし)。`/health`は外部依存を確認しないため、
+          // 待ち時間を延ばしても障害の検知は遅れない。
           probes: [
             {
               type: 'Liveness'
               httpGet: { path: '/health', port: 8080 }
               periodSeconds: 30
+              timeoutSeconds: 3
             }
             {
               type: 'Readiness'
               httpGet: { path: '/health', port: 8080 }
               periodSeconds: 10
+              timeoutSeconds: 3
             }
           ]
         }
@@ -250,16 +255,21 @@ resource display 'Microsoft.App/containerApps@2025-01-01' = {
             { name: 'DATABASE_URL', value: databaseUrls.display }
             { name: 'GRANT_VERIFICATION_KEYS', value: grantVerificationKeys }
           ])
+          // 既定のtimeout(1秒)では、0.5 vCPUで応答が一時的に遅れたときにprobe失敗が散発した
+          // (stagingで4時間に15回程度、再起動なし)。`/health`は外部依存を確認しないため、
+          // 待ち時間を延ばしても障害の検知は遅れない。
           probes: [
             {
               type: 'Liveness'
               httpGet: { path: '/health', port: 8080 }
               periodSeconds: 30
+              timeoutSeconds: 3
             }
             {
               type: 'Readiness'
               httpGet: { path: '/health', port: 8080 }
               periodSeconds: 10
+              timeoutSeconds: 3
             }
           ]
         }

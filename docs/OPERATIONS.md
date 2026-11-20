@@ -284,7 +284,9 @@ purge用のDELETE権限を与えていないため、runtime roleの接続では
 App Roleで管理し、メールドメインでは判定しません。
 
 App Roleまたは所属グループの割り当てを変更した場合は、対象利用者の再ログイン後に
-`/.auth/me`のclaimsとアプリ画面を確認します。確認時にprincipal、token、Cookie全文を
+アプリ画面と、監査履歴の対象利用者の操作の行(ロール・所属)を確認します。Easy Authの
+トークンストアを無効にしているため、`/.auth/me`はEasy Authが処理せずアプリの404に
+なります(QUESTIONS Q-063)。確認時にprincipal、token、Cookie全文を
 チケットやログへ貼り付けず、claim typeとマスキングした値だけを共有します。緊急遮断は
 Entra IDの割り当て解除・アカウント制御とセッション失効手順を組み合わせます。
 
@@ -584,29 +586,31 @@ az containerapp job execution list -g "$RG" -n caj-siryou-mite-stg-migrate \
 匿名で成功し、業務画面が未認証時にEntra IDへ遷移し、ログイン後にアップロード・表示・
 プレビュー生成ができること。
 
-### stagingで確認が必要な点(未検証)
+### stagingで確認した点・残っている点
 
-Bicepは構文・型・lintまで検証済み(CIの`bicep` job)で、Azureへのデプロイはまだ行っていない。
-次は構成上の前提で、実際の環境で確認する。
+構成上の前提として挙げていた次の点は、stagingへのデプロイと動作確認(2026-11-14〜20)で確認済み。
 
 1. WebのEasy Auth(認証sidecar)が、インターネットを拒否したContainer Apps環境のNSG
-   (`AzureActiveDirectory`サービスタグだけ許可)のままEntra IDのOIDCメタデータ・署名鍵を取得し、
-   ログインできる
+   (`AzureActiveDirectory`サービスタグだけ許可)のままEntra IDへログインできる
 2. Container AppsのKey Vault参照(secret。Webのgrant署名鍵を含む)がprivate endpoint経由で解決できる
-3. Preview JobのKEDA scaler(azure-queue、Managed Identity)がprivate endpointのみのQueueの長さを読める
+3. Preview JobのKEDA scaler(azure-queue、Managed Identity)がprivate endpointのみのQueueの長さを
+   読み、アップロード後にJobが起動する
 4. DB初期設定Jobの`pgaadauth_create_principal_with_oid`と、Entra管理者による業務DB作成・権限付与
 5. Container Apps環境のNSG(インターネット拒否)でイメージ取得・Managed Identityのtoken取得ができる
-6. 撮影サービスのセッションプール上でChromium sandboxが有効のまま起動できる(設計 §21 の
-   security spike。診断用のプールでは2026-11-17に確認済み)。あわせて、インターネットを拒否した
-   Container Apps環境のNSGのまま、Preview Jobがプールの管理endpointへ届くこと(届かなければ
-   `preview_capture_failed`の`reason`が`renderer_unavailable`になる)
-7. Container AppsはコンテナのファイルシステムをRead-onlyにする設定を持たないため、設計 §7.5
-   「読み取り専用filesystem」は満たせない(`/tmp`だけ書き込み可能にする構成は維持)
-8. Job失敗(Preview・Migration・Maintenance)の通知(設計 §17)は`infra/modules/job-alerts.bicep`で
-   作成済み(「作成済みの通知」)。クエリはstagingの過去ログ(DB初期設定Jobの失敗、プレビューの
-   恒久失敗)で検出できることを確認済み。実行上限超過の理由名`DeadlineExceeded`は未確認
-9. Key Vault(public network access無効・`bypass: None`)へ、デプロイ(ARM)で秘密値を
-   登録できる(秘密値の登録は管理プレーン経由のため可能な想定)
+6. 撮影サービスのセッションプール上でChromium sandboxが有効のまま撮影できる。Preview Jobから
+   プールの管理endpointへの通信は、NSGの`AllowSessionPoolOutbound`(環境の公開IPの443)で許可する
+7. Key Vault(public network access無効・`bypass: None`)へ、デプロイ(ARM)で秘密値を登録できる
+8. Easy Authのトークンストアを無効にしているため、`/.auth/me`は使えない(アプリの404になる。
+   QUESTIONS Q-063)。ロール・所属は監査履歴で確認する
+
+残っている点:
+
+- Container AppsはコンテナのファイルシステムをRead-onlyにする設定を持たないため、設計 §7.5
+  「読み取り専用filesystem」は満たせない(`/tmp`だけ書き込み可能にする構成は維持)
+- Job失敗(Preview・Migration・Maintenance)の通知(設計 §17)は`infra/modules/job-alerts.bicep`で
+  作成済み(「作成済みの通知」)。クエリはstagingの過去ログ(DB初期設定Jobの失敗、プレビューの
+  恒久失敗)で検出できることを確認済み。実行上限超過の理由名`DeadlineExceeded`と、通知メールの
+  到達は未確認
 
 ## 定期Job
 

@@ -317,6 +317,33 @@ describe("検索条件", () => {
 
 // --- ページング(keyset pagination) ---
 
+describe("プレビュー生成の行", () => {
+  it("`actor_roles`が`null`の`upload`をPreview Jobの記録として返す", async () => {
+    searchAuditEventsMock.mockResolvedValue({
+      events: [
+        auditEventRecord({ id: "1" }),
+        auditEventRecord({
+          id: "2",
+          actorEmailAtEvent: null,
+          actorGroupValues: null,
+          actorRoles: null,
+        }),
+        // 閲覧(Display)も`actor_roles`を残さないが、プレビュー生成ではない。
+        auditEventRecord({ id: "3", action: "view", actorRoles: null }),
+      ],
+      nextCursor: null,
+    });
+
+    const data = await searchAs(adminUser);
+
+    expect(data.page.events.map((event) => event.recordedBy)).toEqual([
+      "user",
+      "preview_job",
+      "user",
+    ]);
+  });
+});
+
 describe("ページング", () => {
   it("次ページがある場合はcursorを返し、cursor指定をrepositoryへ渡す", async () => {
     searchAuditEventsMock.mockResolvedValue({
@@ -487,6 +514,7 @@ function eventFrom(overrides: Record<string, unknown> = {}) {
     actorEmail: "owner@example.com",
     actorGroupValues: ["ZAA535-B"],
     actorRoles: ["User"],
+    recordedBy: "user" as "user" | "preview_job",
     correlationId: CORRELATION_ID,
     errorCategory: null,
     ...overrides,
@@ -613,6 +641,41 @@ describe("監査履歴画面コンポーネント", () => {
     // 色だけに頼らず、結果を文字でも示す。
     expect(rows[1]?.textContent).toContain("拒否");
     expect(rows[2]?.textContent).toContain("失敗");
+  });
+
+  it("Preview Jobが記録した行は「プレビュー生成」と表示し、利用者の操作と見分けられる", async () => {
+    renderAdminAudit({
+      events: [
+        eventFrom({ id: "1", correlationId: "corr-user" }),
+        eventFrom({
+          id: "2",
+          correlationId: "corr-job",
+          actorEmail: null,
+          actorRoles: [],
+          actorGroupValues: [],
+          recordedBy: "preview_job",
+        }),
+      ],
+    });
+
+    const userRow = (await screen.findByText("corr-user")).closest("tr");
+    const jobRow = screen.getByText("corr-job").closest("tr");
+    expect(userRow?.textContent).toContain("アップロード");
+    expect(userRow?.textContent).toContain("owner@example.com");
+    expect(jobRow?.textContent).toContain("プレビュー生成");
+    expect(jobRow?.textContent).toContain("(Preview Job)");
+    // 引き継いだ利用者IDは残し、空のメール・ロールを「(不明)」「(なし)」と見せない。
+    expect(jobRow?.textContent).toContain("oid-someone-else");
+    expect(jobRow?.textContent).not.toContain("(不明)");
+    expect(jobRow?.textContent).not.toContain("(なし)");
+  });
+
+  it("操作の選択肢で、アップロードにプレビュー生成が含まれることを示す", async () => {
+    renderAdminAudit();
+
+    const action = (await screen.findByLabelText("操作")) as HTMLSelectElement;
+    const upload = [...action.options].find((option) => option.value === "upload");
+    expect(upload?.textContent).toBe("アップロード(プレビュー生成を含む)");
   });
 
   it("CSV出力と詳細分析の操作を置かない(設計 §5.7)", async () => {

@@ -57,6 +57,36 @@ describe("root ErrorBoundary", () => {
     ).toBe("/app");
   });
 
+  it("アプリが投げた404の文言はそのまま表示する", () => {
+    renderBoundary(undefined);
+    expect(screen.getByText("資料が見つかりません")).toBeTruthy();
+  });
+
+  it("一致するrouteが無い404では、React Router内部の文言を表示しない", () => {
+    // React Routerはrouteが無いURLを`internal`のErrorResponseにし、dataへ
+    // 「Error: No route matches URL "..."」を入れる(stagingの`/.auth/me`で発生)。
+    const noRoute = new ErrorResponseImpl(
+      404,
+      "Not Found",
+      new Error('No route matches URL "/.auth/me"'),
+      true,
+    );
+    render(
+      <ErrorBoundary
+        {...({
+          error: noRoute,
+          loaderData: undefined,
+          params: {},
+        } as unknown as BoundaryProps)}
+      />,
+    );
+
+    expect(screen.getByText("ページが見つかりません")).toBeTruthy();
+    expect(screen.getByText("URLが正しいか確認してください。")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("No route matches");
+    expect(document.body.textContent).not.toContain("/.auth/me");
+  });
+
   it("未ログイン、またはrootのloaderが失敗した場合は未ログイン画面(/)を指す", () => {
     renderBoundary({
       appName: "資料みて！",

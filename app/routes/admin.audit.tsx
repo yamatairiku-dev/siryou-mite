@@ -132,7 +132,8 @@ export default function AdminAudit({ loaderData }: Route.ComponentProps) {
             <option value="">すべて</option>
             {Object.entries(actionLabels).map(([value, label]) => (
               <option key={value} value={value}>
-                {label}
+                {/* プレビュー生成の結果は`upload`として記録される(設計 §12.2)。 */}
+                {value === "upload" ? `${label}(プレビュー生成を含む)` : label}
               </option>
             ))}
           </select>
@@ -193,7 +194,9 @@ export default function AdminAudit({ loaderData }: Route.ComponentProps) {
                       {formatJstDateTime(event.occurredAt)}
                     </td>
                     <td className="audit-nowrap">
-                      {actionLabels[event.action]}
+                      {event.recordedBy === "preview_job"
+                        ? "プレビュー生成"
+                        : actionLabels[event.action]}
                     </td>
                     <td>
                       <span
@@ -202,18 +205,32 @@ export default function AdminAudit({ loaderData }: Route.ComponentProps) {
                         {resultLabels[event.result]}
                       </span>
                     </td>
-                    <td>
-                      <div>{event.actorEmail ?? "(不明)"}</div>
-                      <div className="audit-id">{event.actorSubjectId}</div>
-                    </td>
-                    <td>
-                      <div className="audit-nowrap">
-                        {event.actorRoles.join("、") || "(なし)"}
-                      </div>
-                      <div className="audit-sub">
-                        {event.actorGroupValues.join("、") || "(なし)"}
-                      </div>
-                    </td>
+                    {event.recordedBy === "preview_job" ? (
+                      <>
+                        {/* Preview Jobは利用者の個人データを残さない。利用者IDは
+                            アップロードした利用者のものを引き継いでいる(設計 §12.2)。 */}
+                        <td>
+                          <div>(Preview Job)</div>
+                          <div className="audit-id">{event.actorSubjectId}</div>
+                        </td>
+                        <td>—</td>
+                      </>
+                    ) : (
+                      <>
+                        <td>
+                          <div>{event.actorEmail ?? "(不明)"}</div>
+                          <div className="audit-id">{event.actorSubjectId}</div>
+                        </td>
+                        <td>
+                          <div className="audit-nowrap">
+                            {event.actorRoles.join("、") || "(なし)"}
+                          </div>
+                          <div className="audit-sub">
+                            {event.actorGroupValues.join("、") || "(なし)"}
+                          </div>
+                        </td>
+                      </>
+                    )}
                     <td className="audit-id">{event.documentId ?? "—"}</td>
                     <td>{event.errorCategory ?? "—"}</td>
                     <td className="audit-id">{event.correlationId}</td>

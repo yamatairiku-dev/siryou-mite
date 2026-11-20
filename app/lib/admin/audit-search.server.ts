@@ -108,6 +108,11 @@ export type AdminAuditEventRow = {
   actorEmail: string | null;
   actorGroupValues: string[];
   actorRoles: string[];
+  /**
+   * 行を記録した主体。`preview_job`はPreview Jobが記録したプレビュー生成の結果で、
+   * `action`は`upload`のまま、操作者はアップロード監査から引き継ぐ(設計 §12.2)。
+   */
+  recordedBy: "user" | "preview_job";
   correlationId: string;
   errorCategory: string | null;
 };
@@ -161,6 +166,15 @@ function auditedDocumentId(
   return found ? criteria.documentId : null;
 }
 
+/**
+ * Preview Jobが記録したプレビュー生成の行か。利用者の`upload`監査は認証済みの
+ * App Role(必ず1つ以上)を`actor_roles`へ保存するが、Preview Jobは利用者の
+ * 個人データを残さないため`actor_roles`を`null`で保存する(設計 §12.2)。
+ */
+function isPreviewJobEvent(event: AuditEventPage["events"][number]): boolean {
+  return event.action === "upload" && event.actorRoles === null;
+}
+
 /** 監査履歴の1行を画面向けDTOへ変換する。 */
 function toAuditEventRow(
   event: AuditEventPage["events"][number],
@@ -175,6 +189,7 @@ function toAuditEventRow(
     actorEmail: event.actorEmailAtEvent,
     actorGroupValues: event.actorGroupValues ?? [],
     actorRoles: event.actorRoles ?? [],
+    recordedBy: isPreviewJobEvent(event) ? "preview_job" : "user",
     correlationId: event.correlationId,
     errorCategory: event.errorCategory,
   };

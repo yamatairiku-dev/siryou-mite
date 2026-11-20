@@ -324,7 +324,7 @@ flowchart LR
   APP --> BLOB["Azure Blob Storage<br>private"]
   APP --> QUEUE["Azure Storage Queue"]
   QUEUE --> WORKER["プレビュー生成Job<br>Azure Container Apps"]
-  WORKER -->|HTML / JPEG| RENDER["撮影サービス<br>Container Apps<br>dynamic sessions"]
+  WORKER -->|HTTPS: HTML / JPEG| RENDER["撮影サービス<br>Azure Container Instances"]
   MAINT["保守Job<br>Azure Container Apps"] --> DB
   MAINT --> BLOB
   MIGRATE["Migration Job<br>Azure Container Apps"] --> DB
@@ -470,24 +470,27 @@ Azure Database for PostgreSQL Flexible Serverを使い、資料メタデータ�
 
 - 表示準備の完了後、Webアプリがプレビュー生成メッセージをStorage Queueへ送る。
 - Container Apps Jobはキューにメッセージがある場合だけ起動し、通常は停止する。
-- 撮影(Chromium)はPreview Jobの中では行わず、Container Appsのdynamic sessions
-  (カスタムコンテナのセッションプール。セッションごとにHyper-Vで分離される)で動く
-  撮影サービスへ任せる。Preview JobはHTMLを送り、JPEGを受け取るだけとする(Q-066)。
-  - 撮影サービスはQueue・DB・Blob・秘密値を持たず、Managed Identityもセッションの中から
-    使えない。外向きの通信は禁止する(セッションプールの`EgressDisabled`)。
-  - Preview Jobは資料ごとに新しいセッション識別子で呼び、撮影サービスは1件撮影したら
-    終了する。セッションは破棄され、別の資料の内容は残らない。
-  - Preview JobはManaged Identityでセッションプールを呼ぶ。呼び出し権限
-    (Azure ContainerApps Session Executor)はPreview Jobのidentityにだけ、プールの範囲で付ける。
-  - プールには撮影待ちのセッションを常に1つ以上用意する。待機セッションが無いと撮影のたびに
-    image取得から始まり、処理上限(30秒)に間に合わない。
+- 撮影(Chromium)はPreview Jobの中では行わず、Azure Container Instances(ACI、標準SKU)で
+  常駐する撮影サービスへ任せる。Preview JobはHTMLを送り、JPEGを受け取るだけとする(Q-066)。
+  - 撮影サービスはQueue・DB・Blob・Key Vaultの権限を持たない。Managed IdentityはACRからの
+    image取得にだけ使う。外向きの通信はNSGですべて拒否する(§8)。
+  - 撮影サービスはVNet内の固定のプライベートIPで待ち受け、Preview Jobのサブネットからの
+    HTTPSだけを受け付ける。証明書は自己署名で、Preview Jobはその証明書だけを信頼する。
+    呼び出し元は共有トークン(`Authorization: Bearer`)で確かめる(§9.5)。
+  - 撮影のたびにChromiumを起動し、撮影が終わったら閉じる。コンテナは使い回すため、
+    Chromium sandboxが破られた場合は、仕込まれたプログラムがコンテナの再起動まで残り、
+    その間に撮影する他の資料のHTMLを見る・プレビュー画像を差し替えることがあり得る。
+    外向きの通信と業務データの権限が無いため外部への持ち出しは起きず、この残留リスクは
+    受け入れた(2026-11-20、Q-066)。
+  - 撮影サービスは1件ずつ撮影し、撮影中の要求は503で断る。断られたメッセージはQueueの
+    再配信で再試行する。
 - 処理は同じメッセージを複数回受け取っても結果が壊れないようにする。
 - 最大3回試行し、3回失敗した場合はプレビュー状態を`failed`へ変更する。
 - 恒久失敗時はエラー分類を監査・運用ログへ記録してメッセージを削除し、
   専用の失敗キューは設けない。
 - 撮影サービスは非root、短いtimeout、CPU・メモリ上限を使う。
 - プレビュー生成ブラウザはJavaScript無効、外部ネットワーク接続なしで実行する。
-- ワーカーは処理ごとに破棄できる構成とする。
+- Preview Jobは処理ごとに破棄できる構成とする。
 - Queueメッセージは`schemaVersion`と`documentId`だけを含む。
 - visibility timeoutは60秒、1メッセージの処理上限は30秒、Job実行上限は45秒とし、
   1実行で1メッセージだけを処理する。
@@ -500,17 +503,19 @@ Azure Database for PostgreSQL Flexible Serverを使い、資料メタデータ�
 - Chromium sandboxが有効であることを実行環境で確認するsecurity spikeをPreview実装の
   完了条件とし、sandbox無効でしか起動できない構成は採用しない。Container Apps Jobでは
   コンテナのseccompが非特権のuser namespaceの作成を拒否するためsandboxを使えず
-  (2026-11-15にstagingで確認)、dynamic sessionsでは使えることを2026-11-17に確認した(Q-066)。
+  (2026-11-15にstagingで確認)、ACIの標準SKUでは使えることを2026-11-15に確認した。
+  dynamic sessionsでも使えたが、待機セッションを最低1つ置く必要があり、専用のE16インスタンスが
+  常時課金されるため採らなかった(Q-066)。
 
 ### 7.6 実行単位とコンテナimage
 
 - Web、Display、各Jobはすべて同じContainer Apps環境で実行する(Q-064)。WebとDisplayは
   同じNode.js用Docker imageを異なるcommandとManaged Identityで使う。
-- 撮影サービス(dynamic sessionsのセッションプール)はChromiumを含む専用Dockerfileと
+- 撮影サービス(Azure Container Instances)はChromiumを含む専用Dockerfileと
   専用imageを使う。
 - Preview Job、Migration Job、Maintenance Job、DB初期設定JobはWeb・Displayと同じ
   Node.js imageを使う。
-- 7つのAzure実行単位(撮影サービスのセッションプールを含む)に対し、コンテナimageは
+- 7つのAzure実行単位(ACIの撮影サービスを含む)に対し、コンテナimageは
   2種類だけとする。
 - production WebとDisplayはそれぞれ0.5 vCPU、1GB、最小1・最大3レプリカとする。
   アップロード上限の判定はDBで行うため、Webを複数レプリカにしても上限は崩れない。
@@ -542,7 +547,8 @@ Maintenance Jobを毎日UTC 18:00（JST 03:00）に実行する。Blob削除失�
 - ACRだけはGitHub-hosted runnerからpushするため、認証付きpublic endpointを有効にする。
   ACR管理者accountは無効化し、runtimeはManaged Identityの`AcrPull`を使う。
 - HTML表示サービス、プレビューワーカー、撮影サービスから外部インターネットへの通信を
-  禁止する。撮影サービスはセッションプールの設定で外向きの通信を一切持たない。
+  禁止する。撮影サービス(ACI)の専用サブネットは、Preview Jobのサブネットからの撮影要求
+  (HTTPS)だけを受け付け、外向きの通信をすべて拒否する。
 - Entra IDやAzure管理サービスへの必要な通信は、対象コンポーネントごとに限定する。
 - WebとDisplayには会社の異なるカスタムドメインを使う。正式なホスト名と証明書は
   環境別Bicepパラメーターとし、リポジトリへ実値を保存しない。
@@ -555,8 +561,8 @@ Maintenance Jobを毎日UTC 18:00（JST 03:00）に実行する。Blob削除失�
   (`*.azurecontainerapps.io`)を使う
 - VNet、サブネット、Private DNSゾーンはBicepで新規作成する。新しいVNetには既定の
   外向き通信が無いため、Container Apps環境のサブネットにNAT Gatewayを付け、
-  NSGでインターネットへの通信を拒否する(イメージ取得・Entra ID・監視の宛先と、撮影サービスの
-  セッションプールの管理endpoint(Container Apps環境の公開IPの443)だけ許可)
+  NSGでインターネットへの通信を拒否する(イメージ取得・Entra ID・監視の宛先だけ許可)。
+  撮影サービス(ACI)は専用サブネット(snet-aci)に置き、外向きの通信をすべて拒否する
 - PostgreSQL、Storage、Key Vaultのprivate endpoint限定とManaged Identity接続は設計どおり
 
 ## 9. セキュリティ設計
@@ -579,9 +585,10 @@ Maintenance Jobを毎日UTC 18:00（JST 03:00）に実行する。Blob削除失�
 productionへ設けない。Webでは、認証sidecarを通らずにアプリへ届く可能性があるDaprを
 有効にしない。同じ環境の他のアプリからの呼び出しもproxyと認証sidecarを通るが、同じ環境の
 コンテナがWebのレプリカへ直接接続できないことはAzureの文書で保証されていない。
-信頼できないHTMLを描画するChromiumは、同じ環境のコンテナではなくdynamic sessionsの
-セッション(Hyper-Vで分離され、外向きの通信を持たない)で動かし、Chromium sandboxも
-有効にする(§7.5、Q-064、Q-066)。headerのJSON構造と
+信頼できないHTMLを描画するChromiumは、同じ環境のコンテナではなく、業務データの権限と
+外向きの通信を持たないACIの撮影サービスで動かし、Chromium sandboxも有効にする
+(§7.5、Q-064、Q-066)。撮影サービスはコンテナを使い回すため、sandboxが破られた場合に
+他の資料の撮影へ影響し得る残留リスクを受け入れている(§7.5)。headerのJSON構造と
 必須claimはアプリでも検証するが、アプリ自身がトークン署名を再検証する構成ではない。
 
 ### 9.2 表示制御
@@ -643,7 +650,12 @@ sandbox allow-popups allow-popups-to-escape-sandbox;
 ### 9.5 暗号化とシークレット
 
 - 保存時暗号化はAzure標準のMicrosoft管理キーを使用する。
-- アプリ、表示サービス、Azureサービス間の通信はTLSとする。
+- アプリ、表示サービス、Azureサービス間の通信はTLSとする。Preview Jobと撮影サービス(ACI)の
+  間はVNet内だが、利用者のHTMLが載るためTLSにする。撮影サービスの証明書は自己署名
+  (ECDSA P-256、SANに撮影サービスのIP、有効期限10年)とし、Preview Jobはその証明書だけを
+  信頼する。証明書・秘密鍵・共有トークンは`infra/scripts/generate-renderer-tls.mjs`で作り、
+  デプロイ時の環境変数から渡す(ACIはKey Vault参照を持たないため、秘密鍵とトークンは
+  secure環境変数で渡す)。
 - HTML内で利用者がクリックする遷移先は`http:`の場合がある。この通信はアプリが
   管理するサービス間通信ではなく、遷移先の安全性と機密性を保証しない。
 - grant署名用Ed25519秘密鍵とログ用HMAC鍵は環境ごとにKey Vaultで管理する。
@@ -1020,8 +1032,8 @@ ZIP対応は初期リリースに含めないが、資料ID配下へ複数Blob�
 - Container Apps上のEasy Auth callbackと、内部環境での社内ネットワークからの到達性の検証結果
 - 運用担当者の共有メールアドレスと当番体制
 - Workload Identity向けConditional Accessのlicense・設定可否とreport-only検証結果
-- dynamic sessions(撮影サービス)上でのChromium sandbox security spike結果(診断用の
-  セッションプールでは確認済み。stagingの撮影サービスでの確認が残る)
+- ACI(撮影サービス)上でのChromium sandbox security spike結果(2026-11-15に診断用の
+  ACIでは確認済み。stagingの撮影サービスでの確認が残る)
 - Azureサービスの正式な費用見積もり
 
 これらは環境固有値またはAzure上での検証結果であり、localでの業務機能実装開始を

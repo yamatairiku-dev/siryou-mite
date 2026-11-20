@@ -3,14 +3,14 @@
  *
  * 設計: docs/APPLICATION_DESIGN.md §7.5, §7.6, §8
  *
- * Container Appsのdynamic sessions(カスタムコンテナのセッションプール、Hyper-Vで分離)の
- * 1セッションとして動き、Preview Jobから受け取ったHTMLを撮影してJPEGを返すだけを担う。
- * Queue・DB・Blob・秘密値・Managed Identityを一切持たず、外向きの通信もできない
- * (セッションプールの`EgressDisabled`)。利用者のHTMLを描画するChromiumを、資料・監査の
- * 保存先へ届かない場所に閉じ込めるための分離である(Q-066)。
+ * Azure Container Instances(VNet内、プライベートIPだけ)で常駐し、Preview Jobから
+ * 受け取ったHTMLを撮影してJPEGを返すだけを担う。Queue・DB・Blob・Managed Identityを
+ * 一切持たず、外向きの通信もできない(NSGですべて拒否)。利用者のHTMLを描画する
+ * Chromiumを、資料・監査の保存先へ届かない場所に閉じ込めるための分離である(Q-066)。
  *
- * - `GET /health`: 起動確認
+ * - `GET /health`: 起動確認(認証なし。ACIのliveness probeが使う)
  * - `POST /render`: 本文のHTML(UTF-8)を撮影し、`image/jpeg`を返す
+ *   - 共有トークンを設定した場合は`Authorization: Bearer <token>`が必要(違えば401)
  *   - `X-Max-Preview-Bytes`: プレビュー画像の上限byte数(Preview Jobの設定値)
  *   - 上限を超えるHTMLは413、上限byte数に収まらない画像は422、撮影の失敗は500
  *     (失敗理由は`{"reason": "<固定の値>"}`で返す。例外のmessageは返さない)
@@ -20,12 +20,15 @@
  * ログには固定のevent名と結果・理由だけを出す。HTML・画像・要求元の情報は出さない
  * (設計 §15.2)。
  */
+import { createHash, timingSafeEqual } from "node:crypto";
 import {
   createServer,
   type IncomingMessage,
+  type RequestListener,
   type Server,
   type ServerResponse,
 } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import {
   classifyCaptureFailure,
   type CaptureFailureReason,
@@ -47,8 +50,10 @@ export type RendererServerOptions = {
   /** 1件の撮影の上限(ms)。超えたらChromiumを閉じて500(`timeout`)を返す。 */
   renderTimeoutMs: number;
   render: RenderHtml;
-  /** 撮影の応答を返し終えたときに呼ぶ(セッションでは1件撮影したら終了する)。 */
-  onRenderFinished?: () => void;
+  /** 指定すると`POST /render`に`Authorization: Bearer <token>`を求める。 */
+  authToken?: string;
+  /** 指定するとHTTPSで待ち受ける(PEM)。 */
+  tls?: { cert: string; key: string };
   log?: (event: string, details: Record<string, string>) => void;
 };
 
@@ -56,11 +61,24 @@ function defaultLog(event: string, details: Record<string, string>): void {
   console.log(JSON.stringify({ time: new Date().toISOString(), event, ...details }));
 }
 
+/** 共有トークンを比較する。長さの違いも含めて、比較にかかる時間から推測できないようにする。 */
+export function isAuthorized(
+  header: string | undefined,
+  expectedToken: string,
+): boolean {
+  const match = /^Bearer (\S+)$/.exec(header ?? "");
+  if (!match) {
+    return false;
+  }
+  const digest = (value: string) => createHash("sha256").update(value).digest();
+  return timingSafeEqual(digest(match[1]!), digest(expectedToken));
+}
+
 export function createRendererServer(options: RendererServerOptions): Server {
   const log = options.log ?? defaultLog;
   let busy = false;
 
-  return createServer((request, response) => {
+  const listener: RequestListener = (request, response) => {
     const path = (request.url ?? "").split("?")[0];
 
     if (request.method === "GET" && path === "/health") {
@@ -76,6 +94,17 @@ export function createRendererServer(options: RendererServerOptions): Server {
     if (request.method !== "POST") {
       response.setHeader("Allow", "POST");
       sendText(response, 405, "method not allowed");
+      return;
+    }
+
+    // 本文を読む前に呼び出し元を確かめる。トークンの値はログへ出さない。
+    if (
+      options.authToken !== undefined &&
+      !isAuthorized(request.headers.authorization, options.authToken)
+    ) {
+      log("preview_render_rejected", { result: "failed", reason: "unauthorized" });
+      sendText(response, 401, "unauthorized");
+      request.resume();
       return;
     }
 
@@ -98,7 +127,11 @@ export function createRendererServer(options: RendererServerOptions): Server {
     void handleRender(request, response, maxBytes, options, log).finally(() => {
       busy = false;
     });
-  });
+  };
+
+  return options.tls
+    ? createHttpsServer({ cert: options.tls.cert, key: options.tls.key }, listener)
+    : createServer(listener);
 }
 
 async function handleRender(
@@ -157,22 +190,6 @@ async function handleRender(
   } finally {
     clearTimeout(timer);
     response.off("close", abortOnClose);
-    if (options.onRenderFinished) {
-      const onFinished = options.onRenderFinished;
-      let called = false;
-      const finished = (): void => {
-        if (!called) {
-          called = true;
-          onFinished();
-        }
-      };
-      if (response.writableFinished) {
-        finished();
-      } else {
-        response.once("finish", finished);
-        response.once("close", finished);
-      }
-    }
   }
 }
 

@@ -3,10 +3,9 @@
  *
  * 設計: docs/APPLICATION_DESIGN.md §7.5, §7.6
  *
- * Container Appsのdynamic sessions(カスタムコンテナのセッションプール)で動く。
- * Preview Jobが資料ごとに新しいセッションを割り当て、HTMLを送ってJPEGを受け取る。
- * `RENDERER_EXIT_AFTER_RENDER=true`のときは1件撮影したら終了し、セッションを破棄させる
- * (別の資料の内容がセッションに残らない)。ローカルでは常駐して撮影を受け付ける。
+ * 本番・stagingではAzure Container Instancesで常駐し、Preview JobからHTTPS・共有トークンで
+ * 呼ばれる(Q-066)。撮影のたびにChromiumを起動し直し、撮影が終わったら閉じる。
+ * ローカルではHTTP・認証なしで常駐する。
  *
  * HTTP処理は`server.ts`、撮影は`../preview/capture.ts`にある。Chromiumを含む専用image
  * (`Dockerfile.preview`)で、非root・Chromium sandbox有効で実行する。
@@ -38,7 +37,7 @@ export type StartRendererOptions = {
   exit?: (code: number) => void;
 };
 
-/** 撮影サービスを起動する。終了要求(SIGTERM・SIGINT)と1件撮影後の終了もここで扱う。 */
+/** 撮影サービスを起動する。終了要求(SIGTERM・SIGINT)もここで扱う。 */
 export function startRenderer(options: StartRendererOptions): Server {
   const { env } = options;
   const exit = options.exit ?? ((code: number) => process.exit(code));
@@ -64,13 +63,9 @@ export function startRenderer(options: StartRendererOptions): Server {
     render:
       options.render ??
       ((html, { maxBytes, signal }) => capturePreviewJpeg(html, { maxBytes, signal })),
-    ...(env.RENDERER_EXIT_AFTER_RENDER
-      ? {
-          onRenderFinished: () => {
-            logEvent("preview_renderer_exiting", "success");
-            shutdown(0);
-          },
-        }
+    ...(env.RENDERER_AUTH_TOKEN !== undefined ? { authToken: env.RENDERER_AUTH_TOKEN } : {}),
+    ...(env.RENDERER_TLS_CERT !== undefined && env.RENDERER_TLS_KEY !== undefined
+      ? { tls: { cert: env.RENDERER_TLS_CERT, key: env.RENDERER_TLS_KEY } }
       : {}),
   });
 

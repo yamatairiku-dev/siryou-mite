@@ -1,14 +1,12 @@
 /**
  * 撮影サービス(`services/preview-renderer`)を呼ぶクライアント。
  *
- * 設計: docs/APPLICATION_DESIGN.md §7.5, §8, §9.1
+ * 設計: docs/APPLICATION_DESIGN.md §7.5, §8, §9.1, §9.5
  *
- * 本番・stagingではContainer Appsのdynamic sessions(セッションプール)の管理endpointを
- * 呼ぶ。資料ごとに新しいセッション識別子(`identifier`)を付けるため、撮影のたびに
- * 別のセッション(Hyper-Vで分離された新しいコンテナ)が割り当てられ、別の資料の内容が
- * 残らない。認証はPreview JobのManaged Identityで取得したaccess token
- * (scope `https://dynamicsessions.io/.default`)。ローカルでは常駐させた撮影サービスを
- * 認証なしで呼ぶ。
+ * 本番・stagingでは、Azure Container Instances(VNet内のプライベートIP)で常駐する撮影サービスを
+ * HTTPSで呼ぶ。撮影サービスの証明書は自己署名で、`caCert`に渡した証明書だけを信頼する
+ * (公開の認証局は信頼しない)。呼び出し元は共有トークン(`Authorization: Bearer`)で示す。
+ * ローカルでは常駐させた撮影サービスをHTTP・認証なしで呼ぶ。
  *
  * 応答の検証:
  *   - 200は`image/jpeg`かつ上限byte数以下のときだけ受け取る
@@ -16,7 +14,7 @@
  *   - それ以外は`PreviewRendererError`。理由は既知の固定値だけを受け取る
  * URL・token・HTML・応答本文はログへ出さない(設計 §9.5, §15.2)。
  */
-import { randomUUID } from "node:crypto";
+import { request as httpsRequest } from "node:https";
 import {
   CAPTURE_FAILURE_REASONS,
   PreviewRendererError,
@@ -24,20 +22,21 @@ import {
   type CaptureFailureReason,
 } from "./capture.js";
 
-/** dynamic sessionsのaccess tokenを要求するscope。 */
-export const DYNAMIC_SESSIONS_SCOPE = "https://dynamicsessions.io/.default";
-
 export const MAX_PREVIEW_BYTES_HEADER = "X-Max-Preview-Bytes";
 
+/** 撮影サービスの応答として読む最大byte数。プレビュー画像の上限(最大10MB)に余裕を足す。 */
+const MAX_RESPONSE_BYTES = 11 * 1024 * 1024;
+
 export type RendererClientOptions = {
-  /** 撮影サービスのendpoint(セッションプールの管理endpoint、またはローカルのURL)。 */
+  /** 撮影サービスのendpoint(例: `https://10.40.4.4:8443`)。 */
   endpoint: string;
   maxBytes: number;
-  /** 省略時は認証なし(ローカル)。 */
-  getAccessToken?: () => Promise<string>;
+  /** 共有トークン。省略時は認証なし(ローカル)。 */
+  authToken?: string;
+  /** 撮影サービスの証明書(PEM)。指定すると、この証明書だけを信頼してHTTPSで呼ぶ。 */
+  caCert?: string;
   /** 単体テストで差し替える。 */
   fetchImpl?: typeof fetch;
-  newSessionIdentifier?: () => string;
 };
 
 /** 撮影サービスへHTMLを送り、JPEGを受け取る。 */
@@ -47,18 +46,17 @@ export async function capturePreviewRemote(
   options: RendererClientOptions,
 ): Promise<Buffer> {
   signal.throwIfAborted();
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const url = buildRenderUrl(
-    options.endpoint,
-    (options.newSessionIdentifier ?? randomUUID)(),
-  );
+  const fetchImpl =
+    options.fetchImpl ??
+    (options.caCert !== undefined ? createPinnedFetch(options.caCert) : fetch);
+  const url = buildRenderUrl(options.endpoint);
 
   const headers: Record<string, string> = {
     "Content-Type": "text/html; charset=utf-8",
     [MAX_PREVIEW_BYTES_HEADER]: String(options.maxBytes),
   };
-  if (options.getAccessToken) {
-    headers.Authorization = `Bearer ${await options.getAccessToken()}`;
+  if (options.authToken !== undefined) {
+    headers.Authorization = `Bearer ${options.authToken}`;
   }
 
   let response: Response;
@@ -74,7 +72,7 @@ export async function capturePreviewRemote(
     if (signal.aborted) {
       throw error;
     }
-    // 接続できない(DNS・NSG・プール未作成など)。原因の詳細は出さない。
+    // 接続できない(NSG・停止中・証明書の不一致など)。原因の詳細は出さない。
     throw new PreviewRendererError("renderer_unavailable", 0);
   }
 
@@ -95,12 +93,77 @@ export async function capturePreviewRemote(
   );
 }
 
-/** `<endpoint>/render?identifier=<セッション識別子>`を組み立てる。 */
-export function buildRenderUrl(endpoint: string, identifier: string): URL {
+/** `<endpoint>/render`を組み立てる。 */
+export function buildRenderUrl(endpoint: string): URL {
   const base = endpoint.endsWith("/") ? endpoint : `${endpoint}/`;
-  const url = new URL("render", base);
-  url.searchParams.set("identifier", identifier);
-  return url;
+  return new URL("render", base);
+}
+
+/**
+ * 指定した証明書だけを信頼してHTTPSで呼ぶ`fetch`相当の関数。
+ *
+ * Node.jsの`fetch`は信頼する証明書を要求ごとに指定できないため、`node:https`で実装する。
+ * `ca`を指定すると既定の認証局は使われず、この証明書で署名された相手だけに接続する。
+ * 証明書のSubject Alternative Name(撮影サービスのIP)とURLのhostが一致しない場合も拒否する。
+ */
+export function createPinnedFetch(caCert: string): typeof fetch {
+  return ((input: URL | string, init: RequestInit = {}) =>
+    new Promise<Response>((resolve, reject) => {
+      const url = typeof input === "string" ? new URL(input) : input;
+      if (url.protocol !== "https:") {
+        reject(new Error("証明書を指定した撮影サービスはhttpsで呼ぶ必要があります"));
+        return;
+      }
+      const body = init.body as Uint8Array | undefined;
+      const request = httpsRequest(
+        url,
+        {
+          method: init.method ?? "GET",
+          headers: {
+            ...(init.headers as Record<string, string> | undefined),
+            ...(body ? { "Content-Length": String(body.byteLength) } : {}),
+          },
+          ca: caCert,
+          // 撮影のたびに接続し直す(接続を使い回さない)。
+          agent: false,
+          ...(init.signal ? { signal: init.signal } : {}),
+        },
+        (response) => {
+          const chunks: Buffer[] = [];
+          let total = 0;
+          response.on("data", (chunk: Buffer) => {
+            total += chunk.byteLength;
+            if (total > MAX_RESPONSE_BYTES) {
+              response.destroy(new Error("撮影サービスの応答が大きすぎます"));
+              return;
+            }
+            chunks.push(chunk);
+          });
+          response.on("error", reject);
+          response.on("end", () => {
+            const status = response.statusCode ?? 0;
+            if (status < 200 || status > 599 || status === 204 || status === 304) {
+              reject(new Error("撮影サービスの応答のstatusが想定外です"));
+              return;
+            }
+            const headers = new Headers();
+            for (const [name, value] of Object.entries(response.headers)) {
+              if (typeof value === "string") {
+                headers.set(name, value);
+              }
+            }
+            resolve(
+              new Response(Buffer.concat(chunks), {
+                status,
+                headers,
+              }),
+            );
+          });
+        },
+      );
+      request.on("error", reject);
+      request.end(body ? Buffer.from(body) : undefined);
+    })) as typeof fetch;
 }
 
 async function readJpeg(response: Response, maxBytes: number): Promise<Buffer> {

@@ -39,13 +39,8 @@ import {
   resolveStorageConnectionConfig,
   uploadDocumentPreview,
 } from "../shared/storage.js";
-import { DefaultAzureCredential } from "@azure/identity";
-import { createAccessTokenProvider } from "../shared/db/entra-auth.js";
 import { classifyCaptureFailure } from "./capture.js";
-import {
-  capturePreviewRemote,
-  DYNAMIC_SESSIONS_SCOPE,
-} from "./renderer-client.js";
+import { capturePreviewRemote } from "./renderer-client.js";
 import type { PreviewEnvironment } from "./env.js";
 import type {
   PreviewWorkerDependencies,
@@ -93,14 +88,6 @@ function logCaptureFailure(error: unknown): void {
   );
 }
 
-/** 撮影サービスのaccess tokenを取得できなかった場合。原因の詳細は含めない。 */
-export class RendererTokenError extends Error {
-  constructor() {
-    super("撮影サービスのaccess tokenを取得できませんでした");
-    this.name = "RendererTokenError";
-  }
-}
-
 export type PreviewRuntime = {
   dependencies: PreviewWorkerDependencies;
   /** 実行終了時に接続を閉じる。 */
@@ -138,16 +125,6 @@ export function createPreviewRuntime(
   );
 
   const logger: OperationLogger = createOperationLogger(env.LOG_HMAC_KEY);
-
-  // セッションプールはPreview JobのManaged Identity(`AZURE_CLIENT_ID`)で呼ぶ。
-  const getRendererToken =
-    env.PREVIEW_RENDERER_AUTH === "entra"
-      ? createAccessTokenProvider(
-          DYNAMIC_SESSIONS_SCOPE,
-          new DefaultAzureCredential(),
-          { createError: () => new RendererTokenError() },
-        )
-      : undefined;
 
   const dependencies: PreviewWorkerDependencies = {
     maxDequeueCount: env.QUEUE_MAX_DEQUEUE_COUNT,
@@ -205,7 +182,13 @@ export function createPreviewRuntime(
           return await capturePreviewRemote(html, signal, {
             endpoint: env.PREVIEW_RENDERER_URL,
             maxBytes: env.MAX_PREVIEW_IMAGE_BYTES,
-            ...(getRendererToken ? { getAccessToken: getRendererToken } : {}),
+            // 撮影サービスは共有トークンと自己署名証明書で呼ぶ(設計 §9.5, Q-066)。
+            ...(env.PREVIEW_RENDERER_AUTH === "token" && env.PREVIEW_RENDERER_TOKEN
+              ? { authToken: env.PREVIEW_RENDERER_TOKEN }
+              : {}),
+            ...(env.PREVIEW_RENDERER_CA_CERT
+              ? { caCert: env.PREVIEW_RENDERER_CA_CERT }
+              : {}),
           });
         } catch (error) {
           logCaptureFailure(error);

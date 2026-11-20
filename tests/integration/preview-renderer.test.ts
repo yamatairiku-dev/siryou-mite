@@ -7,13 +7,16 @@ import {
 } from "../../services/preview/capture.js";
 import { capturePreviewRemote } from "../../services/preview/renderer-client.js";
 import { createRendererServer } from "../../services/preview-renderer/server.js";
+import { createSelfSignedTls } from "../support/self-signed-tls.js";
 
 /**
  * 撮影サービスとPreview Jobのクライアントを、実際のChromiumでつないで確認する
- * (設計 §7.5)。dynamic sessionsの管理endpointの代わりに、撮影サービスを直接呼ぶ。
+ * (設計 §7.5)。本番と同じく、自己署名証明書のHTTPSと共有トークンで呼ぶ(設計 §9.5)。
  */
 let server: Server;
 let endpoint: string;
+const tls = createSelfSignedTls();
+const authToken = "t".repeat(43);
 
 beforeAll(async () => {
   server = createRendererServer({
@@ -22,9 +25,11 @@ beforeAll(async () => {
     render: (html, { maxBytes, signal }) =>
       capturePreviewJpeg(html, { maxBytes, signal }),
     log: () => undefined,
+    tls,
+    authToken,
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  endpoint = `https://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 
 afterAll(async () => {
@@ -39,7 +44,7 @@ describe("撮影サービス経由の撮影(実際のChromium)", () => {
       const jpeg = await capturePreviewRemote(
         Buffer.from("<!doctype html><h1>撮影サービスの結合テスト</h1>"),
         AbortSignal.timeout(30_000),
-        { endpoint, maxBytes: 1024 * 1024 },
+        { endpoint, maxBytes: 1024 * 1024, authToken, caCert: tls.cert },
       );
 
       expect(jpeg.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]));
@@ -55,7 +60,7 @@ describe("撮影サービス経由の撮影(実際のChromium)", () => {
         capturePreviewRemote(
           Buffer.from("<!doctype html><h1>大きすぎる</h1>"),
           AbortSignal.timeout(30_000),
-          { endpoint, maxBytes: 10 },
+          { endpoint, maxBytes: 10, authToken, caCert: tls.cert },
         ),
       ).rejects.toBeInstanceOf(PreviewTooLargeError);
     },

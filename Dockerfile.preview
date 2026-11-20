@@ -1,8 +1,8 @@
 # 撮影サービス(Preview Renderer、`services/preview-renderer`)専用image。
 #
 # 設計: docs/APPLICATION_DESIGN.md §7.5, §7.6
-#   - Container Appsのdynamic sessions(カスタムコンテナのセッションプール)で動き、
-#     Preview JobからHTMLを受け取ってJPEGを返すだけを担う
+#   - Azure Container Instances(VNet内、プライベートIPだけ)で常駐し、Preview Jobから
+#     HTTPS・共有トークンでHTMLを受け取ってJPEGを返すだけを担う(Q-066)
 #   - Chromiumを含む専用Dockerfileと専用imageを使う(Web・Display・Preview Job・Migration・
 #     Maintenanceが使うルートの`Dockerfile`とは別のimage。imageは合計2種類)
 #   - Playwright公式Ubuntu imageをPlaywright versionと一致させて固定する
@@ -50,9 +50,10 @@ COPY --from=build /app/build/services ./build/services
 # base imageに用意されている非root利用者で実行する(設計 §7.5「ワーカーは非root」)。
 RUN chown -R pwuser:pwuser /app
 USER pwuser
-# Chromium sandboxを有効にしたまま起動する(`--no-sandbox`は使わない)。dynamic sessionsは
-# Hyper-Vで分離され、非特権のuser namespaceを作れるためsandboxが動く(2026-11-17に確認、Q-066)。
-# CPU/メモリ上限・外向き通信の禁止・1件撮影したら終了する設定はセッションプール側で行う
-# (infra/modules/preview-renderer.bicep)。Chromiumは書き込み可能な/tmpを必要とする。
+# Chromium sandboxを有効にしたまま起動する(`--no-sandbox`は使わない)。ACIの標準SKUでは
+# 非特権のuser namespaceを作れるためsandboxが動く(2026-11-15に確認、Q-066)。
+# CPU/メモリ上限・外向き通信の禁止はACIとNSGの側で行う(infra/modules/preview-renderer-aci.bicep、
+# infra/modules/network.bicep)。portとTLSは環境変数(`PORT`・`RENDERER_TLS_*`)で決まる。
+# Chromiumは書き込み可能な/tmpを必要とする。
 EXPOSE 8080
 CMD ["node", "build/services/preview-renderer/index.js"]

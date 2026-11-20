@@ -46,17 +46,21 @@ param grantVerificationKeys string
 @description('ログ記録用HMAC鍵(base64、32byte以上)')
 param logHmacKey string
 
+@description('撮影サービスのTLS証明書(PEM、自己署名。infra/scripts/generate-renderer-tls.mjs)')
+param rendererTlsCertificate string = ''
+@secure()
+@description('撮影サービスのTLS秘密鍵(PEM)')
+param rendererTlsPrivateKey string = ''
+@secure()
+@description('Preview Jobと撮影サービスの共有トークン')
+param rendererAuthToken string = ''
+
 param webMinReplicas int = 1
 param postgresSkuName string = 'Standard_B1ms'
 param postgresSkuTier string = 'Burstable'
 param postgresStorageAutoGrow bool = false
 param displayMinReplicas int = 1
-@description('撮影サービスのセッションプールで待機させるセッション数。0にすると撮影のたびにimage取得から始まり、処理上限(30秒)に間に合わない(設計 §7.6)')
-@minValue(1)
-param rendererReadySessions int = 1
 param keyVaultPurgeProtection bool = false
-@description('Container Apps環境の公開IP(staticIp)。NSGで撮影サービスのセッションプールへの通信を許可するのに使う。環境の作成後に設定し、もう一度デプロイする(docs/OPERATIONS.md)')
-param containerAppsEnvironmentIp string = ''
 
 var namePrefix = '${appPrefix}-${environmentName}'
 var uniqueSuffix = uniqueString(resourceGroup().id)
@@ -72,7 +76,6 @@ module network 'modules/network.bicep' = {
     namePrefix: namePrefix
     location: location
     tags: tags
-    containerAppsEnvironmentIp: containerAppsEnvironmentIp
   }
 }
 
@@ -178,7 +181,7 @@ module registry 'modules/registry.bicep' = {
 // ---- 2段階目: アプリとJob ---------------------------------------------------
 
 var appImage = '${registry.outputs.loginServer}/siryou-mite:${imageTag}'
-// 撮影サービス(dynamic sessionsのセッションプール)のimage。Chromiumを含む(設計 §7.6)
+// 撮影サービス(Azure Container Instances)のimage。Chromiumを含む(設計 §7.6)
 var rendererImage = '${registry.outputs.loginServer}/siryou-mite-preview:${imageTag}'
 
 // Managed Identityの名前がPostgreSQLの利用者名になる(passwordは書かない。DATABASE_AUTH=entra)。
@@ -209,6 +212,27 @@ resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
   dependsOn: [ monitoring ]
 }
 
+// 撮影サービス。Container Appsより先に作り、Preview Jobへendpointを渡す(Q-066)
+module previewRenderer 'modules/preview-renderer-aci.bicep' = if (deployApps) {
+  name: 'preview-renderer'
+  params: {
+    namePrefix: namePrefix
+    location: location
+    tags: tags
+    subnetId: network.outputs.containerInstancesSubnetId
+    rendererIp: network.outputs.rendererIp
+    rendererPort: network.outputs.rendererPort
+    logAnalyticsCustomerId: monitoring.outputs.logAnalyticsCustomerId
+    logAnalyticsSharedKey: logs.listKeys().primarySharedKey
+    identity: ids.renderer
+    registryLoginServer: registry.outputs.loginServer
+    rendererImage: rendererImage
+    tlsCertificate: rendererTlsCertificate
+    tlsPrivateKey: rendererTlsPrivateKey
+    authToken: rendererAuthToken
+  }
+}
+
 module containerApps 'modules/container-apps.bicep' = if (deployApps) {
   name: 'container-apps'
   params: {
@@ -221,8 +245,9 @@ module containerApps 'modules/container-apps.bicep' = if (deployApps) {
     identities: ids
     registryLoginServer: registry.outputs.loginServer
     appImage: appImage
-    rendererImage: rendererImage
-    rendererReadySessions: rendererReadySessions
+    rendererEndpoint: previewRenderer!.outputs.endpoint
+    rendererTlsCertificate: rendererTlsCertificate
+    rendererAuthToken: rendererAuthToken
     allowedClientIpRanges: allowedClientIpRanges
     webMinReplicas: webMinReplicas
     displayMinReplicas: displayMinReplicas

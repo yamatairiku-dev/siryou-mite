@@ -18,7 +18,7 @@ Node.jsプロセスで構成します。
 | Web | React Router BFF。アップロード、資料一覧・表示画面・削除・管理画面(`app/`) |
 | Display | アップロードされたHTMLを別オリジンで配信するNode.js標準HTTPサーバー(`services/display/`) |
 | Preview Job | HTMLの静止画プレビューを生成するQueue駆動Job。撮影は撮影サービスへ任せる(`services/preview/`) |
-| 撮影サービス | Playwright(Chromium)でHTMLを撮影してJPEGを返す。Azureではdynamic sessionsのセッションで動く(`services/preview-renderer/`) |
+| 撮影サービス | Playwright(Chromium)でHTMLを撮影してJPEGを返す。AzureではAzure Container Instancesで常駐する(`services/preview-renderer/`) |
 | Maintenance Job | Blob削除の再試行、監査・削除済み資料の保持期間経過後purgeなどを行う定期Job(`services/maintenance/`) |
 
 Web・Display・Preview Job・Migration・Maintenanceは同じNode.js image(`Dockerfile`)を使い、

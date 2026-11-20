@@ -3,9 +3,11 @@ import {
   parsePreviewEnvironment,
   PREVIEW_FINALIZE_BUDGET_SECONDS,
 } from "../../../services/preview/env";
+import { createSelfSignedTls } from "../../support/self-signed-tls";
 
-const productionRendererUrl =
-  "https://sp-renderer.example.japaneast.azurecontainerapps.io";
+const productionRendererUrl = "https://10.40.4.4:8443";
+const rendererToken = "t".repeat(43);
+const rendererCaCert = createSelfSignedTls("10.40.4.4").cert;
 const validLogHmacKey = Buffer.alloc(32, 3).toString("base64");
 
 const baseEnvironment: NodeJS.ProcessEnv = {
@@ -141,7 +143,9 @@ describe("parsePreviewEnvironment", () => {
         DATABASE_URL: "postgres://id-siryou-mite@db.example.com:5432/siryou_mite",
         DATABASE_AUTH: "entra",
         PREVIEW_RENDERER_URL: productionRendererUrl,
-        PREVIEW_RENDERER_AUTH: "entra",
+        PREVIEW_RENDERER_AUTH: "token",
+        PREVIEW_RENDERER_TOKEN: rendererToken,
+        PREVIEW_RENDERER_CA_CERT: rendererCaCert,
       }),
     ).not.toThrow();
   });
@@ -167,7 +171,7 @@ describe("parsePreviewEnvironment", () => {
     },
   );
 
-  it("本番は撮影サービスをManaged Identityとhttpsで呼ぶことを必須にする(設計 §7.5)", () => {
+  it("本番は撮影サービスを共有トークン・https・自己署名証明書で呼ぶことを必須にする(設計 §9.5)", () => {
     const environment = { ...baseEnvironment };
     delete environment.AZURE_STORAGE_CONNECTION_STRING;
     const production = {
@@ -177,16 +181,49 @@ describe("parsePreviewEnvironment", () => {
       DATABASE_URL: "postgres://id-siryou-mite@db.example.com:5432/siryou_mite",
       DATABASE_AUTH: "entra",
       PREVIEW_RENDERER_URL: productionRendererUrl,
-      PREVIEW_RENDERER_AUTH: "entra",
+      PREVIEW_RENDERER_AUTH: "token",
+      PREVIEW_RENDERER_TOKEN: rendererToken,
+      PREVIEW_RENDERER_CA_CERT: rendererCaCert,
     };
 
     expect(() =>
       parsePreviewEnvironment({ ...production, PREVIEW_RENDERER_AUTH: "none" }),
-    ).toThrow("PREVIEW_RENDERER_AUTH=entra");
+    ).toThrow("PREVIEW_RENDERER_AUTH=token");
     expect(() =>
       parsePreviewEnvironment({
         ...production,
-        PREVIEW_RENDERER_URL: "http://sp-renderer.example.azurecontainerapps.io",
+        PREVIEW_RENDERER_URL: "http://10.40.4.4:8443",
+      }),
+    ).toThrow("httpsのURL");
+    expect(() =>
+      parsePreviewEnvironment({ ...production, PREVIEW_RENDERER_CA_CERT: "" }),
+    ).toThrow("PREVIEW_RENDERER_CA_CERT");
+  });
+
+  it("共有トークンは32文字以上を必須にし、値をエラーメッセージへ含めない", () => {
+    const shortToken = "short-secret-token";
+    let message = "";
+    try {
+      parsePreviewEnvironment({
+        ...baseEnvironment,
+        PREVIEW_RENDERER_AUTH: "token",
+        PREVIEW_RENDERER_TOKEN: shortToken,
+      });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain("PREVIEW_RENDERER_TOKEN");
+    expect(message).not.toContain(shortToken);
+  });
+
+  it("証明書はPEM形式だけを受け付け、指定する場合はhttpsを必須にする", () => {
+    expect(() =>
+      parsePreviewEnvironment({ ...baseEnvironment, PREVIEW_RENDERER_CA_CERT: "x" }),
+    ).toThrow("PEM");
+    expect(() =>
+      parsePreviewEnvironment({
+        ...baseEnvironment,
+        PREVIEW_RENDERER_CA_CERT: rendererCaCert,
       }),
     ).toThrow("httpsのURL");
   });

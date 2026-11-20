@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { createServer, type Server } from "node:https";
+import type { AddressInfo } from "node:net";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   classifyCaptureFailure,
   PreviewRendererError,
@@ -9,9 +11,11 @@ import {
   capturePreviewRemote,
   type RendererClientOptions,
 } from "../../../services/preview/renderer-client";
+import { createSelfSignedTls } from "../../support/self-signed-tls";
 
 const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
-const endpoint = "https://sp-renderer.example.japaneast.azurecontainerapps.io";
+const endpoint = "https://10.40.4.4:8443";
+const TOKEN = "t".repeat(43);
 
 function options(
   fetchImpl: typeof fetch,
@@ -21,7 +25,6 @@ function options(
     endpoint,
     maxBytes: 1024,
     fetchImpl,
-    newSessionIdentifier: () => "session-1",
     ...overrides,
   };
 }
@@ -34,7 +37,7 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 describe("capturePreviewRemote(設計 §7.5)", () => {
-  it("資料ごとに新しいセッション識別子を付け、tokenとHTMLを送ってJPEGを受け取る", async () => {
+  it("共有トークンとHTMLを送ってJPEGを受け取る", async () => {
     const fetchImpl = vi.fn(async () =>
       new Response(jpeg, { status: 200, headers: { "Content-Type": "image/jpeg" } }),
     );
@@ -43,17 +46,17 @@ describe("capturePreviewRemote(設計 §7.5)", () => {
       Buffer.from("<h1>資料</h1>"),
       new AbortController().signal,
       options(fetchImpl as unknown as typeof fetch, {
-        getAccessToken: async () => "token-value",
+        authToken: TOKEN,
       }),
     );
 
     expect(result).toEqual(jpeg);
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [URL, RequestInit];
-    expect(url.toString()).toBe(`${endpoint}/render?identifier=session-1`);
+    expect(url.toString()).toBe(`${endpoint}/render`);
     expect(init.method).toBe("POST");
     expect(init.redirect).toBe("error");
     expect(init.headers).toMatchObject({
-      Authorization: "Bearer token-value",
+      Authorization: `Bearer ${TOKEN}`,
       "X-Max-Preview-Bytes": "1024",
       "Content-Type": "text/html; charset=utf-8",
     });
@@ -108,7 +111,7 @@ describe("capturePreviewRemote(設計 §7.5)", () => {
   });
 
   it.each([401, 403, 502, 503])(
-    "理由の無い%dはrenderer_unavailable(権限・プールの問題)",
+    "理由の無い%dはrenderer_unavailable(トークン・撮影サービスの問題)",
     async (status) => {
       const fetchImpl = vi.fn(async () => new Response("denied", { status }));
       const error = await capturePreviewRemote(
@@ -178,12 +181,91 @@ describe("capturePreviewRemote(設計 §7.5)", () => {
 });
 
 describe("buildRenderUrl", () => {
-  it("末尾の/の有無に関わらず<endpoint>/render?identifier=を組み立てる", () => {
-    expect(buildRenderUrl(`${endpoint}/`, "a b").toString()).toBe(
-      `${endpoint}/render?identifier=a+b`,
+  it("末尾の/の有無に関わらず<endpoint>/renderを組み立てる", () => {
+    expect(buildRenderUrl(`${endpoint}/`).toString()).toBe(`${endpoint}/render`);
+    expect(buildRenderUrl("http://127.0.0.1:8090").toString()).toBe(
+      "http://127.0.0.1:8090/render",
     );
-    expect(buildRenderUrl("http://127.0.0.1:8090", "x").toString()).toBe(
-      "http://127.0.0.1:8090/render?identifier=x",
+  });
+});
+
+describe("自己署名証明書を信頼して呼ぶ(設計 §9.5)", () => {
+  let server: Server | undefined;
+
+  afterEach(async () => {
+    if (server) {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server!.close(() => resolve()));
+      server = undefined;
+    }
+  });
+
+  async function startHttps(tls: { cert: string; key: string }): Promise<string> {
+    server = createServer(tls, (request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        if (request.headers.authorization !== `Bearer ${TOKEN}`) {
+          response.writeHead(401).end("unauthorized");
+          return;
+        }
+        response.writeHead(200, { "Content-Type": "image/jpeg" }).end(jpeg);
+      });
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    return `https://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  }
+
+  it("指定した証明書の相手へHTTPSで送り、JPEGを受け取る", async () => {
+    const tls = createSelfSignedTls();
+    const origin = await startHttps(tls);
+
+    const result = await capturePreviewRemote(
+      Buffer.from("<h1>x</h1>"),
+      new AbortController().signal,
+      { endpoint: origin, maxBytes: 1024, authToken: TOKEN, caCert: tls.cert },
     );
+    expect(result).toEqual(jpeg);
+  });
+
+  it("別の証明書の相手には接続しない(renderer_unavailable)", async () => {
+    const origin = await startHttps(createSelfSignedTls());
+
+    const error = await capturePreviewRemote(
+      Buffer.from("<h1>x</h1>"),
+      new AbortController().signal,
+      {
+        endpoint: origin,
+        maxBytes: 1024,
+        authToken: TOKEN,
+        caCert: createSelfSignedTls().cert,
+      },
+    ).catch((caught: unknown) => caught);
+    expect(classifyCaptureFailure(error)).toBe("renderer_unavailable");
+  });
+
+  it("証明書のIPとURLのhostが違う相手には接続しない", async () => {
+    const tls = createSelfSignedTls("10.40.4.4");
+    const origin = await startHttps(tls);
+
+    const error = await capturePreviewRemote(
+      Buffer.from("<h1>x</h1>"),
+      new AbortController().signal,
+      { endpoint: origin, maxBytes: 1024, authToken: TOKEN, caCert: tls.cert },
+    ).catch((caught: unknown) => caught);
+    expect(classifyCaptureFailure(error)).toBe("renderer_unavailable");
+  });
+
+  it("トークンが違えば401でrenderer_unavailable", async () => {
+    const tls = createSelfSignedTls();
+    const origin = await startHttps(tls);
+
+    const error = await capturePreviewRemote(
+      Buffer.from("<h1>x</h1>"),
+      new AbortController().signal,
+      { endpoint: origin, maxBytes: 1024, authToken: "x".repeat(43), caCert: tls.cert },
+    ).catch((caught: unknown) => caught);
+    expect(classifyCaptureFailure(error)).toBe("renderer_unavailable");
+    expect((error as PreviewRendererError).statusCode).toBe(401);
   });
 });

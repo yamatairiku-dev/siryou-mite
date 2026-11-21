@@ -122,6 +122,8 @@ const webEnv = {
   ...commonEnv,
   PORT: String(WEB_INTERNAL_PORT),
   DISPLAY_ORIGIN,
+  // staging(「(検証)」)や本番と画面で見分けられるようにする。
+  APP_NAME: "資料みて！(開発)",
   AUTH_MODE: "dev",
   SESSION_SECRET: randomBytes(48).toString("base64"),
   AZURE_STORAGE_QUEUE_NAME: STORAGE_QUEUE_NAME,

@@ -69,6 +69,7 @@ npm run local
 ```
 
 - `http://localhost:3000` を開き、開発ユーザーでログインします(`AUTH_MODE=dev`)
+- 画面左上のアプリ名は「資料みて！(開発)」になります(stagingは「資料みて！(検証)」)
 - Displayは `http://localhost:3100`、Preview Jobは3秒おきにQueueを1件処理し、撮影は常駐させた
   撮影サービス(`http://127.0.0.1:3200`)へ任せます
 - WebとDisplayは、ブラウザが実際に開いているWebのオリジン(`localhost:3000`、composeが公開する

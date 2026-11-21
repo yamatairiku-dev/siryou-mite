@@ -108,11 +108,11 @@ select {
   max-width: 1600px;
 }
 
+/* 本文のまとまりは画面の中央に置き、文字は左揃えにする。 */
 .hero {
   margin: 0 auto;
   max-width: 880px;
   padding: 56px 0;
-  text-align: center;
 }
 
 /* 句の単位で折り返す。句より狭い画面では句の中でも折り返す。 */

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import App, { ErrorBoundary, meta } from "~/root";
 import { handle as appHandle } from "~/routes/app";
 import { handle as auditHandle } from "~/routes/admin.audit";
+import { handle as adminDocumentsHandle } from "~/routes/admin.documents";
 
 type MetaArgs = Parameters<typeof meta>[0];
 type BoundaryProps = Parameters<typeof ErrorBoundary>[0];
@@ -120,6 +121,11 @@ describe("root 本文の幅", () => {
         children: [
           { path: "app", Component: () => <p>一覧</p>, handle: appHandle },
           { path: "admin/audit", Component: () => <p>一覧</p>, handle: auditHandle },
+          {
+            path: "admin/documents",
+            Component: () => <p>一覧</p>,
+            handle: adminDocumentsHandle,
+          },
           { path: "other", Component: () => <p>一覧</p> },
         ],
       },
@@ -129,10 +135,11 @@ describe("root 本文の幅", () => {
     return screen.getByRole("main").className;
   }
 
-  it("資料一覧・監査履歴は広い幅で表示する", async () => {
-    expect(await mainClassAt("/app")).toBe("container container-wide");
-    cleanup();
-    expect(await mainClassAt("/admin/audit")).toBe("container container-wide");
+  it("資料一覧・全資料の検索・監査履歴は広い幅で表示する", async () => {
+    for (const path of ["/app", "/admin/documents", "/admin/audit"]) {
+      expect(await mainClassAt(path)).toBe("container container-wide");
+      cleanup();
+    }
   });
 
   it("handleで選んでいない画面は通常の幅のまま", async () => {

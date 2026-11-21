@@ -103,14 +103,16 @@ select {
   padding: 72px 32px;
 }
 
-/* 一覧・表が中心の画面(資料一覧・監査履歴)は広く使う。route moduleの`handle`で選ぶ。 */
+/* 一覧・表が中心の画面(資料一覧・全資料の検索・監査履歴)は広く使う。route moduleの`handle`で選ぶ。 */
 .container-wide {
   max-width: 1600px;
 }
 
 .hero {
+  margin: 0 auto;
   max-width: 760px;
   padding: 56px 0;
+  text-align: center;
 }
 
 .eyebrow {

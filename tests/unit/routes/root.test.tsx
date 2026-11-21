@@ -1,7 +1,12 @@
 import { cleanup, render, screen } from "@testing-library/react";
-import { UNSAFE_ErrorResponseImpl as ErrorResponseImpl } from "react-router";
+import {
+  createRoutesStub,
+  UNSAFE_ErrorResponseImpl as ErrorResponseImpl,
+} from "react-router";
 import { afterEach, describe, expect, it } from "vitest";
-import { ErrorBoundary, meta } from "~/root";
+import App, { ErrorBoundary, meta } from "~/root";
+import { handle as appHandle } from "~/routes/app";
+import { handle as auditHandle } from "~/routes/admin.audit";
 
 type MetaArgs = Parameters<typeof meta>[0];
 type BoundaryProps = Parameters<typeof ErrorBoundary>[0];
@@ -102,5 +107,35 @@ describe("root ErrorBoundary", () => {
     expect(
       screen.getByRole("link", { name: "ホームへ戻る" }).getAttribute("href"),
     ).toBe("/");
+  });
+});
+
+describe("root 本文の幅", () => {
+  async function mainClassAt(path: string) {
+    const Stub = createRoutesStub([
+      {
+        path: "/",
+        Component: App,
+        loader: () => ({ appName: "資料みて！", user: null, canUseAdminScreen: false }),
+        children: [
+          { path: "app", Component: () => <p>一覧</p>, handle: appHandle },
+          { path: "admin/audit", Component: () => <p>一覧</p>, handle: auditHandle },
+          { path: "other", Component: () => <p>一覧</p> },
+        ],
+      },
+    ]);
+    render(<Stub initialEntries={[path]} />);
+    await screen.findByText("一覧");
+    return screen.getByRole("main").className;
+  }
+
+  it("資料一覧・監査履歴は広い幅で表示する", async () => {
+    expect(await mainClassAt("/app")).toBe("container container-wide");
+    cleanup();
+    expect(await mainClassAt("/admin/audit")).toBe("container container-wide");
+  });
+
+  it("handleで選んでいない画面は通常の幅のまま", async () => {
+    expect(await mainClassAt("/other")).toBe("container");
   });
 });

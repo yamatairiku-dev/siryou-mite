@@ -27,6 +27,7 @@ import {
   formatPreviewStatus,
 } from "~/lib/format/document-view";
 import { PreviewImage } from "~/lib/format/preview-image";
+import type { LayoutHandle } from "~/lib/format/layout";
 import { requireUser, type AppUser } from "~/lib/session.server";
 import { encodeFileNameHeader } from "~/lib/upload/file-name-header";
 import type {
@@ -91,6 +92,9 @@ export async function loader({ request }: Route.LoaderArgs): Promise<AppLoaderDa
     },
   };
 }
+
+// 一覧・表が中心の画面なので、本文を広い幅で表示する。
+export const handle: LayoutHandle = { layout: "wide" };
 
 export const meta: Route.MetaFunction = () => [{ title: "資料みて！" }];
 

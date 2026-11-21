@@ -7,11 +7,13 @@ import {
   ScrollRestoration,
   useLoaderData,
   useLocation,
+  useMatches,
 } from "react-router";
 import type { Route } from "./+types/root";
 import { DEFAULT_APP_NAME } from "~/lib/app-name";
 import { isAdmin } from "~/lib/auth/authorization.server";
 import { env } from "~/lib/env.server";
+import { isWideLayout } from "~/lib/format/layout";
 import { SiteHeader } from "~/lib/format/site-header";
 import { securityHeaders } from "~/lib/security.server";
 import { getUser } from "~/lib/session.server";
@@ -69,6 +71,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 export default function App() {
   const { appName, user, canUseAdminScreen } = useLoaderData<typeof loader>();
   const { pathname } = useLocation();
+  const wide = isWideLayout(useMatches());
 
   return (
     <>
@@ -78,7 +81,7 @@ export default function App() {
         canUseAdminScreen={canUseAdminScreen}
         pathname={pathname}
       />
-      <main className="container">
+      <main className={wide ? "container container-wide" : "container"}>
         <Outlet />
       </main>
     </>

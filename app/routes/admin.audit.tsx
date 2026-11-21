@@ -18,12 +18,16 @@ import {
   type AdminAuditSearchData,
 } from "~/lib/admin/audit-search.server";
 import { formatJstDateTime } from "~/lib/format/document-view";
+import type { LayoutHandle } from "~/lib/format/layout";
 
 export async function loader({
   request,
 }: Route.LoaderArgs): Promise<AdminAuditSearchData> {
   return handleAdminAuditSearch(request);
 }
+
+// 一覧・表が中心の画面なので、本文を広い幅で表示する。
+export const handle: LayoutHandle = { layout: "wide" };
 
 export const meta: Route.MetaFunction = () => [
   { title: "資料みて！ 監査履歴" },

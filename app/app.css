@@ -103,14 +103,21 @@ select {
   padding: 72px 32px;
 }
 
-/* 一覧・表が中心の画面(資料一覧・監査履歴)は広く使う。route moduleの`handle`で選ぶ。 */
+/* 一覧・表が中心の画面(資料一覧・全資料の検索・監査履歴)は広く使う。route moduleの`handle`で選ぶ。 */
 .container-wide {
   max-width: 1600px;
 }
 
 .hero {
-  max-width: 760px;
+  margin: 0 auto;
+  max-width: 880px;
   padding: 56px 0;
+  text-align: center;
+}
+
+/* 句の単位で折り返す。句より狭い画面では句の中でも折り返す。 */
+.phrase {
+  display: inline-block;
 }
 
 .eyebrow {

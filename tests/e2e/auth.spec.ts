@@ -39,7 +39,7 @@ test.describe("ログイン前の画面(設計 §7.1.1)", () => {
     });
 
     await page.goto("/");
-    await page.getByRole("link", { name: "ログインして開始" }).click();
+    await page.getByRole("link", { name: "ログインして始める" }).click();
     const loginButton = page.getByRole("button", { name: "Microsoftでログイン" });
     await expect(loginButton).toBeVisible();
     await page.waitForLoadState("networkidle");

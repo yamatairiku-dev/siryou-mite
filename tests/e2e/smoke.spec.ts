@@ -6,11 +6,12 @@ test("未認証ユーザーはホームからログイン導線へ進める", as
   await page.goto("/");
   await expect(
     page.getByRole("heading", {
-      name: "社内業務を、安全で分かりやすいWebアプリに。",
+      // 句ごとのinline-blockの間に、アクセシブルネームでは空白が入る。
+      name: /^その資料、\s*URLで「みて！」と\s*送ろう。$/,
     }),
   ).toBeVisible();
 
-  await page.getByRole("link", { name: "ログインして開始" }).click();
+  await page.getByRole("link", { name: "ログインして始める" }).click();
   await expect(page.getByRole("heading", { name: "ログイン" })).toBeVisible();
   await expect(page.getByText("Microsoftでログイン")).toBeVisible();
 });

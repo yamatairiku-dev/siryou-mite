@@ -110,9 +110,14 @@ select {
 
 .hero {
   margin: 0 auto;
-  max-width: 760px;
+  max-width: 880px;
   padding: 56px 0;
   text-align: center;
+}
+
+/* 句の単位で折り返す。句より狭い画面では句の中でも折り返す。 */
+.phrase {
+  display: inline-block;
 }
 
 .eyebrow {
